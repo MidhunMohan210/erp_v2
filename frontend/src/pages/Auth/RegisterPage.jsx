@@ -15,16 +15,14 @@ import api from "../../api/client/apiClient";
 const schema = z
   .object({
     userName: z.string().min(1, "User name is required"),
-    mobile: z
-      .string()
-      .regex(/^\d{10}$/, "Mobile number must be 10 digits"),
+    mobile: z.string().regex(/^\d{10}$/, "Mobile number must be 10 digits"),
     email: z.string().email("Invalid email address"),
     password: z
       .string()
       .min(8, "Password must be at least 8 characters")
       .regex(
         /(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/,
-        "Password must contain uppercase, lowercase, number and special character"
+        "Password must contain uppercase, lowercase, number and special character",
       ),
     confirmPassword: z.string().min(1, "Confirm your password"),
     terms: z.literal(true, {
@@ -108,6 +106,7 @@ const RegisterPage = () => {
               </label>
               <div className="relative flex items-center">
                 <input
+                  data-testid="userName-input"
                   type="text"
                   className="w-full bg-transparent text-sm border-b border-gray-300 focus:border-blue-500 px-2 py-3 outline-none"
                   placeholder="Enter user name"
@@ -129,6 +128,7 @@ const RegisterPage = () => {
               </label>
               <div className="relative flex items-center">
                 <input
+                  data-testid="mobile-input"
                   type="tel"
                   className="w-full bg-transparent text-sm border-b border-gray-300 focus:border-blue-500 px-2 py-3 outline-none"
                   placeholder="Enter mobile number"
@@ -150,6 +150,7 @@ const RegisterPage = () => {
               </label>
               <div className="relative flex items-center">
                 <input
+                  data-testid="email-input"
                   type="email"
                   className="w-full bg-transparent text-sm border-b border-gray-300 focus:border-blue-500 px-2 py-3 outline-none"
                   placeholder="Enter email"
@@ -171,6 +172,7 @@ const RegisterPage = () => {
               </label>
               <div className="relative flex items-center">
                 <input
+                  data-testid="password-input"
                   type={showPassword ? "text" : "password"}
                   className="w-full bg-transparent text-sm border-b border-gray-300 focus:border-blue-500 px-2 py-3 outline-none"
                   placeholder="Enter password"
@@ -202,6 +204,7 @@ const RegisterPage = () => {
               </label>
               <div className="relative flex items-center">
                 <input
+                  data-testid="confirmPassword-input"
                   type={showConfirmPassword ? "text" : "password"}
                   className="w-full bg-transparent text-sm border-b border-gray-300 focus:border-blue-500 px-2 py-3 outline-none"
                   placeholder="Confirm password"
@@ -229,6 +232,7 @@ const RegisterPage = () => {
             {/* Terms */}
             <div className="flex items-center mt-6">
               <input
+                data-testid="terms-checkbox"
                 id="terms"
                 type="checkbox"
                 className="h-4 w-4 shrink-0 rounded"
@@ -256,6 +260,7 @@ const RegisterPage = () => {
             {/* Submit */}
             <div className="mt-12">
               <button
+                data-testid="register-submit"
                 type="submit"
                 className="w-full py-3 px-6 text-sm tracking-wider font-semibold rounded-md bg-blue-600 hover:bg-blue-700 text-white focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                 disabled={loader}
