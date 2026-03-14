@@ -12,10 +12,7 @@ import { IoMdEyeOff } from "react-icons/io";
 import { useLoginUser } from "../../hooks/mutations/useLoginUser";
 
 const schema = z.object({
-  identifier: z
-    .string()
-    .min(1, "Email or Phone is required")
-    .trim(),
+  identifier: z.string().min(1, "Email or Phone is required").trim(),
   password: z.string().min(1, "Password is required"),
   rememberMe: z.boolean().optional(),
 });
@@ -63,12 +60,8 @@ const LoginPage = () => {
             <div className="w-12 h-12 rounded-full bg-[#2563eb] flex items-center justify-center mb-4">
               <span className="text-white text-2xl font-bold">{">"}</span>
             </div>
-            <h2 className="text-2xl font-semibold text-gray-900">
-              Welcome!
-            </h2>
-            <p className="text-sm text-gray-500">
-              Sign in to your account
-            </p>
+            <h2 className="text-2xl font-semibold text-gray-900">Welcome!</h2>
+            <p className="text-sm text-gray-500">Sign in to your account</p>
           </div>
 
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -79,6 +72,7 @@ const LoginPage = () => {
               </label>
               <div className="relative">
                 <input
+                  data-testid="identifier-input"
                   type="text"
                   placeholder="Enter Email or Phone"
                   className="w-full border border-gray-300 rounded-md py-2.5 pl-3 pr-9 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -103,6 +97,7 @@ const LoginPage = () => {
               </label>
               <div className="relative">
                 <input
+                  data-testid="password-input"
                   type={showPassword ? "text" : "password"}
                   placeholder="Enter password"
                   className="w-full border border-gray-300 rounded-md py-2.5 pl-3 pr-9 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
@@ -130,6 +125,7 @@ const LoginPage = () => {
             <div className="flex items-center justify-between text-sm">
               <label className="inline-flex items-center gap-2">
                 <input
+                  data-testid="rememberMe-checkbox"
                   type="checkbox"
                   className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                   {...register("rememberMe")}
@@ -147,6 +143,7 @@ const LoginPage = () => {
             {/* submit */}
             <div className="pt-2">
               <button
+                data-testid="login-submit"
                 type="submit"
                 className="w-full bg-[#2563eb] hover:bg-[#1d4ed8] text-white font-semibold py-2.5 rounded-md text-sm flex items-center justify-center disabled:opacity-70 disabled:cursor-not-allowed"
                 disabled={loading}

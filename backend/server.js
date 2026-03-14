@@ -15,6 +15,8 @@ import companyRoute from "./routes/company/companyRoute.js";
 import partyRoute from "./routes/party/partyRoute.js";
 import accountGroupRoute from "./routes/accountGroup/accountGroupRoute.js";
 import subGroupRoute from "./routes/subGroup/subGroupRoute.js";
+import testRoute from "./routes/test/testRoutes.js"; // ⬅️ new
+
 // ----------------- App Init -----------------
 dotenv.config();
 const app = express();
@@ -73,6 +75,12 @@ app.use("/api/company", companyRoute);
 app.use("/api/party", partyRoute);
 app.use("/api/account-group", accountGroupRoute);
 app.use("/api/subgroup", subGroupRoute);
+
+// test-only routes (only mount when NODE_ENV=test)
+if (process.env.NODE_ENV === "test") {
+  app.use("/api/test", testRoute);
+}
+
 // ----------------- Production Build Serving -----------------
 if (process.env.NODE_ENV === "production") {
   const __dirname = path.resolve();
