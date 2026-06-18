@@ -98,6 +98,7 @@ export const Login = async (req, res) => {
     return res.status(200).json({
       message: "Login successful",
       user: userResponse,
+      token /// for native apps, but web will use cookie
     });
   } catch (error) {
     console.error("Login error:", error);

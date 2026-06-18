@@ -111,6 +111,7 @@ const companySchema = new mongoose.Schema(
     tally_api_key: {
       type: String,
       trim: true,
+      select: false,
       index: true,
       unique: true,
       sparse: true,
@@ -119,18 +120,26 @@ const companySchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+function stripSensitiveCompanyFields(_doc, ret) {
+  delete ret.tally_api_key;
+  return ret;
+}
+
+companySchema.set("toJSON", { transform: stripSensitiveCompanyFields });
+companySchema.set("toObject", { transform: stripSensitiveCompanyFields });
+
 // index for frequent queries: owner + name
 companySchema.index(
   { owner: 1, name: 1 },
   { name: "owner_name_idx" }
 );
 
-// auto-generate company_id like "COMPAB12"
-companySchema.pre("save", function () {
-  if (!this.company_id) {
-    this.company_id = `COMP${nanoId()}`;
-  }
-});
+// // auto-generate company_id like "COMPAB12"
+// companySchema.pre("save", function () {
+//   if (!this.company_id) {
+//     this.company_id = `COMP${nanoId()}`;
+//   }
+// });
 
 const Company = mongoose.model("Company", companySchema);
 export default Company;

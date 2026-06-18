@@ -48,6 +48,9 @@ export async function validateTallyApiKey(req, res, next) {
     const cmpId = extractCmpId(req);
     const tallyApiKey = extractTallyApiKey(req);
 
+    // console.log(cmpId, tallyApiKey);
+    
+
     if (!cmpId || !tallyApiKey) {
       return res.status(401).json({
         status: false,
@@ -69,9 +72,10 @@ export async function validateTallyApiKey(req, res, next) {
       });
     }
 
-    const company = await Company.findById(cmpId)
-      .select("_id tally_api_key")
-      .lean();
+    const company = await Company.findById(cmpId).select("+tally_api_key").lean();
+
+      // console.log("company",company);
+      
 
     if (!company || !company.tally_api_key) {
       return res.status(401).json({

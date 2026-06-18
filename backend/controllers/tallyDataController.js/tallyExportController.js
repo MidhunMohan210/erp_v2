@@ -6,6 +6,29 @@ import VoucherTimeline from "../../Model/VoucherTimeline.js";
 import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
 import { getApiLogs } from "../../utils/logs.js";
 
+const flattenSaleOrderTotalsIntoPartySnapshot = (doc) => {
+  const partySnapshot =
+    doc?.party_snapshot &&
+    typeof doc.party_snapshot === "object" &&
+    !Array.isArray(doc.party_snapshot)
+      ? doc.party_snapshot
+      : {};
+
+  const totals =
+    doc?.totals && typeof doc.totals === "object" && !Array.isArray(doc.totals)
+      ? doc.totals
+      : {};
+
+  return {
+    ...doc,
+    party_snapshot: {
+      ...partySnapshot,
+      ...totals,
+    },
+    // totals: undefined,
+  };
+};
+
 // Shared export helper:
 // returns all docs where company-level serial is greater than the provided serial.
 const fetchBySerial = async (Model, cmp_id, sno, res, label) => {
@@ -40,10 +63,15 @@ const fetchBySerial = async (Model, cmp_id, sno, res, label) => {
       });
     }
 
+    const responseDocs =
+      label === "saleOrder"
+        ? docs.map(flattenSaleOrderTotalsIntoPartySnapshot)
+        : docs;
+
     return res.status(200).json({
       status: true,
       message: `${label} fetched`,
-      data: docs,
+      data: responseDocs,
     });
   } catch (error) {
     console.error(`fetchBySerial ${label} error:`, error);

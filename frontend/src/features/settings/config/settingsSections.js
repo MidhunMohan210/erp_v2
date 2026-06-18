@@ -3,6 +3,7 @@ import { FiFileText } from "react-icons/fi";
 import { SiSteelseries } from "react-icons/si";
 import { TbFileInvoice } from "react-icons/tb";
 import { LuPrinter } from "react-icons/lu";
+import { LuPlug } from "react-icons/lu";
 import { ScrollText, ReceiptText } from "lucide-react";
 
 import { ROUTES } from "@/routes/paths";
@@ -27,6 +28,17 @@ export const settingsRootItems = [
     action: {
       type: "route",
       to: ROUTES.settingsPrintConfigurations,
+    },
+    active: true,
+  },
+  {
+    id: "settings-integrations",
+    title: "INTEGRATIONS",
+    description: "Manage third-party integrations",
+    icon: LuPlug,
+    action: {
+      type: "route",
+      to: ROUTES.settingsIntegrations,
     },
     active: true,
   },
