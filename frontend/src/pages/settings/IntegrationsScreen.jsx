@@ -146,7 +146,6 @@ export default function IntegrationsScreen() {
                     onClick={handleCopy}
                     aria-label="Copy API key"
                   >
-                    <Copy className="h-4 w-4" />
                   </Button>
                 </div>
               </div>
