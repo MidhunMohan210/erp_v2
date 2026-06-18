@@ -70,7 +70,7 @@ export async function validateTallyApiKey(req, res, next) {
     }
 
     const company = await Company.findById(cmpId)
-      .select("_id tally_api_key")
+      .select("_id +tally_api_key")
       .lean();
 
     if (!company || !company.tally_api_key) {

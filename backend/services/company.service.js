@@ -169,7 +169,7 @@ export async function getCompanies(req) {
     return [];
   }
 
-  return Company.find({ owner: adminId }).sort({ createdAt: -1 });
+  return Company.find({ owner: adminId }).select("name").sort({ createdAt: -1 })
 }
 
 export async function updateCompany(id, data = {}, req) {
