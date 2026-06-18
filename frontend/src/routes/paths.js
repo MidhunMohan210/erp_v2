@@ -14,6 +14,7 @@ export const ROUTES = {
   settingsVoucherSeriesList: "/settings/data-entry/voucher/series/list",
   settingsVoucherSeriesCreate: "/settings/data-entry/voucher/series/create",
   settingsPrintConfigurations: "/settings/print-configurations",
+  settingsIntegrations: "/settings/integrations",
   settingsPrintConfigurationsSaleOrder:
     "/settings/print-configurations/sale-order",
   settingsPrintConfigurationsReceipt:

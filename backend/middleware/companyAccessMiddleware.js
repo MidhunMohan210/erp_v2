@@ -1,6 +1,9 @@
 import { requireResolvedCompanyAccess } from "../utils/companyScope.js";
 
 export const requireCompanyAccess = async (req, res, next) => {
+
+  // console.log("req",req);
+  
   try {
     const { companyId } = await requireResolvedCompanyAccess(req);
     req.companyId = companyId;

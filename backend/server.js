@@ -28,6 +28,7 @@ import cashTransactionRoute from "./routes/cashTransaction/cashTransactionRoute.
 import { protect } from "./middleware/authMiddleware.js";
 import printConfigRoutes from "./routes/printConfig/printConfigRoutes.js";
 import companySettingsRoutes from "./routes/companySettings/companySettingsRoutes.js";
+import integrationRoutes from "./routes/admin/integrationRoutes.js";
 // ----------------- App Init -----------------
 dotenv.config();
 const app = express();
@@ -107,6 +108,7 @@ app.use("/api/cash-transactions", cashTransactionRoute);
 app.use("/api/tally", tallyDataRoute);
 app.use("/api/print-config", protect, printConfigRoutes);
 app.use("/api/company-settings", companySettingsRoutes);
+app.use("/api/admin/integrations", integrationRoutes);
 
 // ----------------- Production Build Serving -----------------
 if (process.env.NODE_ENV === "production") {

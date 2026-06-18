@@ -62,6 +62,7 @@ const VoucherSeriesListPage = lazy(
 const PrintConfigurationsPage = lazy(
   () => import("@/pages/settings/PrintConfigurations"),
 );
+const IntegrationsPage = lazy(() => import("@/pages/settings/IntegrationsScreen"));
 const PrintConfigDetailPage = lazy(
   () => import("@/pages/settings/PrintConfigDetail"),
 );
@@ -158,6 +159,10 @@ export const appRoutes = (
     <Route
       path={ROUTES.settingsPrintConfigurations}
       element={<PrintConfigurationsPage />}
+    />
+    <Route
+      path={ROUTES.settingsIntegrations}
+      element={<IntegrationsPage />}
     />
     <Route
       path={ROUTES.settingsPrintConfigurationsSaleOrder}

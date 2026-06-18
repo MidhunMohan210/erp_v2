@@ -21,6 +21,7 @@ export const routeTitleMap = {
   [ROUTES.mastersUsers]: "Users",
   [ROUTES.mastersUserRegister]: "User",
   [ROUTES.settings]: "Settings",
+  [ROUTES.settingsIntegrations]: "Integrations",
   [ROUTES.mastersCustomers]: "Customers",
   [ROUTES.mastersProducts]: "Products",
   [ROUTES.mastersPartyList]: "Parties",
