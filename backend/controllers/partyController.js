@@ -21,14 +21,24 @@ export const addParty = async (req, res) => {
       message: "Party added successfully",
       party: result,
     });
-  } catch (error) {
-    console.error("addParty error:", error);
-    return res
-      .status(error.statusCode || 500)
-      .json({
+   } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("addParty error:", error);
+    }
+
+    if (error.name === "ValidationError") {
+      return res.status(400).json({
         success: false,
-        message: error.statusCode ? error.message : "Internal server error, try again!",
+        message: "Required fields are missing",
       });
+    }
+
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.statusCode
+        ? error.message
+        : "Internal server error, try again!",
+    });
   }
 };
 

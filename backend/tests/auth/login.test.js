@@ -1,16 +1,11 @@
 import request from "supertest";
 import app from "../../app.js";
-import User from "../../Model/UserSchema.js";
+import { createTestUser } from "../helpers/user.js";
 
 describe("POST /api/auth/Login", () => {
   it("logs in successfully with email and password", async () => {
-    await User.create({
-      userName: "Test Admin",
-      mobileNumber: "9999999999",
+    await createTestUser({
       email: "test@example.com",
-      password: "Password123",
-      role: "admin",
-      subscription: "yearly",
     });
 
     const res = await request(app)
@@ -31,13 +26,9 @@ describe("POST /api/auth/Login", () => {
   });
 
   it("logs in successfully with mobile number and password", async () => {
-    await User.create({
-      userName: "Test Admin",
+    await createTestUser({
       mobileNumber: "8888888888",
       email: "mobile@example.com",
-      password: "Password123",
-      role: "admin",
-      subscription: "yearly",
     });
 
     const res = await request(app)
@@ -87,13 +78,9 @@ describe("POST /api/auth/Login", () => {
   });
 
   it("returns 401 when password is wrong", async () => {
-    await User.create({
-      userName: "Test Admin",
+    await createTestUser({
       mobileNumber: "7777777777",
       email: "wrongpass@example.com",
-      password: "Password123",
-      role: "admin",
-      subscription: "yearly",
     });
 
     const res = await request(app)

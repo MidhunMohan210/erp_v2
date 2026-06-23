@@ -3,59 +3,21 @@ import request from "supertest";
 import app from "../../app.js";
 import Company from "../../Model/CompanySchema.js";
 import PrintConfiguration from "../../Model/PrintConfiguration.js";
-import User from "../../Model/UserSchema.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
-
-const createAdminAndLogin = async () => {
-  await User.create({
-    userName: "Company Admin",
-    mobileNumber: "9000000001",
-    email: "company-admin@example.com",
-    password: "Password123",
-    role: "admin",
-    subscription: "yearly",
-  });
-
-  const loginRes = await request(app).post("/api/auth/Login").send({
-    identifier: "company-admin@example.com",
-    password: "Password123",
-  });
-
-  return loginRes.body.token;
-};
-
-const buildCompanyPayload = (overrides = {}) => ({
-  name: "Acme Private Limited",
-  place: "Kochi",
-  pin: "682001",
-  country: "India",
-  state: "Kerala",
-  email: "contact@acme.example",
-  mobile: "9876543210",
-  gstNum: "32ABCDE1234F1Z5",
-  pan: "ABCDE1234F",
-  website: "https://acme.example",
-  type: "integrated",
-  financialYear: {
-    format: "april-march",
-    startingYear: 2025,
-    startMonth: 4,
-    endMonth: 3,
-  },
-  currency: "INR",
-  currencyName: "Indian Rupee",
-  currencySymbol: "Rs",
-  ...overrides,
-});
+import { buildCompanyPayload, createTestCompany } from "../helpers/company.js";
+import { loginAndGetToken } from "../helpers/user.js";
 
 describe("Company routes", () => {
   it("creates a company successfully", async () => {
-    const token = await createAdminAndLogin();
+    const token = await loginAndGetToken({
+      userOverrides: {
+        userName: "Company Admin",
+        mobileNumber: "9000000001",
+        email: "company-admin@example.com",
+      },
+    });
 
-    const res = await request(app)
-      .post("/api/company/register")
-      .set("Authorization", `Bearer ${token}`)
-      .send(buildCompanyPayload());
+    const res = await createTestCompany(token);
 
     expect(res.status).toBe(201);
     expect(res.body.message).toBe("Company registered successfully");
@@ -108,12 +70,15 @@ describe("Company routes", () => {
   });
 
   it("gets the company list successfully", async () => {
-    const token = await createAdminAndLogin();
+    const token = await loginAndGetToken({
+      userOverrides: {
+        userName: "Company Admin",
+        mobileNumber: "9000000001",
+        email: "company-admin@example.com",
+      },
+    });
 
-    const createRes = await request(app)
-      .post("/api/company/register")
-      .set("Authorization", `Bearer ${token}`)
-      .send(buildCompanyPayload());
+    const createRes = await createTestCompany(token);
 
     const companyId = createRes.body.company._id;
 
@@ -129,12 +94,15 @@ describe("Company routes", () => {
   });
 
   it("gets a company by id successfully", async () => {
-    const token = await createAdminAndLogin();
+    const token = await loginAndGetToken({
+      userOverrides: {
+        userName: "Company Admin",
+        mobileNumber: "9000000001",
+        email: "company-admin@example.com",
+      },
+    });
 
-    const createRes = await request(app)
-      .post("/api/company/register")
-      .set("Authorization", `Bearer ${token}`)
-      .send(buildCompanyPayload());
+    const createRes = await createTestCompany(token);
 
     const companyId = createRes.body.company._id;
 
@@ -149,12 +117,15 @@ describe("Company routes", () => {
   });
 
   it("returns 400 when a required field is missing", async () => {
-    const token = await createAdminAndLogin();
+    const token = await loginAndGetToken({
+      userOverrides: {
+        userName: "Company Admin",
+        mobileNumber: "9000000001",
+        email: "company-admin@example.com",
+      },
+    });
 
-    const res = await request(app)
-      .post("/api/company/register")
-      .set("Authorization", `Bearer ${token}`)
-      .send(buildCompanyPayload({ name: undefined }));
+    const res = await createTestCompany(token, { name: undefined });
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe("Required fields are missing");

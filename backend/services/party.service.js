@@ -32,23 +32,7 @@ function createHttpError(message, statusCode = 500) {
   return error;
 }
 
-async function resolveAccountGroupId({ cmp_id, accountGroup, owner }) {
-  if (accountGroup && accountGroup !== "") {
-    return accountGroup;
-  }
 
-  const fallbackGroup = await AccountGroup.findOne({
-    accountGroup: "Sundry Debtors",
-    cmp_id,
-    ...(owner ? { Primary_user_id: owner } : {}),
-  });
-
-  if (!fallbackGroup) {
-    return null;
-  }
-
-  return fallbackGroup._id;
-}
 
 async function getOutstandingTotalsMap({ owner, cmpObjectId, partyIds }) {
   if (!partyIds?.length) {
@@ -106,14 +90,10 @@ export async function addParty(data = {}, req) {
   const createdBy = resolveCurrentUserId(req);
   const cmp_id = data.cmp_id || req.companyId;
 
-  let accountGroup = await resolveAccountGroupId({
-    cmp_id,
-    accountGroup: data.accountGroup,
-    owner,
-  });
 
-  if (!accountGroup) {
-    throw createHttpError("Default account group not found", 400);
+
+  if (!cmp_id || !data.partyName || !data.accountGroup) {
+    throw createHttpError("Required fields are missing", 400);
   }
 
   const generatedId = new mongoose.Types.ObjectId();
@@ -124,7 +104,7 @@ export async function addParty(data = {}, req) {
     cmp_id,
     Primary_user_id: owner,
     partyType: data.partyType || "party",
-    accountGroup,
+    accountGroup : data.accountGroup,
     subGroup: cleanSubGroup,
     partyName: data.partyName,
     mobileNumber: data.mobileNumber,
@@ -142,6 +122,7 @@ export async function addParty(data = {}, req) {
     pin: data.pin,
     party_master_id: data.party_master_id || generatedId.toString(),
     created_by: createdBy,
+    source: "web",
   });
 
   return party.save();
@@ -286,14 +267,9 @@ export async function updateParty(id, data = {}, req) {
     throw createHttpError("Party not found", 404);
   }
 
-  const accountGroup = await resolveAccountGroupId({
-    cmp_id: existingParty.cmp_id,
-    accountGroup: data?.accountGroup,
-    owner,
-  });
 
-  if (!accountGroup) {
-    throw createHttpError("Default account group not found", 400);
+  if (!cmp_id || !data.partyName || !data.accountGroup) {
+    throw createHttpError("Required fields are missing", 400);
   }
 
   const updatePayload = {
@@ -301,7 +277,7 @@ export async function updateParty(id, data = {}, req) {
     cmp_id: existingParty.cmp_id,
     Primary_user_id: existingParty.Primary_user_id,
     created_by: existingParty.created_by,
-    accountGroup,
+    accountGroup : data?.accountGroup === "" || data?.accountGroup == null ? null : data.accountGroup,
     subGroup:
       data?.subGroup === "" || data?.subGroup == null ? null : data.subGroup,
   };
