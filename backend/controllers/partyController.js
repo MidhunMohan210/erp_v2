@@ -13,7 +13,7 @@ export const addParty = async (req, res) => {
         ...req.body,
         cmp_id: req.companyId,
       },
-      req
+      req,
     );
 
     return res.status(201).json({
@@ -21,7 +21,7 @@ export const addParty = async (req, res) => {
       message: "Party added successfully",
       party: result,
     });
-   } catch (error) {
+  } catch (error) {
     if (process.env.NODE_ENV !== "test") {
       console.error("addParty error:", error);
     }
@@ -48,9 +48,9 @@ export const listParties = async (req, res) => {
     return res.json(result);
   } catch (err) {
     console.error("listParties error:", err);
-    return res
-      .status(err.statusCode || 500)
-      .json({ message: err.statusCode ? err.message : "Failed to fetch parties" });
+    return res.status(err.statusCode || 500).json({
+      message: err.statusCode ? err.message : "Failed to fetch parties",
+    });
   }
 };
 
@@ -60,10 +60,12 @@ export const getPartyById = async (req, res) => {
     const party = await getPartyByIdService(id, req);
     res.json(party);
   } catch (error) {
-    console.error("getPartyById error:", error);
-    res
-      .status(error.statusCode || 500)
-      .json({ message: error.statusCode ? error.message : "Failed to fetch party" });
+    if (process.env.NODE_ENV !== "test") {
+      console.error("getPartyById error:", error);
+    }
+    res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Failed to fetch party",
+    });
   }
 };
 
@@ -74,10 +76,12 @@ export const updateParty = async (req, res) => {
 
     res.json({ message: "Party updated", party });
   } catch (error) {
-    console.error("updateParty error:", error);
-    res
-      .status(error.statusCode || 500)
-      .json({ message: error.statusCode ? error.message : "Failed to update party" });
+    if (process.env.NODE_ENV !== "test") {
+      console.error("updateParty error:", error);
+    }
+    res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Failed to update party",
+    });
   }
 };
 
@@ -88,10 +92,11 @@ export const deleteParty = async (req, res) => {
 
     res.json({ message: "Party deleted" });
   } catch (error) {
-    console.error("deleteParty error:", error);
-    res
-      .status(error.statusCode || 500)
-      .json({ message: error.statusCode ? error.message : "Failed to delete party" });
+    if (process.env.NODE_ENV !== "test") {
+      console.error("deleteParty error:", error);
+    }
+    res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Failed to delete party",
+    });
   }
 };
-

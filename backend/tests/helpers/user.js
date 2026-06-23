@@ -17,7 +17,7 @@ export const createTestUser = async (overrides = {}) => {
   return User.create(buildTestUserPayload(overrides));
 };
 
-export const loginAndGetAuthContext = async (options = {}) => {
+export const  loginAndGetAuthContext = async (options = {}) => {
   const {
     userOverrides = {},
     identifier,

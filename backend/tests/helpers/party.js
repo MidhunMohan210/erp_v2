@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 import AccountGroup from "../../Model/AccountGroup.js";
+import Party from "../../Model/partySchema.js";
 
 export const buildPartyPayload = (overrides = {}) => ({
   cmp_id: null,
@@ -25,6 +26,30 @@ export const createAccountGroup = async ({
     accountGroup_id,
     source: "web",
     lastUpdatedBySource: "test-suite",
+    ...overrides,
+  });
+};
+
+export const createTestParty = async ({
+  cmp_id,
+  Primary_user_id,
+  accountGroup,
+  partyName = "Acme Traders",
+  party_master_id = new mongoose.Types.ObjectId().toString(),
+  partyType = "party",
+  created_by = null,
+  source = "web",
+  ...overrides
+} = {}) => {
+  return Party.create({
+    cmp_id,
+    Primary_user_id,
+    accountGroup,
+    partyName,
+    party_master_id,
+    partyType,
+    created_by,
+    source,
     ...overrides,
   });
 };

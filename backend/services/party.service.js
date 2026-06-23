@@ -32,6 +32,34 @@ function createHttpError(message, statusCode = 500) {
   return error;
 }
 
+function validatePartyId(id) {
+  if (!mongoose.Types.ObjectId.isValid(id) ) {
+    throw createHttpError("Invalid party id", 400);
+  }
+}
+
+async function validateAccountGroupForParty({ accountGroup, cmp_id, owner }) {
+  // Manual create stores a Mongo reference, so reject malformed ids early
+  // instead of letting Mongoose surface a generic cast/validation failure.
+  if (!mongoose.Types.ObjectId.isValid(accountGroup)) {
+    throw createHttpError("Invalid accountGroup", 400);
+  }
+
+  // Keep the party scoped to an account group that actually belongs to the
+  // current company and owner.
+  const accountGroupDoc = await AccountGroup.findOne({
+    _id: accountGroup,
+    cmp_id,
+    ...(owner ? { Primary_user_id: owner } : {}),
+  }).lean();
+
+  if (!accountGroupDoc) {
+    throw createHttpError("Selected account group not found", 400);
+  }
+
+  return accountGroupDoc._id;
+}
+
 
 
 async function getOutstandingTotalsMap({ owner, cmpObjectId, partyIds }) {
@@ -96,6 +124,12 @@ export async function addParty(data = {}, req) {
     throw createHttpError("Required fields are missing", 400);
   }
 
+  const accountGroup = await validateAccountGroupForParty({
+    accountGroup: data.accountGroup,
+    cmp_id,
+    owner,
+  });
+
   const generatedId = new mongoose.Types.ObjectId();
   const cleanSubGroup = data.subGroup === "" ? undefined : data.subGroup;
 
@@ -104,7 +138,7 @@ export async function addParty(data = {}, req) {
     cmp_id,
     Primary_user_id: owner,
     partyType: data.partyType || "party",
-    accountGroup : data.accountGroup,
+    accountGroup,
     subGroup: cleanSubGroup,
     partyName: data.partyName,
     mobileNumber: data.mobileNumber,
@@ -236,6 +270,8 @@ export async function listParties(filters = {}, req) {
 }
 
 export async function getPartyById(id, req) {
+  validatePartyId(id);
+
   const owner = resolveAdminOwnerId(req);
   const party = await Party.findOne({
     _id: id,
@@ -257,6 +293,8 @@ export async function getPartyById(id, req) {
 }
 
 export async function updateParty(id, data = {}, req) {
+  validatePartyId(id);
+
   const owner = resolveAdminOwnerId(req);
   const existingParty = await Party.findOne({
     _id: id,
@@ -267,17 +305,22 @@ export async function updateParty(id, data = {}, req) {
     throw createHttpError("Party not found", 404);
   }
 
-
-  if (!cmp_id || !data.partyName || !data.accountGroup) {
+  if (!data.partyName || !data.accountGroup) {
     throw createHttpError("Required fields are missing", 400);
   }
+
+  const accountGroup = await validateAccountGroupForParty({
+    accountGroup: data.accountGroup,
+    cmp_id: existingParty.cmp_id,
+    owner,
+  });
 
   const updatePayload = {
     ...data,
     cmp_id: existingParty.cmp_id,
     Primary_user_id: existingParty.Primary_user_id,
     created_by: existingParty.created_by,
-    accountGroup : data?.accountGroup === "" || data?.accountGroup == null ? null : data.accountGroup,
+    accountGroup,
     subGroup:
       data?.subGroup === "" || data?.subGroup == null ? null : data.subGroup,
   };
@@ -289,6 +332,8 @@ export async function updateParty(id, data = {}, req) {
 }
 
 export async function deleteParty(id, req) {
+  validatePartyId(id);
+
   const owner = resolveAdminOwnerId(req);
   const party = await Party.findOne({
     _id: id,
