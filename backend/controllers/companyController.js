@@ -14,7 +14,7 @@ export const registerCompany = async (req, res) => {
         ...req.body,
         owner: req.user?.id || null,
       },
-      req
+      req,
     );
 
     return res.status(201).json({
@@ -22,10 +22,13 @@ export const registerCompany = async (req, res) => {
       company,
     });
   } catch (error) {
-    console.error("registerCompany error:", error);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("registerCompany error:", error);
+    }
     return res.status(error.statusCode || 500).json({
-      message:
-        error.statusCode ? error.message : "Internal server error, try again!",
+      message: error.statusCode
+        ? error.message
+        : "Internal server error, try again!",
     });
   }
 };
@@ -39,10 +42,11 @@ export const getCompanies = async (req, res) => {
     console.error("getCompanies error:", err);
     return res
       .status(err.statusCode || 500)
-      .json({ message: err.statusCode ? err.message : "Failed to fetch companies" });
+      .json({
+        message: err.statusCode ? err.message : "Failed to fetch companies",
+      });
   }
 };
-
 
 export const updateCompany = async (req, res) => {
   try {
@@ -53,7 +57,7 @@ export const updateCompany = async (req, res) => {
         ...req.body,
         owner: req.user?.id || null,
       },
-      req
+      req,
     );
 
     res.json({ message: "Company updated", company });
@@ -61,7 +65,9 @@ export const updateCompany = async (req, res) => {
     console.error("updateCompany error:", err);
     res
       .status(err.statusCode || 500)
-      .json({ message: err.statusCode ? err.message : "Failed to update company" });
+      .json({
+        message: err.statusCode ? err.message : "Failed to update company",
+      });
   }
 };
 
@@ -75,7 +81,9 @@ export const deleteCompany = async (req, res) => {
     console.error("deleteCompany error:", err);
     res
       .status(err.statusCode || 500)
-      .json({ message: err.statusCode ? err.message : "Failed to delete company" });
+      .json({
+        message: err.statusCode ? err.message : "Failed to delete company",
+      });
   }
 };
 
@@ -89,6 +97,8 @@ export const getCompanyById = async (req, res) => {
     console.error("getCompanyById error:", err);
     res
       .status(err.statusCode || 500)
-      .json({ message: err.statusCode ? err.message : "Failed to fetch company" });
+      .json({
+        message: err.statusCode ? err.message : "Failed to fetch company",
+      });
   }
 };
