@@ -274,7 +274,11 @@ export const addSubDetails = async (req, res) => {
         ? 400
         : 207;
 
-    console.log(`${entityName} Response:`, response.summary);
+        if(process.env.NODE_ENV !== "test") {
+          console.log(`${entityName} Response:`, response.summary);
+        }
+
+
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in addSubDetails:", error);

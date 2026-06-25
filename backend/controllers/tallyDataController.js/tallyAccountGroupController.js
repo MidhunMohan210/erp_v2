@@ -151,7 +151,6 @@ export const addAccountGroups = async (req, res) => {
           },
         });
       } catch (itemError) {
-
         console.error(
           `Error preparing account group ${rawAccountGroupId}:`,
           itemError,
@@ -214,10 +213,9 @@ export const addAccountGroups = async (req, res) => {
           ? 400
           : 207;
 
-          if(process.env.NODE_ENV !== "test") {
-            console.log("Account Groups Response:", response.summary);
-          }
-
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Account Groups Response:", response.summary);
+    }
 
     return res.status(statusCode).json(response);
   } catch (error) {
@@ -246,9 +244,6 @@ export const addAccountGroups = async (req, res) => {
     });
   }
 };
-
-
-
 
 /**
  * addSubGroups - Import/Sync Sub Groups from Tally
@@ -363,7 +358,6 @@ export const addSubGroups = async (req, res) => {
       const rawSubGroupId = subGroup?.subGroup_id;
       const rawAccountGroupId = subGroup?.accountGroup_id;
       const rawSubGroupName = subGroup?.subGroup;
-      
 
       const requestKey = `${rawCmpId}-${rawSubGroupId}-${rawPrimaryUserId}`;
 
@@ -385,7 +379,6 @@ export const addSubGroups = async (req, res) => {
       if (!rawSubGroupId) missingFields.push("subGroup_id");
       if (!rawAccountGroupId) missingFields.push("accountGroup_id");
       if (!rawSubGroupName) missingFields.push("subGroup");
-
 
       if (missingFields.length > 0) {
         skippedItems.push({
@@ -509,7 +502,9 @@ export const addSubGroups = async (req, res) => {
           ? 400
           : 207;
 
-    console.log("Sub Groups Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Sub Groups Response:", response.summary);
+    }
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in addSubGroups:", error);

@@ -207,7 +207,11 @@ export const addPriceLevels = async (req, res) => {
         ? 400
         : 207;
 
-    console.log("Price Levels Response:", response.summary);
+        if(process.env.NODE_ENV !== "test") {
+          console.log("Price Levels Response:", response);
+        }
+
+
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in addPriceLevels:", error);
