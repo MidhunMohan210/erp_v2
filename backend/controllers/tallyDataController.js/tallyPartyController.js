@@ -57,8 +57,7 @@ export const addParties = async (req, res) => {
     }
 
     // From first item: required IDs + Tally user name
-    const { Primary_user_id, cmp_id, tally_user_name } =
-      partiesToSave[0] || {};
+    const { Primary_user_id, cmp_id, tally_user_name } = partiesToSave[0] || {};
 
     if (!Primary_user_id || !cmp_id) {
       return res.status(400).json({
@@ -98,7 +97,7 @@ export const addParties = async (req, res) => {
     const accountGroupMap = new Map();
     for (const ag of accountGroupDocs) {
       const key = `${String(ag.cmp_id)}-${ag.accountGroup_id}-${String(
-        ag.Primary_user_id
+        ag.Primary_user_id,
       )}`;
       accountGroupMap.set(key, ag._id);
     }
@@ -113,7 +112,7 @@ export const addParties = async (req, res) => {
     const subGroupMap = new Map();
     for (const sg of subGroupDocs) {
       const key = `${String(sg.cmp_id)}-${sg.subGroup_id}-${String(
-        sg.Primary_user_id
+        sg.Primary_user_id,
       )}`;
       subGroupMap.set(key, sg._id);
     }
@@ -128,7 +127,7 @@ export const addParties = async (req, res) => {
     const priceLevelMap = new Map();
     for (const pl of priceLevelDocs) {
       const key = `${String(pl.cmp_id)}-${pl.pricelevel_id}-${String(
-        pl.Primary_user_id
+        pl.Primary_user_id,
       )}`;
       priceLevelMap.set(key, pl._id);
     }
@@ -198,7 +197,7 @@ export const addParties = async (req, res) => {
 
         // 4.d Resolve accountGroup (required)
         const agKey = `${String(cmpObjectId)}-${party.accountGroup_id}-${String(
-          primaryUserObjectId
+          primaryUserObjectId,
         )}`;
         const accountGroupId = accountGroupMap.get(agKey);
 
@@ -219,7 +218,7 @@ export const addParties = async (req, res) => {
         let subGroupId = null;
         if (party?.subGroup_id) {
           const sgKey = `${String(cmpObjectId)}-${party.subGroup_id}-${String(
-            primaryUserObjectId
+            primaryUserObjectId,
           )}`;
           subGroupId = subGroupMap.get(sgKey) || null;
 
@@ -241,7 +240,7 @@ export const addParties = async (req, res) => {
         let priceLevelId = null;
         if (party?.pricelevel_id) {
           const plKey = `${String(cmpObjectId)}-${party.pricelevel_id}-${String(
-            primaryUserObjectId
+            primaryUserObjectId,
           )}`;
           priceLevelId = priceLevelMap.get(plKey) || null;
 
@@ -318,10 +317,7 @@ export const addParties = async (req, res) => {
           },
         });
       } catch (itemError) {
-        console.error(
-          `Error preparing party ${rawPartyMasterId}:`,
-          itemError
-        );
+        console.error(`Error preparing party ${rawPartyMasterId}:`, itemError);
         skippedItems.push({
           item: itemIndex,
           reason: `Processing error: ${itemError.message}`,
@@ -379,13 +375,19 @@ export const addParties = async (req, res) => {
       successCount > 0
         ? 200
         : skippedItems.length === totalReceived
-        ? 400
-        : 207;
+          ? 400
+          : 207;
 
-    console.log("Parties Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Parties Response:", response.summary);
+    }
+
     return res.status(statusCode).json(response);
   } catch (error) {
-    console.error("Error in addParties:", error);
+    if (process.env.NODE_ENV !== "test"){
+      console.error("Error in addParties:", error);
+    }
+
 
     if (error.name === "ValidationError") {
       return res.status(400).json({
@@ -412,4 +414,3 @@ export const addParties = async (req, res) => {
     });
   }
 };
-
