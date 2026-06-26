@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 import Party from "../Model/partySchema.js";
 import AccountGroup from "../Model/AccountGroup.js";
-import Outstanding from "../Model/oustandingShcema.js";
+import Outstanding from "../Model/outstandingShcema.js";
 import SaleOrder from "../Model/SaleOrder.js";
 import Receipt from "../Model/Receipt.js";
 import PartyLedger from "../Model/PartyLedger.js";

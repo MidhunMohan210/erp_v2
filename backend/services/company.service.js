@@ -6,7 +6,7 @@ import Party from "../Model/partySchema.js";
 import Product from "../Model/ProductSchema.js";
 import Receipt from "../Model/Receipt.js";
 import SaleOrder from "../Model/SaleOrder.js";
-import Outstanding from "../Model/oustandingShcema.js";
+import Outstanding from "../Model/outstandingShcema.js";
 import PartyLedger from "../Model/PartyLedger.js";
 import CashBankLedger from "../Model/CashBankLedger.js";
 import VoucherSeries from "../Model/VoucherSeriesSchema.js";

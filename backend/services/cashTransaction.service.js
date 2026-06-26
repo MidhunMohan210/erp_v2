@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 import CashBankLedger from "../Model/CashBankLedger.js";
-import Outstanding from "../Model/oustandingShcema.js";
+import Outstanding from "../Model/outstandingShcema.js";
 import Party from "../Model/partySchema.js";
 import PartyLedger from "../Model/PartyLedger.js";
 import PartyMonthlyBalance from "../Model/PartyMonthlyBalance.js";

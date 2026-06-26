@@ -22,7 +22,6 @@ import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
  *   - If DB has no default, the first godown in this batch with defaultGodown = true stays default.
  */
 
-
 export const addGodowns = async (req, res) => {
   try {
     const { data } = req.body;
@@ -52,9 +51,7 @@ export const addGodowns = async (req, res) => {
     }).lean();
 
     // 2) Check if the incoming batch has at least one default=true
-    const hasDefaultInBatch = data.some(
-      (item) => item.defaultGodown === true
-    );
+    const hasDefaultInBatch = data.some((item) => item.defaultGodown === true);
 
     // Case A: DB has NO default, and batch also has NO default → reject
     if (!existingDefaultGodown && !hasDefaultInBatch) {
@@ -157,7 +154,6 @@ export const addGodowns = async (req, res) => {
           //   restrict to first true here.
           // If you want only first default, uncomment below:
           //   (But you didn't explicitly say only one in batch, only "company must have default")
-
           // Example to only keep the first default in batch:
           // if (defaultGodownFlag && defaultAlreadyChosenInBatch) defaultGodownFlag = false;
           // else if (defaultGodownFlag) defaultAlreadyChosenInBatch = true;
@@ -247,10 +243,13 @@ export const addGodowns = async (req, res) => {
       successCount > 0
         ? 200
         : skippedItems.length === totalReceived
-        ? 400
-        : 207;
+          ? 400
+          : 207;
 
-    console.log("Godowns Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Godowns Response:", response.summary);
+    }
+
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in addGodowns:", error);
@@ -278,4 +277,3 @@ export const addGodowns = async (req, res) => {
     });
   }
 };
-
