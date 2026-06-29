@@ -1,5 +1,6 @@
 import VoucherSeries from "../Model/VoucherSeriesSchema.js";
 
+
 function normalizeVoucherPart(value) {
   if (value == null) return "";
   return String(value).trim();
@@ -25,6 +26,15 @@ function formatVoucherNumber(prefix, number, suffix) {
   return normalizedNumber || normalizedPrefix || normalizedSuffix;
 }
 
+
+function createHttpError(message, statusCode = 500) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+
+
 export async function getNextVoucherNumber({
   cmpId,
   voucherType,
@@ -43,15 +53,12 @@ export async function getNextVoucherNumber({
   );
 
   if (!existingSeries) {
-    throw new Error("Series not found");
+    throw createHttpError("Series not found", 404); // ← FIXED
   }
 
   const currentNumber = Number(existingSeries.currentNumber) || 1;
   const widthOfNumericalPart = Number(existingSeries.widthOfNumericalPart) || 1;
-  const paddedNumber = String(currentNumber).padStart(
-    widthOfNumericalPart,
-    "0"
-  );
+  const paddedNumber = String(currentNumber).padStart(widthOfNumericalPart, "0");
   const voucherNumber = formatVoucherNumber(
     existingSeries.prefix,
     paddedNumber,
@@ -61,16 +68,15 @@ export async function getNextVoucherNumber({
   const updatedVoucherSeries = await VoucherSeries.findOneAndUpdate(
     filter,
     {
-      $set: {
-        "series.$.lastUsedNumber": currentNumber,
-      },
+      $set: { "series.$.lastUsedNumber": currentNumber },
       $inc: { "series.$.currentNumber": 1 },
     },
     { returnDocument: "after", session }
   );
 
   if (!updatedVoucherSeries) {
-    throw new Error("Failed to update series");
+    throw createHttpError("Failed to update voucher series", 500); // ← FIXED
+    // 500 here is correct — series existed moments ago, update failing = server/DB problem
   }
 
   const updatedSeries = updatedVoucherSeries.series?.find(
@@ -78,7 +84,8 @@ export async function getNextVoucherNumber({
   );
 
   if (!updatedSeries) {
-    throw new Error("Series not found");
+    throw createHttpError("Series not found after update", 500); // ← FIXED
+    // 500 here too — this is data corruption or a race condition, not a client error
   }
 
   return {

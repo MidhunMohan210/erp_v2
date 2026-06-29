@@ -33,7 +33,9 @@ export async function createSaleOrder(req, res) {
       },
     });
   } catch (error) {
-    console.error("createSaleOrder error:", error);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("createSaleOrder error:", error);
+    }
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to create sale order",
@@ -115,7 +117,9 @@ export async function updateSaleOrder(req, res) {
       },
     });
   } catch (error) {
-    console.error("updateSaleOrder error:", error);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("updateSaleOrder error:", error);
+    }
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to update sale order",
@@ -154,7 +158,9 @@ export async function cancelSaleOrder(req, res) {
       },
     });
   } catch (error) {
-    console.error("cancelSaleOrder error:", error);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("cancelSaleOrder error:", error);
+    }
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to cancel sale order",
