@@ -53,7 +53,7 @@ function createHttpError(message, statusCode = 500) {
 function resolveLedgerSides(voucher_type) {
   return {
     party_ledger_side: "credit",
-    cash_bank_ledger_side: "debit",
+    cash_bank_ledger_side: "credit",
   };
 }
 
