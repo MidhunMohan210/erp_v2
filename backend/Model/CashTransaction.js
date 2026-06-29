@@ -27,6 +27,8 @@ const CashTransactionSchema = new Schema(
       required: true,
       immutable: true,
     },
+    series_id: { type: Schema.Types.ObjectId, required: true },
+    series_name: { type: String, required: true },
     voucher_number: { type: String, required: true },
     company_level_serial_number: { type: Number, default: null },
     user_level_serial_number: { type: Number, default: null },
@@ -76,6 +78,7 @@ const CashTransactionSchema = new Schema(
 CashTransactionSchema.index({ cmp_id: 1, date: -1 });
 CashTransactionSchema.index({ cmp_id: 1, voucher_type: 1, date: -1 });
 CashTransactionSchema.index({ cmp_id: 1, party_id: 1, date: -1 });
+CashTransactionSchema.index({ cmp_id: 1, series_id: 1, date: -1 });
 CashTransactionSchema.index(
   { cmp_id: 1, voucher_number: 1, voucher_type: 1 },
   { unique: true }

@@ -517,13 +517,15 @@ describe("POST /api/cash-transactions - Company ownership failures", () => {
 });
 
 describe("POST /api/cash-transactions - DB side effects (no settlements)", () => {
-  it("Receipt document exists in DB with correct cmp_id, party_id and cash_bank_id", async () => {
+  it("Receipt document exists in DB with correct cmp_id, series, party_id and cash_bank_id", async () => {
     const res = await createReceiptForTest();
 
     const receipt = await Receipt.findById(res.body.data.cashTransaction._id).lean();
 
     expect(receipt).not.toBeNull();
     expect(String(receipt.cmp_id)).toBe(String(baseContext.companyId));
+    expect(String(receipt.series_id)).toBe(String(baseContext.series.seriesId));
+    expect(receipt.series_name).toBe(baseContext.series.seriesName);
     expect(String(receipt.party_id)).toBe(String(baseContext.party._id));
     expect(String(receipt.cash_bank_id)).toBe(String(baseContext.cashAccount._id));
   });
