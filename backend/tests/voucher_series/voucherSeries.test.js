@@ -3,6 +3,8 @@ import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import app from "../../app.js";
+import Receipt from "../../Model/Receipt.js";
+import SaleOrder from "../../Model/SaleOrder.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import { createTestCompany } from "../helpers/company.js";
 import { setupIntegrationTestContext } from "../helpers/party.js";
@@ -47,6 +49,73 @@ function buildUpdateVoucherSeriesPayload(overrides = {}) {
     widthOfNumericalPart: 4,
     ...overrides,
   };
+}
+
+async function createDirectSaleOrderUsingSeries(series, overrides = {}) {
+  return SaleOrder.create({
+    cmp_id: baseContext.companyId,
+    voucher_type: "saleOrder",
+    series_id: series._id,
+    series_name: series.seriesName,
+    voucher_number: `SO-${series._id}`,
+    current_series_number: 1,
+    company_level_serial_number: 1,
+    user_level_serial_number: 1,
+    date: new Date("2026-06-29T00:00:00.000Z"),
+    party_id: new mongoose.Types.ObjectId(),
+    party_snapshot: {
+      name: "Series Guard Customer",
+      gst_no: null,
+      billing_address: null,
+      shipping_address: null,
+      mobile: null,
+      state: "Kerala",
+    },
+    tax_type: "igst",
+    items: [
+      {
+        item_id: new mongoose.Types.ObjectId(),
+        item_name: "Guard Item",
+        unit: "pcs",
+        actual_qty: 1,
+        billed_qty: 1,
+        rate: 100,
+        base_price: 100,
+        taxable_amount: 100,
+        total_amount: 118,
+      },
+    ],
+    totals: {
+      final_amount: 118,
+    },
+    ...overrides,
+  });
+}
+
+async function createDirectReceiptUsingSeries(series, overrides = {}) {
+  return Receipt.create({
+    cmp_id: baseContext.companyId,
+    voucher_type: "receipt",
+    series_id: series._id,
+    series_name: series.seriesName,
+    voucher_number: `RCP-${series._id}`,
+    company_level_serial_number: 1,
+    user_level_serial_number: 1,
+    date: new Date("2026-06-29T00:00:00.000Z"),
+    party_id: new mongoose.Types.ObjectId(),
+    party_name: "Series Guard Party",
+    cash_bank_id: new mongoose.Types.ObjectId(),
+    cash_bank_name: "Series Guard Cash",
+    cash_bank_type: "cash",
+    instrument_type: "cash",
+    amount: 500,
+    advance_amount: 500,
+    settlement_details: [],
+    status: "active",
+    created_by: baseContext.user._id,
+    updated_by: baseContext.user._id,
+    ...overrides,
+  });
 }
 
 async function createOwnedCompany(token, label) {
@@ -330,6 +399,74 @@ describe("DELETE /api/voucher-series/:cmp_id/:seriesId", () => {
     expect(res.body.message).toBe("Series deleted successfully");
     expect(deletedSeries).toBeUndefined();
     expect(seriesDocAfterDelete.series.some((series) => series.seriesName === "Default Series")).toBe(true);
+  });
+
+  it("returns 400 when the series is already used by a sale order", async () => {
+    await createSeriesRequest(buildCreateVoucherSeriesPayload({
+      voucherType: "saleOrder",
+      seriesName: "Used Sale Order Series",
+      prefix: "USO",
+    }));
+    const saleOrderSeriesDoc = await VoucherSeries.findOne({
+      cmp_id: baseContext.companyId,
+      voucherType: "saleOrder",
+    }).lean();
+    const usedSeries = saleOrderSeriesDoc.series.find(
+      (series) => series.seriesName === "Used Sale Order Series",
+    );
+
+    await createDirectSaleOrderUsingSeries(usedSeries);
+
+    const res = await deleteSeriesRequest(usedSeries._id.toString(), {
+      voucherType: "saleOrder",
+    });
+
+    const seriesDocAfterAttempt = await VoucherSeries.findOne({
+      cmp_id: baseContext.companyId,
+      voucherType: "saleOrder",
+    }).lean();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Series is already used in a sale order or receipt");
+    expect(
+      seriesDocAfterAttempt.series.some(
+        (series) => String(series._id) === String(usedSeries._id),
+      ),
+    ).toBe(true);
+  });
+
+  it("returns 400 when the series is already used by a receipt", async () => {
+    await createSeriesRequest(buildCreateVoucherSeriesPayload({
+      voucherType: "receipt",
+      seriesName: "Used Receipt Series",
+      prefix: "URC",
+    }));
+    const receiptSeriesDoc = await VoucherSeries.findOne({
+      cmp_id: baseContext.companyId,
+      voucherType: "receipt",
+    }).lean();
+    const usedSeries = receiptSeriesDoc.series.find(
+      (series) => series.seriesName === "Used Receipt Series",
+    );
+
+    await createDirectReceiptUsingSeries(usedSeries);
+
+    const res = await deleteSeriesRequest(usedSeries._id.toString(), {
+      voucherType: "receipt",
+    });
+
+    const seriesDocAfterAttempt = await VoucherSeries.findOne({
+      cmp_id: baseContext.companyId,
+      voucherType: "receipt",
+    }).lean();
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Series is already used in a sale order or receipt");
+    expect(
+      seriesDocAfterAttempt.series.some(
+        (series) => String(series._id) === String(usedSeries._id),
+      ),
+    ).toBe(true);
   });
 
   it('returns 404 when voucherType document does not exist', async () => {

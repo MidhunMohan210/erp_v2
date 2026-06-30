@@ -136,6 +136,8 @@ export default function VoucherSeriesList() {
       );
     } finally {
       setDeletingSeriesId("");
+      setSeriesToDelete(null);
+
     }
   };
 
