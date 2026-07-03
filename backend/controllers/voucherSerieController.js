@@ -1,6 +1,8 @@
 
 
 // controllers/voucherSeriesController.js
+import Receipt from "../Model/Receipt.js";
+import SaleOrder from "../Model/SaleOrder.js";
 import VoucherSeries from "../Model/VoucherSeriesSchema.js";
 import { resolveCompanyScope } from "../utils/companyScope.js";
 
@@ -193,6 +195,17 @@ export const deleteVoucherSeriesById = async (req, res) => {
 
     const normalizedVoucherType =
       voucherType === "sale" ? "sales" : voucherType;
+
+    const [saleOrderUsingSeries, receiptUsingSeries] = await Promise.all([
+      SaleOrder.findOne({ cmp_id, series_id: seriesId }).select("_id").lean(),
+      Receipt.findOne({ cmp_id, series_id: seriesId }).select("_id").lean(),
+    ]);
+
+    if (saleOrderUsingSeries || receiptUsingSeries) {
+      return res.status(400).json({
+        message: "Series is already used in a sale order or receipt",
+      });
+    }
 
     const result = await VoucherSeries.findOneAndUpdate(
       {

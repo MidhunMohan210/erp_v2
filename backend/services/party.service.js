@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 import Party from "../Model/partySchema.js";
 import AccountGroup from "../Model/AccountGroup.js";
-import Outstanding from "../Model/oustandingShcema.js";
+import Outstanding from "../Model/outstandingShcema.js";
 import SaleOrder from "../Model/SaleOrder.js";
 import Receipt from "../Model/Receipt.js";
 import PartyLedger from "../Model/PartyLedger.js";
@@ -32,23 +32,35 @@ function createHttpError(message, statusCode = 500) {
   return error;
 }
 
-async function resolveAccountGroupId({ cmp_id, accountGroup, owner }) {
-  if (accountGroup && accountGroup !== "") {
-    return accountGroup;
+function validatePartyId(id) {
+  if (!mongoose.Types.ObjectId.isValid(id) ) {
+    throw createHttpError("Invalid party id", 400);
+  }
+}
+
+async function validateAccountGroupForParty({ accountGroup, cmp_id, owner }) {
+  // Manual create stores a Mongo reference, so reject malformed ids early
+  // instead of letting Mongoose surface a generic cast/validation failure.
+  if (!mongoose.Types.ObjectId.isValid(accountGroup)) {
+    throw createHttpError("Invalid accountGroup", 400);
   }
 
-  const fallbackGroup = await AccountGroup.findOne({
-    accountGroup: "Sundry Debtors",
+  // Keep the party scoped to an account group that actually belongs to the
+  // current company and owner.
+  const accountGroupDoc = await AccountGroup.findOne({
+    _id: accountGroup,
     cmp_id,
     ...(owner ? { Primary_user_id: owner } : {}),
-  });
+  }).lean();
 
-  if (!fallbackGroup) {
-    return null;
+  if (!accountGroupDoc) {
+    throw createHttpError("Selected account group not found", 400);
   }
 
-  return fallbackGroup._id;
+  return accountGroupDoc._id;
 }
+
+
 
 async function getOutstandingTotalsMap({ owner, cmpObjectId, partyIds }) {
   if (!partyIds?.length) {
@@ -106,15 +118,17 @@ export async function addParty(data = {}, req) {
   const createdBy = resolveCurrentUserId(req);
   const cmp_id = data.cmp_id || req.companyId;
 
-  let accountGroup = await resolveAccountGroupId({
-    cmp_id,
+
+
+  if (!cmp_id || !data.partyName || !data.accountGroup) {
+    throw createHttpError("Required fields are missing", 400);
+  }
+
+  const accountGroup = await validateAccountGroupForParty({
     accountGroup: data.accountGroup,
+    cmp_id,
     owner,
   });
-
-  if (!accountGroup) {
-    throw createHttpError("Default account group not found", 400);
-  }
 
   const generatedId = new mongoose.Types.ObjectId();
   const cleanSubGroup = data.subGroup === "" ? undefined : data.subGroup;
@@ -142,6 +156,7 @@ export async function addParty(data = {}, req) {
     pin: data.pin,
     party_master_id: data.party_master_id || generatedId.toString(),
     created_by: createdBy,
+    source: "web",
   });
 
   return party.save();
@@ -255,6 +270,8 @@ export async function listParties(filters = {}, req) {
 }
 
 export async function getPartyById(id, req) {
+  validatePartyId(id);
+
   const owner = resolveAdminOwnerId(req);
   const party = await Party.findOne({
     _id: id,
@@ -276,6 +293,8 @@ export async function getPartyById(id, req) {
 }
 
 export async function updateParty(id, data = {}, req) {
+  validatePartyId(id);
+
   const owner = resolveAdminOwnerId(req);
   const existingParty = await Party.findOne({
     _id: id,
@@ -286,15 +305,15 @@ export async function updateParty(id, data = {}, req) {
     throw createHttpError("Party not found", 404);
   }
 
-  const accountGroup = await resolveAccountGroupId({
+  if (!data.partyName || !data.accountGroup) {
+    throw createHttpError("Required fields are missing", 400);
+  }
+
+  const accountGroup = await validateAccountGroupForParty({
+    accountGroup: data.accountGroup,
     cmp_id: existingParty.cmp_id,
-    accountGroup: data?.accountGroup,
     owner,
   });
-
-  if (!accountGroup) {
-    throw createHttpError("Default account group not found", 400);
-  }
 
   const updatePayload = {
     ...data,
@@ -313,6 +332,8 @@ export async function updateParty(id, data = {}, req) {
 }
 
 export async function deleteParty(id, req) {
+  validatePartyId(id);
+
   const owner = resolveAdminOwnerId(req);
   const party = await Party.findOne({
     _id: id,

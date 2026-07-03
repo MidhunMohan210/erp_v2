@@ -385,7 +385,7 @@ export function logSaleOrderTotalsMismatch(body = {}) {
     Math.abs((clientTotals.grandTotal || 0) - serverTotals.grandTotal),
   ].some((difference) => difference > 1);
 
-  if (hasSignificantDifference) {
+  if (hasSignificantDifference && process.env.NODE_ENV !== "test") {
     console.warn("Sale order totals mismatch detected", {
       clientTotals,
       serverTotals,

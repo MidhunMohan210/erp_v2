@@ -24,6 +24,8 @@ export function buildCashTransactionDocument(data = {}, voucherIdentity = {}, se
   return {
     cmp_id: data.cmp_id,
     voucher_type: data.voucher_type,
+    series_id: voucherIdentity.series?._id || data.series_id || null,
+    series_name: voucherIdentity.series?.seriesName || null,
     voucher_number: voucherIdentity.voucherNumber,
     company_level_serial_number: voucherIdentity.companyLevelSerialNumber,
     user_level_serial_number: voucherIdentity.userLevelSerialNumber,

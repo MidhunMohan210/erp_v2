@@ -39,15 +39,21 @@ function buildCashTransactionPayload(body = {}, userId = null) {
     date: body.date || body.transactionDate,
     party_id: body.party_id || body.party?._id || body.party?.id,
     party_name: body.party_name || body.party?.partyName || "",
-    cash_bank_id: body.cash_bank_id || body.cash_bank?._id || body.cash_bank?.id,
+    cash_bank_id:
+      body.cash_bank_id || body.cash_bank?._id || body.cash_bank?.id,
     cash_bank_name:
-      body.cash_bank_name || body.cash_bank?.partyName || body.cash_bank?.name || "",
+      body.cash_bank_name ||
+      body.cash_bank?.partyName ||
+      body.cash_bank?.name ||
+      "",
     cash_bank_type:
       body.cash_bank_type ||
       firstDefined(body.cash_bank?.partyType, body.cashBankType),
     instrument_type: body.instrument_type || body.instrumentType || "cash",
     amount: Number(body.amount) || 0,
-    settlement_details: normalizeSettlementDetails(body.settlement_details || []),
+    settlement_details: normalizeSettlementDetails(
+      body.settlement_details || [],
+    ),
     narration: body.narration || null,
     cheque_number: body.cheque_number || body.chequeNumber || null,
     cheque_date: body.cheque_date || body.chequeDate || null,
@@ -70,7 +76,7 @@ export async function createCashTransaction(req, res) {
         ...body,
         cmp_id: req.companyId,
       },
-      userId
+      userId,
     );
 
     if (
@@ -87,8 +93,7 @@ export async function createCashTransaction(req, res) {
     ) {
       return res.status(400).json({
         success: false,
-        message:
-          "cmp_id, voucher_type, series_id, date, party_id, party_name, cash_bank_id, cash_bank_name, cash_bank_type and amount are required",
+        message: "Missing required fields",
       });
     }
 
@@ -115,7 +120,9 @@ export async function createCashTransaction(req, res) {
       },
     });
   } catch (error) {
-    console.error("createCashTransaction error:", error);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("createCashTransaction error:", error);
+    }
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to create cash transaction",
@@ -129,7 +136,8 @@ export async function cancelCashTransaction(req, res) {
     const id = req.params.id;
     const body = req.body || {};
     const cmp_id = req.companyId;
-    const cancelled_by = req.user?._id || req.user?.id || body.cancelled_by || null;
+    const cancelled_by =
+      req.user?._id || req.user?.id || body.cancelled_by || null;
 
     if (!id || !cmp_id) {
       return res.status(400).json({
@@ -143,9 +151,10 @@ export async function cancelCashTransaction(req, res) {
       {
         cmp_id,
         cancelled_by,
-        cancellation_reason: body.cancellation_reason || body.cancellationReason || null,
+        cancellation_reason:
+          body.cancellation_reason || body.cancellationReason || null,
       },
-      req
+      req,
     );
 
     return res.status(200).json({
@@ -156,7 +165,9 @@ export async function cancelCashTransaction(req, res) {
       },
     });
   } catch (error) {
-    console.error("cancelCashTransaction error:", error);
+    if (process.env.NODE_ENV !== "test") {
+      console.error("cancelCashTransaction error:", error);
+    }
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to cancel cash transaction",
@@ -184,7 +195,11 @@ export async function getCashTransactionById(req, res) {
       });
     }
 
-    const cashTransaction = await getCashTransactionByIdService(id, { cmp_id }, req);
+    const cashTransaction = await getCashTransactionByIdService(
+      id,
+      { cmp_id },
+      req,
+    );
 
     if (!cashTransaction) {
       return res.status(404).json({
@@ -211,7 +226,10 @@ export async function getCashTransactionById(req, res) {
 // Controller: list receipt/cash transactions with filters.
 export async function getCashTransactions(req, res) {
   try {
-    const cashTransactions = await getCashTransactionsService(req.query || {}, req);
+    const cashTransactions = await getCashTransactionsService(
+      req.query || {},
+      req,
+    );
 
     return res.status(200).json({
       success: true,
@@ -259,7 +277,7 @@ export async function getCashBankLedgerBalances(req, res) {
         cmp_id: resolvedCmpId,
         cash_bank_type: resolvedType,
       },
-      req
+      req,
     );
 
     return res.status(200).json({

@@ -5,10 +5,12 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 export default defineConfig(({ mode }) => {
-  // Load env based on mode (development / production)
-  const env = loadEnv(mode, process.cwd());
+  const frontendRoot = path.resolve(__dirname);
+  const env = loadEnv(mode, frontendRoot, "");
+  const apiTarget = env.VITE_API_URL || "http://localhost:4000";
 
   return {
+    envDir: frontendRoot,
     plugins: [
       react(),
       tailwindcss(),
@@ -19,9 +21,10 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
+      host: true,
       proxy: {
         "/api": {
-          target: env.VITE_API_URL, // 👈 dynamic
+          target: apiTarget,
           changeOrigin: true,
           secure: false,
         },

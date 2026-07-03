@@ -100,6 +100,7 @@ export const addAccountGroups = async (req, res) => {
       if (!rawPrimaryUserId) missingFields.push("Primary_user_id");
       if (!rawCmpId) missingFields.push("cmp_id");
       if (!rawAccountGroupId) missingFields.push("accountGroup_id");
+      if (!group?.accountGroup) missingFields.push("accountGroup");
 
       if (missingFields.length > 0) {
         skippedItems.push({
@@ -212,7 +213,10 @@ export const addAccountGroups = async (req, res) => {
           ? 400
           : 207;
 
-    console.log("Account Groups Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Account Groups Response:", response.summary);
+    }
+
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in addAccountGroups:", error);
@@ -240,9 +244,6 @@ export const addAccountGroups = async (req, res) => {
     });
   }
 };
-
-
-
 
 /**
  * addSubGroups - Import/Sync Sub Groups from Tally
@@ -356,6 +357,7 @@ export const addSubGroups = async (req, res) => {
       const rawCmpId = subGroup?.cmp_id;
       const rawSubGroupId = subGroup?.subGroup_id;
       const rawAccountGroupId = subGroup?.accountGroup_id;
+      const rawSubGroupName = subGroup?.subGroup;
 
       const requestKey = `${rawCmpId}-${rawSubGroupId}-${rawPrimaryUserId}`;
 
@@ -376,6 +378,7 @@ export const addSubGroups = async (req, res) => {
       if (!rawCmpId) missingFields.push("cmp_id");
       if (!rawSubGroupId) missingFields.push("subGroup_id");
       if (!rawAccountGroupId) missingFields.push("accountGroup_id");
+      if (!rawSubGroupName) missingFields.push("subGroup");
 
       if (missingFields.length > 0) {
         skippedItems.push({
@@ -499,7 +502,9 @@ export const addSubGroups = async (req, res) => {
           ? 400
           : 207;
 
-    console.log("Sub Groups Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Sub Groups Response:", response.summary);
+    }
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in addSubGroups:", error);

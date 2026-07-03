@@ -15,6 +15,10 @@ export const getApiLogs = (cmp_id, label = "API Call") => {
   try {
     const timestamp = new Date().toISOString();
 
+    if(process.env.NODE_ENV === "test") {
+      return;
+    }
+
     // Basic structured log
     console.log(
       JSON.stringify(
@@ -29,6 +33,9 @@ export const getApiLogs = (cmp_id, label = "API Call") => {
       )
     );
   } catch (err) {
+    if (process.env.NODE_ENV === "test") {
+      return;
+    }
     // Last-resort log if something goes wrong in logging itself
     console.error("Error in getApiLogs:", err?.message || err);
   }

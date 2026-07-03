@@ -1,5 +1,5 @@
 // controllers/outstandingController.js
-import Outstanding from "../Model/oustandingShcema.js";
+import Outstanding from "../Model/outstandingShcema.js";
 import mongoose from "mongoose";
 import { resolveAdminOwnerId } from "../utils/authScope.js";
 

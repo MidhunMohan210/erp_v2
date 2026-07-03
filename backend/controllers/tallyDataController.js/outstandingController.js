@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import Outstanding from "../../Model/oustandingShcema.js";
+import Outstanding from "../../Model/outstandingShcema.js";
 import partyModel from "../../Model/partySchema.js";
 import AccountGroup from "../../Model/AccountGroup.js";
 import subGroupModel from "../../Model/SubGroup.js";
@@ -69,7 +69,7 @@ export const importOutstandingFromTally = async (req, res) => {
             cmp_id: cmp_id,
             party_master_id: { $in: chunk },
           },
-          { _id: 1, party_master_id: 1 }
+          { _id: 1, party_master_id: 1 },
         )
         .lean();
 
@@ -77,7 +77,7 @@ export const importOutstandingFromTally = async (req, res) => {
     }
 
     const partyIdMap = Object.fromEntries(
-      matchedParties.map((item) => [item.party_master_id, item._id])
+      matchedParties.map((item) => [item.party_master_id, item._id]),
     );
 
     // ---------------------------------
@@ -89,24 +89,24 @@ export const importOutstandingFromTally = async (req, res) => {
     ]);
 
     const accntgrpMap = Object.fromEntries(
-      matchedAccountGrp.map((item) => [item.accountGroup_id, item._id])
+      matchedAccountGrp.map((item) => [item.accountGroup_id, item._id]),
     );
     const subGrpMap = Object.fromEntries(
-      matchedSubGrp.map((item) => [item.subGroup_id, item._id])
+      matchedSubGrp.map((item) => [item.subGroup_id, item._id]),
     );
-
-    console.log(accntgrpMap,subGrpMap);
-    
 
     // ---------------------------------
     // 5. Delete existing Outstanding
     // ---------------------------------
     const deleted = await Outstanding.deleteMany({ Primary_user_id, cmp_id });
-    console.log(
-      deleted.deletedCount > 0
-        ? `Deleted ${deleted.deletedCount} outstanding documents`
-        : "No existing outstanding documents found"
-    );
+
+    if (process.env.NODE_ENV !== "test") {
+      console.log(
+        deleted.deletedCount > 0
+          ? `Deleted ${deleted.deletedCount} outstanding documents`
+          : "No existing outstanding documents found",
+      );
+    }
 
     // ---------------------------------
     // 6. Validate items & build docs
@@ -133,7 +133,9 @@ export const importOutstandingFromTally = async (req, res) => {
         if (!dataItem.Primary_user_id)
           throw new Error("Missing Primary_user_id");
         if (!mongoose.Types.ObjectId.isValid(dataItem.Primary_user_id))
-          throw new Error(`Invalid Primary_user_id: ${dataItem.Primary_user_id}`);
+          throw new Error(
+            `Invalid Primary_user_id: ${dataItem.Primary_user_id}`,
+          );
 
         if (!dataItem.cmp_id) throw new Error("Missing cmp_id");
         if (!mongoose.Types.ObjectId.isValid(dataItem.cmp_id))
@@ -146,7 +148,7 @@ export const importOutstandingFromTally = async (req, res) => {
         if (!dataItem.bill_due_date) throw new Error("Missing bill_due_date");
         if (!/^\d{4}-\d{2}-\d{2}$/.test(dataItem.bill_due_date))
           throw new Error(
-            `Invalid bill_due_date format: ${dataItem.bill_due_date}`
+            `Invalid bill_due_date format: ${dataItem.bill_due_date}`,
           );
 
         const {
@@ -176,7 +178,7 @@ export const importOutstandingFromTally = async (req, res) => {
 
         if (Number.isNaN(billPendingAmount)) {
           throw new Error(
-            `Invalid bill_pending_amt: ${dataItem.bill_pending_amt}`
+            `Invalid bill_pending_amt: ${dataItem.bill_pending_amt}`,
           );
         }
 
@@ -263,10 +265,13 @@ export const importOutstandingFromTally = async (req, res) => {
       successCount > 0
         ? 200
         : skippedItems.length === totalReceived
-        ? 400
-        : 207;
+          ? 400
+          : 207;
 
-    console.log("Outstanding Import Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Outstanding Import Response:", response.summary);
+    }
+
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in importOutstandingFromTally:", error);

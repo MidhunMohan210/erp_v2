@@ -49,11 +49,8 @@ export const saveAdditionalChargesFromTally = async (req, res) => {
     }
 
     // Extract required IDs and Tally user name from the first item
-    const {
-      Primary_user_id,
-      cmp_id,
-      tally_user_name,
-    } = additionalChargesToSave[0] || {};
+    const { Primary_user_id, cmp_id, tally_user_name } =
+      additionalChargesToSave[0] || {};
 
     if (!Primary_user_id || !cmp_id) {
       return res.status(400).json({
@@ -166,7 +163,7 @@ export const saveAdditionalChargesFromTally = async (req, res) => {
       } catch (itemError) {
         console.error(
           `Error preparing additional charge "${charge?.name}":`,
-          itemError
+          itemError,
         );
         skippedItems.push({
           item: itemIndex,
@@ -225,10 +222,12 @@ export const saveAdditionalChargesFromTally = async (req, res) => {
       successCount > 0
         ? 200
         : skippedItems.length === totalReceived
-        ? 400
-        : 207;
+          ? 400
+          : 207;
 
-    console.log("Additional Charges Response:", response.summary);
+    if (process.env.NODE_ENV !== "test") {
+      console.log("Additional Charges Response:", response.summary);
+    }
     return res.status(statusCode).json(response);
   } catch (error) {
     console.error("Error in saveAdditionalChargesFromTally:", error);

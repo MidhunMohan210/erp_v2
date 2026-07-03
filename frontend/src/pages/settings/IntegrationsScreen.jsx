@@ -116,7 +116,7 @@ export default function IntegrationsScreen() {
         </div>
 
       ) : (
-        <div className="mt-10">
+        <div className="mt-1">
           <Card className="ring-0">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-sm font-semibold text-slate-900">

@@ -236,11 +236,11 @@ export const addProducts = async (req, res) => {
     });
 
 
-    console.log("brandMap",brandMap);
-    console.log("categoryMap",categoryMap);
-    console.log("subcategoryMap",subcategoryMap);
-    console.log("priceLevelMap",priceLevelMap);
-    console.log("existingProductMap",existingProductMap);
+    // console.log("brandMap",brandMap);
+    // console.log("categoryMap",categoryMap);
+    // console.log("subcategoryMap",subcategoryMap);
+    // console.log("priceLevelMap",priceLevelMap);
+    // console.log("existingProductMap",existingProductMap);
  
     
 
