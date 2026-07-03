@@ -63,7 +63,22 @@ app.use((req, res, next) => {
 });
 
 app.use(cookieParser());
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        "connect-src": ["'self'", "https://api.cloudinary.com"],
+        "img-src": [
+          "'self'",
+          "data:",
+          "blob:",
+          "https://res.cloudinary.com",
+          "https://api.cloudinary.com",
+        ],
+      },
+    },
+  }),
+);
 app.use(hpp());
 app.use(express.json({ limit: "10mb" }));
 

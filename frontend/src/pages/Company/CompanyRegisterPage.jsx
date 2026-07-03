@@ -104,7 +104,6 @@ export default function CompanyRegisterPage() {
   const [loadingCompany, setLoadingCompany] = useState(false);
   const [logoFile, setLogoFile] = useState(null);
   const [logoPreview, setLogoPreview] = useState("");
-  const [logoUploading, setLogoUploading] = useState(false);
   const financialYearOptions = useMemo(
     () => getFinancialYearOptions(2010, 2040),
     [],
@@ -278,26 +277,6 @@ export default function CompanyRegisterPage() {
     reader.readAsDataURL(file);
   };
 
-  const handleLogoUpload = async () => {
-    if (!logoFile) {
-      toast.error("Please select a logo image first");
-      return;
-    }
-
-    try {
-      setLogoUploading(true);
-      const url = await uploadImageToCloudinary(logoFile);
-      setValue("logo", url, { shouldValidate: true });
-      setLogoPreview(url);
-      setLogoFile(null);
-      toast.success("Logo uploaded");
-    } catch (err) {
-      toast.error(err.message || "Logo upload failed");
-    } finally {
-      setLogoUploading(false);
-    }
-  };
-
   const handleRemoveLogo = () => {
     setLogoFile(null);
     setLogoPreview("");
@@ -306,6 +285,12 @@ export default function CompanyRegisterPage() {
 
   const onSubmit = async (values) => {
     try {
+      let logoUrl = values.logo?.trim() || "";
+
+      if (logoFile) {
+        logoUrl = await uploadImageToCloudinary(logoFile);
+      }
+
       const selectedFormat =
         FINANCIAL_YEAR_FORMATS.find(
           (item) => item.value === values.financialYear.format,
@@ -325,7 +310,7 @@ export default function CompanyRegisterPage() {
         gstNum: values.gstNum?.trim(),
         pan: values.pan?.trim(),
         website: values.website?.trim(),
-        logo: values.logo?.trim(),
+        logo: logoUrl,
         type: values.type,
         industry: values.industry.trim(),
         currency: values.currency.trim(),
@@ -346,6 +331,10 @@ export default function CompanyRegisterPage() {
         const res = await api.post("/company/register", payload);
         toast.success(res.data.message || "Company registered");
       }
+
+      setValue("logo", logoUrl, { shouldValidate: true });
+      setLogoFile(null);
+      setLogoPreview(logoUrl);
 
       await queryClient.invalidateQueries({ queryKey: companyQueryKeys.all });
       if (companyId) {
@@ -674,14 +663,9 @@ export default function CompanyRegisterPage() {
                       className="text-xs"
                     />
                     {logoFile && (
-                      <button
-                        type="button"
-                        onClick={handleLogoUpload}
-                        disabled={logoUploading}
-                        className="rounded bg-blue-600 px-3 py-1 text-xs text-white hover:bg-blue-700 disabled:bg-blue-300"
-                      >
-                        {logoUploading ? "Uploading..." : "Upload"}
-                      </button>
+                      <span className="text-xs text-slate-500">
+                        Logo will upload when you submit the form
+                      </span>
                     )}
                   </div>
                 </div>

@@ -35,8 +35,7 @@ function getOutstandingTone(classification) {
       }
     : {
         amountClass: "text-emerald-600",
-        badgeClass:
-          "border border-emerald-200 bg-emerald-50 text-emerald-700",
+        badgeClass: "border border-emerald-200 bg-emerald-50 text-emerald-700",
         dotClass: "bg-emerald-500",
       };
 }
@@ -44,22 +43,17 @@ function getOutstandingTone(classification) {
 function PartyRow({ party, rightContent, onClick, className = "" }) {
   return (
     <Card
-      className={`cursor-pointer rounded border-none py-1 ring-0 ${className}`}
+      className={`cursor-pointer rounded-none  py-0 ring-0 ${className}`}
       onClick={onClick}
     >
-      <CardContent className="flex items-center justify-between gap-3 p-3.5">
+      <CardContent className=" flex items-center justify-between gap-3 p-3.5">
         <div className="min-w-0 flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600">
-            <Users className="h-4 w-4" />
-          </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-900">
               {party?.partyName || "Untitled Party"}
             </p>
             <p className="truncate text-xs text-slate-500">
-              {party?.mobileNumber ||
-                party?.emailID ||
-                "No contact details"}
+              {party?.mobileNumber || party?.emailID || "No contact details"}
             </p>
           </div>
         </div>
@@ -116,13 +110,9 @@ export function PartyList({
   const queryClient = useQueryClient();
   const confirmDelete = useDeleteConfirm();
   const { setHeaderOptions, resetHeaderOptions } = useMobileHeader();
-  const cmp_id =
-    useSelector((state) => state.company.selectedCompanyId) || "";
+  const cmp_id = useSelector((state) => state.company.selectedCompanyId) || "";
 
-  const debouncedSearchText = useDebouncedValue(
-    searchText.trim(),
-    500,
-  );
+  const debouncedSearchText = useDebouncedValue(searchText.trim(), 500);
   const isCustomersRoute = location.pathname === ROUTES.mastersCustomers;
   const pageLabel = isCustomersRoute ? "Customers" : "Parties";
   const emptyLabel = isCustomersRoute ? "customers" : "parties";
@@ -160,8 +150,7 @@ export function PartyList({
           ? [
               {
                 label: isCustomersRoute ? "Add Customer" : "Add Party",
-                onSelect: () =>
-                  navigate(ROUTES.mastersPartyRegister),
+                onSelect: () => navigate(ROUTES.mastersPartyRegister),
               },
             ]
           : [],
@@ -169,9 +158,7 @@ export function PartyList({
         show: true,
         value: searchText,
         placeholder:
-          mode === "master"
-            ? `Search ${emptyLabel}`
-            : "Search parties",
+          mode === "master" ? `Search ${emptyLabel}` : "Search parties",
         onChange: setSearchText,
       },
     });
@@ -197,9 +184,9 @@ export function PartyList({
     toast.error(message);
   }, [emptyLabel, error, isError]);
 
-  const parties =
-    data?.pages?.flatMap((page) => page?.items || []) || [];
-  const shouldHideZeroOutstanding = mode === "outstanding" || hideZeroOutstanding;
+  const parties = data?.pages?.flatMap((page) => page?.items || []) || [];
+  const shouldHideZeroOutstanding =
+    mode === "outstanding" || hideZeroOutstanding;
   const visibleParties = shouldHideZeroOutstanding
     ? parties.filter((party) => {
         const netOutstanding = Number(
@@ -207,7 +194,10 @@ export function PartyList({
         );
         const displayOutstanding = Number(party?.totalOutstanding) || 0;
 
-        if (effectiveLedgerType === "receivable" || effectiveLedgerType === "payable") {
+        if (
+          effectiveLedgerType === "receivable" ||
+          effectiveLedgerType === "payable"
+        ) {
           return displayOutstanding > 0;
         }
 
@@ -239,9 +229,7 @@ export function PartyList({
 
   const handleDelete = async (party) => {
     const ok = await confirmDelete({
-      title: `Delete this ${
-        isCustomersRoute ? "customer" : "party"
-      }?`,
+      title: `Delete this ${isCustomersRoute ? "customer" : "party"}?`,
       description:
         "This record will be removed permanently. This action cannot be undone.",
       confirmLabel: "Delete",
@@ -250,9 +238,7 @@ export function PartyList({
 
     try {
       const res = await partyService.deleteParty(party._id);
-      toast.success(
-        res?.message || `${pageLabel.slice(0, -1)} deleted`,
-      );
+      toast.success(res?.message || `${pageLabel.slice(0, -1)} deleted`);
 
       queryClient.removeQueries({
         queryKey: partyQueryKeys.detail(party._id),
@@ -263,9 +249,7 @@ export function PartyList({
       });
     } catch (err) {
       const message =
-        err?.response?.data?.message ||
-        err?.message ||
-        "Delete failed";
+        err?.response?.data?.message || err?.message || "Delete failed";
       toast.error(message);
     }
   };
@@ -289,10 +273,7 @@ export function PartyList({
     return (
       <div className="w-full font-[sans-serif]">
         <div className="mx-auto w-full max-w-md">
-          <ErrorRetryState
-            message={message}
-            onRetry={() => refetch()}
-          />
+          <ErrorRetryState message={message} onRetry={() => refetch()} />
         </div>
       </div>
     );
@@ -322,7 +303,7 @@ export function PartyList({
   const renderRightOutstanding = (party) => (
     <div className="text-right">
       <div
-        className={`text-base font-semibold ${
+        className={`text-sm font-semibold ${
           getOutstandingTone(party.classification).amountClass
         }`}
       >
@@ -330,19 +311,8 @@ export function PartyList({
           ? party.totalOutstanding.toFixed(2)
           : "0.00"}
       </div>
-      <div className="mt-1 flex items-center justify-end gap-2">
-        <span
-          className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${
-            getOutstandingTone(party.classification).badgeClass
-          }`}
-        >
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${
-              getOutstandingTone(party.classification).dotClass
-            }`}
-          />
-          {party.classification || "dr"}
-        </span>
+      <div className=" flex items-center justify-end gap-2">
+        <span className="text-xs font-semibold text-gray-500">{party.classification?.toUpperCase() || "dr"}</span>
       </div>
     </div>
   );
@@ -352,9 +322,7 @@ export function PartyList({
       <div className="text-sm font-semibold text-emerald-600">
         {party.totalOutstanding?.toFixed(2) ?? "0.00"}
       </div>
-      <div className="text-[10px] text-slate-500">
-        Tap to select
-      </div>
+      <div className="text-[10px] text-slate-500">Tap to select</div>
     </div>
   );
 
@@ -413,40 +381,40 @@ export function PartyList({
       )}
 
       {!isLoading && visibleParties.length > 0 && (
-        <div className="space-y-2">
+        <div className="">
           {visibleParties.map((party) => (
             <PartyRow
               key={party._id}
               party={party}
               className={
                 mode === "outstanding"
-                  ? "rounded-2xl border border-slate-200/80 bg-white/95 shadow-[0_16px_40px_-24px_rgba(15,23,42,0.35)] transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_22px_50px_-26px_rgba(15,23,42,0.42)]"
+                  ? " border-b-2 border-slate-200/80 bg-white/95  transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg"
                   : "bg-slate-50 shadow-lg"
               }
               rightContent={
                 mode === "master"
                   ? renderRightMaster(party)
                   : mode === "outstanding"
-                  ? renderRightOutstanding(party)
-                  : renderRightSelect(party)
+                    ? renderRightOutstanding(party)
+                    : renderRightSelect(party)
               }
               onClick={
                 mode === "master"
                   ? undefined
                   : mode === "outstanding"
-                  ? () =>
-                      navigate(
-                        ROUTES.outstandingPartyDetail.replace(
-                          ":partyId",
-                          party._id,
-                        ),
-                        {
-                          state: {
-                            partyName: party?.partyName || "",
+                    ? () =>
+                        navigate(
+                          ROUTES.outstandingPartyDetail.replace(
+                            ":partyId",
+                            party._id,
+                          ),
+                          {
+                            state: {
+                              partyName: party?.partyName || "",
+                            },
                           },
-                        },
-                      )
-                  : () => onSelect && onSelect(party)
+                        )
+                    : () => onSelect && onSelect(party)
               }
             />
           ))}
@@ -460,16 +428,12 @@ export function PartyList({
   return (
     <div
       className={`w-full font-[sans-serif] ${
-        mode === "select"
-          ? "flex h-full min-h-0 flex-col"
-          : ""
+        mode === "select" ? "flex h-full min-h-0 flex-col" : ""
       }`}
     >
       <div
         className={`mx-auto w-full max-w-md ${
-          mode === "select"
-            ? "flex h-full min-h-0 flex-col"
-            : "space-y-3"
+          mode === "select" ? "flex h-full min-h-0 flex-col" : "space-y-3"
         }`}
       >
         {mode === "outstanding" && (
@@ -477,10 +441,10 @@ export function PartyList({
             <div className="absolute inset-x-0 top-0 h-px bg-white/20" />
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-blue-100/80">
+                {/* <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-blue-100/80">
                   Outstanding Snapshot
-                </p>
-                <p className="mt-1 text-lg font-semibold text-white">
+                </p> */}
+                <p className="text-lg font-semibold text-white">
                   {LEDGER_TYPE_LABELS[ledgerType]}
                 </p>
               </div>
@@ -488,9 +452,7 @@ export function PartyList({
                 <select
                   className="rounded-full border border-blue-100/20 bg-white/12 px-3 py-1.5 text-xs font-medium text-white outline-none backdrop-blur-sm transition focus:border-blue-100/50"
                   value={ledgerType}
-                  onChange={(e) =>
-                    setLedgerType(e.target.value)
-                  }
+                  onChange={(e) => setLedgerType(e.target.value)}
                 >
                   <option value="ledger">Ledger</option>
                   <option value="payable">Payables</option>
@@ -498,12 +460,10 @@ export function PartyList({
                 </select>
               </div>
             </div>
-            <div className="rounded border border-blue-100/15 bg-white/10 p-4 backdrop-blur-sm">
+            <div className="rounded border border-blue-100/15 bg-white/5 p-4 backdrop-blur-sm">
               <div className="flex items-end justify-between gap-3">
                 <div>
-                  <p className="text-xs text-blue-100/75">
-                    Visible parties total
-                  </p>
+                  <p className="text-xs text-blue-100/75">Total</p>
                   <div className="mt-1 text-3xl font-bold tracking-tight text-white">
                     {Math.abs(headerBalance).toFixed(2)}
                   </div>
@@ -539,9 +499,7 @@ export function PartyList({
               <input
                 type="text"
                 value={searchText}
-                onChange={(e) =>
-                  setSearchText(e.target.value)
-                }
+                onChange={(e) => setSearchText(e.target.value)}
                 placeholder="Search parties"
                 className="w-full rounded-lg border border-slate-200 bg-white py-2 pl-9 pr-10 text-xs text-slate-700 shadow-sm focus:border-violet-400 focus:outline-none focus:ring-1 focus:ring-violet-200"
               />
@@ -561,9 +519,7 @@ export function PartyList({
 
         {mode === "select" ? (
           <ScrollArea className="min-h-0 flex-1">
-            <div className="space-y-3 py-3">
-              {listContent}
-            </div>
+            <div className="space-y-3 py-3">{listContent}</div>
           </ScrollArea>
         ) : (
           listContent
