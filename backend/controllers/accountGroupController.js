@@ -2,6 +2,8 @@
 import AccountGroup from "../Model/AccountGroup.js";
 import { resolveAdminOwnerId } from "../utils/authScope.js";
 
+
+
 export const listAccountGroups = async (req, res) => {
   try {
     const owner = resolveAdminOwnerId(req);
