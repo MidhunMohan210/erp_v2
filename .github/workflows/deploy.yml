@@ -1,6 +1,5 @@
 name: Deploy Testing Branch
 
-
 on:
   push:
     branches:
@@ -18,18 +17,36 @@ jobs:
           username: root
           key: ${{ secrets.HOSTINGER_SSH_KEY }}
           script: |
-           set -e
+            set -e
+
+            echo "1. Going to project"
             cd /root/erp_v2
+
+            echo "2. Pulling latest code"
             git pull origin main
-            source ~/.nvm/nvm.sh
+
+            echo "3. Loading nvm"
+            export NVM_DIR="$HOME/.nvm"
+            . "$NVM_DIR/nvm.sh"
+
+            echo "4. Using node"
             nvm use 22.12.0
+            node -v
+            npm -v
+
+            echo "5. Frontend install"
             cd frontend
             npm install
+
+            echo "6. Frontend build"
             npm run build
+
+            echo "7. Backend install"
             cd ../backend
             npm install
-            npm test
-            pm2 restart erp_v2
 
-            
-            
+            echo "8. Backend test"
+            npm test
+
+            echo "9. Restart pm2"
+            pm2 restart erp_v2
