@@ -35,31 +35,48 @@ async function createTestSeries(companyId, voucherType = "saleOrder", primaryUse
   const seriesId = new mongoose.Types.ObjectId();
   const suffix = nextSequence();
 
-  await VoucherSeries.create({
-    primary_user_id: asObjectId(primaryUserId),
+  const seriesEntry = {
+    _id: seriesId,
+    seriesName: `Main Series ${suffix}`,
+    prefix: "SOR",
+    suffix: `2026-${suffix}`,
+    currentNumber: 1,
+    widthOfNumericalPart: 3,
+    isDefault: true,
+    currentlySelected: true,
+    lastUsedNumber: 1,
+  };
+
+  let voucherSeries = await VoucherSeries.findOne({
     cmp_id: asObjectId(companyId),
     voucherType,
-    series: [
-      {
-        _id: seriesId,
-        seriesName: `Main Series ${suffix}`,
-        prefix: "SOR",
-        suffix: `2026-${suffix}`,
-        currentNumber: 1,
-        widthOfNumericalPart: 3,
-        isDefault: true,
-        currentlySelected: true,
-        lastUsedNumber: 0,
-      },
-    ],
   });
+
+  if (!voucherSeries) {
+    voucherSeries = await VoucherSeries.create({
+      primary_user_id: asObjectId(primaryUserId),
+      cmp_id: asObjectId(companyId),
+      voucherType,
+      series: [seriesEntry],
+    });
+  } else {
+    voucherSeries.series.forEach((series) => {
+      series.currentlySelected = false;
+      series.isDefault = false;
+      if (!series.lastUsedNumber || series.lastUsedNumber < 1) {
+        series.lastUsedNumber = 1;
+      }
+    });
+
+    voucherSeries.series.push(seriesEntry);
+    await voucherSeries.save();
+  }
 
   return {
     _id: seriesId,
     seriesName: `Main Series ${suffix}`,
   };
 }
-
 function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
   const qty = 2;
   const rate = 100;
@@ -814,7 +831,7 @@ describe("8. Transaction atomicity", () => {
     expect(response.status).toBe(500);
     expect(saleOrderCount).toBe(0);
     expect(storedSeries.currentNumber).toBe(1);
-    expect(storedSeries.lastUsedNumber).toBe(0);
+    expect(storedSeries.lastUsedNumber).toBe(1);
     expect(companyCounter).toBeNull();
     expect(userCounter).toBeNull();
   });
