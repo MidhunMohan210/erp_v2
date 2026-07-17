@@ -30,8 +30,8 @@ const postTallySubcategories = ({
 }) => {
   return request(app)
     .post("/api/tally/subcategories")
-    .set("cmp_id", String(cmpId))
-    .set("tally_api_key", tallyApiKey)
+    .set("cmp-id", String(cmpId))
+    .set("tally-api-key", tallyApiKey)
     .send({ data });
 };
 
