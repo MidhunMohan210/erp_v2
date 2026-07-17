@@ -64,6 +64,15 @@ const inputClass =
 const labelClass = "mb-1 block text-xs font-medium text-slate-600";
 const errorClass = "mt-1 text-xs text-rose-500";
 
+function FieldLabel({ children, required = false }) {
+  return (
+    <label className={labelClass}>
+      {children}
+      {required ? <span className="ml-1 text-rose-500">*</span> : null}
+    </label>
+  );
+}
+
 function getFinancialYearOptions(start = 2010, end = 2040) {
   const years = [];
   for (let year = start; year <= end; year += 1) {
@@ -376,7 +385,7 @@ export default function CompanyRegisterPage() {
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div>
-                  <label className={labelClass}>Company Name</label>
+                  <FieldLabel required>Company Name</FieldLabel>
                   <input
                     type="text"
                     className={inputClass}
@@ -388,9 +397,9 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>
-                    Financial Year Starting (Year) *
-                  </label>
+                  <FieldLabel required>
+                    Financial Year Starting (Year)
+                  </FieldLabel>
                   <select
                     className={inputClass}
                     {...register("financialYear.startingYear")}
@@ -410,7 +419,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Industry</label>
+                  <FieldLabel required>Industry</FieldLabel>
                   <select className={inputClass} {...register("industry")}>
                     <option value="">Select industry</option>
                     {INDUSTRIES.map((industry) => (
@@ -426,7 +435,7 @@ export default function CompanyRegisterPage() {
               </div>
 
               <div>
-                <label className={labelClass}>Financial Year Format *</label>
+                <FieldLabel required>Financial Year Format</FieldLabel>
                 <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                   {FINANCIAL_YEAR_FORMATS.map((format) => {
                     const isSelected =
@@ -492,7 +501,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Place / City</label>
+                  <FieldLabel required>Place / City</FieldLabel>
                   <input
                     type="text"
                     className={inputClass}
@@ -513,7 +522,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>PIN / ZIP</label>
+                  <FieldLabel required>PIN / ZIP</FieldLabel>
                   <input
                     type="text"
                     className={inputClass}
@@ -525,7 +534,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Country</label>
+                  <FieldLabel required>Country</FieldLabel>
                   <select className={inputClass} {...register("country")}>
                     <option value="">Select country</option>
                     {countries.map((country) => (
@@ -543,7 +552,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>State</label>
+                  <FieldLabel required>State</FieldLabel>
                   {isIndia ? (
                     <select className={inputClass} {...register("state")}>
                       <option value="">Select state</option>
@@ -569,7 +578,7 @@ export default function CompanyRegisterPage() {
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div>
-                  <label className={labelClass}>Email</label>
+                  <FieldLabel required>Email</FieldLabel>
                   <input
                     type="email"
                     className={inputClass}
@@ -581,7 +590,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Mobile</label>
+                  <FieldLabel required>Mobile</FieldLabel>
                   <input
                     type="text"
                     className={inputClass}
@@ -673,7 +682,7 @@ export default function CompanyRegisterPage() {
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div>
-                  <label className={labelClass}>Currency</label>
+                  <FieldLabel required>Currency</FieldLabel>
                   <input
                     type="text"
                     className={`${inputClass} bg-slate-50`}
@@ -686,7 +695,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Currency Name</label>
+                  <FieldLabel required>Currency Name</FieldLabel>
                   <input
                     type="text"
                     className={`${inputClass} bg-slate-50`}
@@ -699,7 +708,7 @@ export default function CompanyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Currency Symbol</label>
+                  <FieldLabel required>Currency Symbol</FieldLabel>
                   <input
                     type="text"
                     className={`${inputClass} bg-slate-50`}
