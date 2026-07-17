@@ -48,7 +48,10 @@ export async function validateTallyApiKey(req, res, next) {
     const cmpId = extractCmpId(req);
     const tallyApiKey = extractTallyApiKey(req);
 
-    // console.log(cmpId, tallyApiKey);
+
+
+    console.log("req.headers:", req.headers);
+    console.log("cmpId, tallyApiKey:", cmpId, tallyApiKey);
     
 
     if (!cmpId || !tallyApiKey) {
