@@ -51,7 +51,7 @@ export const addGodowns = async (req, res) => {
     }).lean();
 
     // 2) Check if the incoming batch has at least one default=true
-    const hasDefaultInBatch = data.some((item) => item.defaultGodown === true);
+    const hasDefaultInBatch = data.some((item) => item.defaultGodown === "true");
 
     // Case A: DB has NO default, and batch also has NO default → reject
     if (!existingDefaultGodown && !hasDefaultInBatch) {
