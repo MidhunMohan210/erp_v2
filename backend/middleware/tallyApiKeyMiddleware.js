@@ -14,11 +14,11 @@ function getHeaderValue(req, keys = []) {
 }
 
 function extractCmpId(req) {
-  return getHeaderValue(req, ["cmp_id", "x-cmp-id"]);
+  return getHeaderValue(req, ["cmp-id", "x-cmp-id"]);
 }
 
 function extractTallyApiKey(req) {
-  return getHeaderValue(req, ["tally_api_key", "x-tally-api-key"]);
+  return getHeaderValue(req, ["tally-api-key", "x-tally-api-key"]);
 }
 
 function isCmpIdMismatch(req, headerCmpId) {
