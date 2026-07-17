@@ -55,7 +55,7 @@ const createGodown = async ({
   Primary_user_id,
   godown = "Existing Godown",
   godown_id = "GDN-EXISTING-001",
-  defaultGodown = false,
+  defaultGodown = "false",
   ...overrides
 } = {}) => {
   return Godown.create({
@@ -152,7 +152,7 @@ describe("POST /api/tally/godowns", () => {
           cmp_id: context.company._id.toString(),
           godown_id: "GDN-TALLY-001",
           godown: "Main Godown",
-          defaultGodown: true,
+          defaultGodown: "true",
           tally_user_name: "Bridge User",
         }),
       ],
@@ -202,7 +202,7 @@ describe("POST /api/tally/godowns", () => {
           cmp_id: context.company._id.toString(),
           godown_id: "GDN-TALLY-UPDATE-001",
           godown: "Old Name",
-          defaultGodown: true,
+          defaultGodown: "true",
           tally_user_name: "First Sync User",
         }),
       ],
@@ -224,7 +224,7 @@ describe("POST /api/tally/godowns", () => {
           cmp_id: context.company._id.toString(),
           godown_id: "GDN-TALLY-UPDATE-001",
           godown: "Updated Name",
-          defaultGodown: false,
+          defaultGodown: "false",
           tally_user_name: "Second Sync User",
         }),
       ],
@@ -269,7 +269,7 @@ describe("POST /api/tally/godowns", () => {
       cmp_id: context.company._id.toString(),
       godown_id: "GDN-TALLY-DUP-001",
       godown: "Duplicate Godown",
-      defaultGodown: true,
+      defaultGodown: "true",
     });
 
     const res = await postTallyGodowns({
@@ -361,7 +361,7 @@ describe("POST /api/tally/godowns", () => {
       Primary_user_id: context.user._id,
       godown_id: "GDN-DEFAULT-EXISTING-001",
       godown: "Existing Default Godown",
-      defaultGodown: true,
+      defaultGodown: "true",
     });
 
     const res = await postTallyGodowns({
@@ -372,7 +372,7 @@ describe("POST /api/tally/godowns", () => {
           cmp_id: context.company._id.toString(),
           godown_id: "GDN-NEW-NON-DEFAULT-001",
           godown: "Requested Default Godown",
-          defaultGodown: true,
+          defaultGodown: "true",
           tally_user_name: "Bridge User",
         }),
       ],
@@ -422,7 +422,7 @@ describe("POST /api/tally/godowns", () => {
           cmp_id: context.company._id.toString(),
           godown_id: "GDN-TALLY-MISSING-001",
           godown: undefined,
-          defaultGodown: true,
+          defaultGodown: "true",
         }),
       ],
     });
