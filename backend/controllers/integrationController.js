@@ -73,6 +73,8 @@ export const sendTallyIntegrationKeyEmail = async (req, res) => {
 
     const recipientName = capitalizeFirstLetter(adminUser.userName) || "Admin";
     const companyName = company.name || "your company";
+    const tallyCompanyId = String(company._id);
+    const primaryUserId = String(company.owner);
 
     const transporter = createMailerTransport();
     await transporter.sendMail({
@@ -86,7 +88,10 @@ export const sendTallyIntegrationKeyEmail = async (req, res) => {
         "",
         `Please find below the Tally API key for ${companyName || "your company"}:`,
         "",
-        company.tally_api_key,
+        `Primary User ID: ${primaryUserId}`,
+        `Company ID: ${tallyCompanyId}`,
+        `Tally API Key: ${company.tally_api_key}`,
+        "Base URL: https://erpv2.camet.in/api/tally/",
         "",
         "Kindly keep this API key secure and do not share it with unauthorized users.",
         "",
@@ -99,7 +104,12 @@ export const sendTallyIntegrationKeyEmail = async (req, res) => {
         <p>Dear ${recipientName},</p>
         <p>Greetings from Camet IT Solutions LLP.</p>
         <p>Please find below the Tally API key for <strong>${companyName || "your company"}</strong>:</p>
-        <p style="font-family: monospace; font-size: 16px;"><strong>${company.tally_api_key}</strong></p>
+        <div style="font-family: monospace; font-size: 16px;">
+          <p><strong>Primary User ID:</strong> ${primaryUserId}</p>
+          <p><strong>Company ID:</strong> ${tallyCompanyId}</p>
+          <p><strong>Tally API Key:</strong> ${company.tally_api_key}</p>
+          <p><strong>Base URL:</strong> <a href="https://erpv2.camet.in/api/tally/">https://erpv2.camet.in/api/tally/</a></p>
+        </div>
         <p>Kindly keep this API key secure and do not share it with unauthorized users.</p>
         <p>If you need any assistance, please contact Camet IT Solutions LLP.</p>
         <p>Best regards,<br />Camet IT Solutions LLP</p>
