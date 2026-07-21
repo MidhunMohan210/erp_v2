@@ -113,6 +113,7 @@ export default function PartyRegisterPage() {
   } = usePartyByIdQuery(partyId, isEdit);
 
   const isIndia = selectedCountry === "India";
+  const isReadOnly = isEdit && Boolean(party) && party.source !== "web";
 
   useEffect(() => {
     if (!isAccountGroupsError) return;
@@ -178,6 +179,8 @@ export default function PartyRegisterPage() {
   }, [accountGroups, watchedAccountGroup]);
 
   const onSubmit = async (values) => {
+    if (isReadOnly) return;
+
     if (!cmp_id) {
       toast.error("Select a company first");
       return;
@@ -262,9 +265,18 @@ export default function PartyRegisterPage() {
               })}
               className="space-y-5"
             >
+              {isReadOnly && (
+                <div className="rounded-sm border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  Parties not created from the web cannot be edited.
+                </div>
+              )}
+
+              <fieldset disabled={isReadOnly} className="space-y-5">
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                 <div>
-                  <label className={labelClass}>Party Name</label>
+                  <label className={labelClass}>
+                    Party Name <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     type="text"
                     className={inputClass}
@@ -286,7 +298,9 @@ export default function PartyRegisterPage() {
                 </div>
 
                 <div>
-                  <label className={labelClass}>Mobile Number</label>
+                  <label className={labelClass}>
+                    Mobile Number <span className="text-rose-500">*</span>
+                  </label>
                   <input
                     type="text"
                     className={inputClass}
@@ -301,9 +315,13 @@ export default function PartyRegisterPage() {
 
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <div>
-                  <label className={labelClass}>Account Group</label>
+                  <label className={labelClass}>
+                    Account Group <span className="text-rose-500">*</span>
+                  </label>
                   <select className={inputClass} {...register("accountGroup")}>
-                    <option value="">Select account group</option>
+                    <option value="" disabled>
+                      Select account group
+                    </option>
                     {accountGroups.map((group) => (
                       <option key={group._id} value={group._id}>
                         {group.accountGroup}
@@ -430,7 +448,9 @@ export default function PartyRegisterPage() {
                 <div>
                   <label className={labelClass}>Country</label>
                   <select className={inputClass} {...register("country")}>
-                    <option value="">Select country</option>
+                    <option value="" disabled>
+                      Select country
+                    </option>
                     {countries.map((country) => (
                       <option
                         key={country.countryName}
@@ -463,6 +483,7 @@ export default function PartyRegisterPage() {
                   )}
                 </div>
               </div>
+              </fieldset>
 
               <div className="flex justify-end gap-3 border-t border-slate-100 pt-4">
                 <button
@@ -476,7 +497,7 @@ export default function PartyRegisterPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isReadOnly}
                   className="rounded-sm bg-slate-900 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
                 >
                   {isSubmitting

@@ -65,7 +65,7 @@ export const Login = async (req, res) => {
     if (!identifier || !password) {
       return res
         .status(400)
-        .json({ message: "Email and password are required" });
+        .json({ message: "Email or mobile number and password are required" });
     }
 
     // 🔹 find by email OR mobileNumber

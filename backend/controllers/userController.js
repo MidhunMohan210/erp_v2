@@ -11,7 +11,7 @@ export const createStaffUser = async (req, res) => {
     const ownerId = req.user.id;
     const { userName, email, mobileNumber, password, companyId } = req.body;
 
-    if (!userName || !email || !mobileNumber || !password) {
+    if (!userName || !mobileNumber || !password) {
       return res
         .status(400)
         .json({ message: "All required fields must be provided" });
@@ -21,9 +21,12 @@ export const createStaffUser = async (req, res) => {
       return res.status(403).json({ message: "Only admin can create users" });
     }
 
-    const existing = await User.findOne({
-      $or: [{ email }, { mobileNumber }],
-    });
+    const normalizedEmail = email?.trim() || undefined;
+    const normalizedMobileNumber = mobileNumber.trim();
+    const duplicateFields = [{ mobileNumber: normalizedMobileNumber }];
+    if (normalizedEmail) duplicateFields.push({ email: normalizedEmail });
+
+    const existing = await User.findOne({ $or: duplicateFields });
 
     if (existing) {
       return res
@@ -33,8 +36,8 @@ export const createStaffUser = async (req, res) => {
 
     const newUser = await User.create({
       userName: userName.trim(),
-      email: email.trim(),
-      mobileNumber: mobileNumber.trim(),
+      ...(normalizedEmail && { email: normalizedEmail }),
+      mobileNumber: normalizedMobileNumber,
       password,
       role: "staff",        // always staff
       owner: ownerId,       // primary admin is owner
@@ -117,7 +120,10 @@ export const updateStaffUser = async (req, res) => {
     }
 
     if (userName) user.userName = userName.trim();
-    if (email) user.email = email.trim();
+    if (email !== undefined) {
+      const normalizedEmail = email.trim();
+      user.email = normalizedEmail || undefined;
+    }
     if (mobileNumber) user.mobileNumber = mobileNumber.trim();
 
     // Only update password when a new one is provided;

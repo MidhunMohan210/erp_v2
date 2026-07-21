@@ -43,11 +43,14 @@ function getOutstandingTone(classification) {
 function PartyRow({ party, rightContent, onClick, className = "" }) {
   return (
     <Card
-      className={`cursor-pointer rounded-none  py-0 ring-0 ${className}`}
+      className={`cursor-pointer rounded-none  py-0 ring-0 border-b   ${className}`}
       onClick={onClick}
     >
       <CardContent className=" flex items-center justify-between gap-3 p-3.5">
         <div className="min-w-0 flex items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl  text-yellow-600">
+            <Users className="h-4 w-4" />
+          </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-900">
               {party?.partyName || "Untitled Party"}
@@ -224,10 +227,13 @@ export function PartyList({
   }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   const handleEdit = (party) => {
+    if (party?.source !== "web") return;
     navigate(`${ROUTES.mastersPartyRegister}?partyId=${party._id}`);
   };
 
   const handleDelete = async (party) => {
+    if (party?.source !== "web") return;
+
     const ok = await confirmDelete({
       title: `Delete this ${isCustomersRoute ? "customer" : "party"}?`,
       description:
@@ -279,26 +285,34 @@ export function PartyList({
     );
   }
 
-  const renderRightMaster = (party) => (
-    <>
-      <button
-        type="button"
-        onClick={() => handleEdit(party)}
-        className="rounded-md p-2 text-slate-600 transition-colors hover:bg-slate-100"
-        title="Edit"
-      >
-        <Pencil className="h-4 w-4" />
-      </button>
-      <button
-        type="button"
-        onClick={() => handleDelete(party)}
-        className="rounded-md p-2 text-rose-600 transition-colors hover:bg-rose-50"
-        title="Delete"
-      >
-        <Trash2 className="h-4 w-4" />
-      </button>
-    </>
-  );
+  const renderRightMaster = (party) => {
+    const isWebParty = party?.source === "web";
+
+    return (
+      <>
+        <button
+          type="button"
+          onClick={() => handleEdit(party)}
+          disabled={!isWebParty}
+          className="rounded-md p-2 text-slate-600 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+          title={isWebParty ? "Edit" : "Only web-created parties can be edited"}
+        >
+          <Pencil className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => handleDelete(party)}
+          disabled={!isWebParty}
+          className="rounded-md p-2 text-rose-600 transition-colors hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-transparent"
+          title={
+            isWebParty ? "Delete" : "Only web-created parties can be deleted"
+          }
+        >
+          <Trash2 className="h-4 w-4" />
+        </button>
+      </>
+    );
+  };
 
   const renderRightOutstanding = (party) => (
     <div className="text-right">
@@ -312,7 +326,9 @@ export function PartyList({
           : "0.00"}
       </div>
       <div className=" flex items-center justify-end gap-2">
-        <span className="text-xs font-semibold text-gray-500">{party.classification?.toUpperCase() || "dr"}</span>
+        <span className="text-xs font-semibold text-gray-500">
+          {party.classification?.toUpperCase() || "dr"}
+        </span>
       </div>
     </div>
   );
@@ -389,7 +405,7 @@ export function PartyList({
               className={
                 mode === "outstanding"
                   ? " border-b-2 border-slate-200/80 bg-white/95  transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg"
-                  : "bg-slate-50 shadow-lg"
+                  : "shadow-lg"
               }
               rightContent={
                 mode === "master"

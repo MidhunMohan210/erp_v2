@@ -54,6 +54,7 @@ describe("POST /api/party", () => {
     expect(res.body.party.party_master_id).toBeTruthy();
     expect(partyInDb.partyName).toBe("Metro Distributors");
     expect(partyInDb.party_master_id).toBeDefined();
+    expect(partyInDb.source).toBe("web");
     expect(partyInDb.party_master_id).not.toBe("");
     expect(String(partyInDb.cmp_id)).toBe(String(context.company._id));
     expect(String(partyInDb.accountGroup)).toBe(String(accountGroup._id));
