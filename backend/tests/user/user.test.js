@@ -76,6 +76,36 @@ describe("User staff routes", () => {
     expect(userInDb.password).not.toBe("Password123");
   });
 
+  it("creates a staff user without an email and allows mobile login", async () => {
+    const admin = await loginAndGetAuthContext({
+      userOverrides: {
+        userName: "Email Optional Admin",
+        mobileNumber: "9000010090",
+        email: "email-optional-admin@example.com",
+      },
+    });
+
+    const createRes = await request(app)
+      .post("/api/users/staff")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        userName: "Mobile Only Staff",
+        mobileNumber: "9888800090",
+        password: "Password123",
+      });
+
+    const loginRes = await request(app).post("/api/auth/Login").send({
+      identifier: "9888800090",
+      password: "Password123",
+    });
+
+    expect(createRes.status).toBe(201);
+    expect(createRes.body.user.userName).toBe("Mobile Only Staff");
+    expect(createRes.body.user).not.toHaveProperty("email");
+    expect(loginRes.status).toBe(200);
+    expect(loginRes.body.user.mobileNumber).toBe("9888800090");
+  });
+
   it("returns 400 when required fields are missing while creating staff user", async () => {
     const admin = await loginAndGetAuthContext({
       userOverrides: {

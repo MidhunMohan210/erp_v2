@@ -26,13 +26,20 @@ const passwordSchema = z
     "Password must contain upper, lower, number and special char",
   );
 
-const schema = z.object({
+const baseSchema = z.object({
   userName: z.string().min(1, "Name is required"),
-  email: z.string().email("Invalid email"),
+  email: z.union([z.literal(""), z.string().email("Invalid email")]),
   mobileNumber: z
     .string()
     .min(7, "Mobile is required")
     .regex(/^\d+$/, "Mobile must be digits"),
+});
+
+const createSchema = baseSchema.extend({
+  password: passwordSchema,
+});
+
+const editSchema = baseSchema.extend({
   password: z.union([z.literal(""), passwordSchema]).optional(),
 });
 
@@ -63,7 +70,7 @@ export default function UserCreatePage() {
     formState: { errors, isSubmitting },
     reset,
   } = useForm({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(isEdit ? editSchema : createSchema),
     defaultValues: {
       userName: "",
       email: "",
@@ -107,10 +114,6 @@ export default function UserCreatePage() {
         typeof values.password === "string" && values.password.trim().length > 0;
 
       if (!isEdit) {
-        if (!hasNewPassword) {
-          toast.error("Password is required for new user");
-          return;
-        }
         payload.password = values.password.trim();
       } else if (hasNewPassword) {
         payload.password = values.password.trim();
@@ -164,9 +167,7 @@ export default function UserCreatePage() {
             <p className="text-sm text-slate-500">Loading user...</p>
           ) : (
             <form
-              onSubmit={handleSubmit(onSubmit, () => {
-                toast.error("Please fix the highlighted fields");
-              })}
+              onSubmit={handleSubmit(onSubmit)}
               className="space-y-5"
             >
               <div className="grid grid-cols-1 gap-4 md:grid-cols-3">

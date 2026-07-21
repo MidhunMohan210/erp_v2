@@ -51,7 +51,7 @@ describe("POST /api/auth/Login", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe("Email and password are required");
+    expect(res.body.message).toBe("Email or mobile number and password are required");
   });
 
   it("returns 400 when password is missing", async () => {
@@ -62,7 +62,7 @@ describe("POST /api/auth/Login", () => {
       });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe("Email and password are required");
+    expect(res.body.message).toBe("Email or mobile number and password are required");
   });
 
   it("returns 403 when user does not exist", async () => {
