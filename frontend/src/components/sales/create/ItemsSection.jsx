@@ -163,7 +163,7 @@ export default function ItemsSection({ returnTo = ROUTES.createOrder }) {
       <Sheet open={itemsSheetOpen} onOpenChange={setItemsSheetOpen}>
         <SheetContent
           side="bottom"
-          className="max-h-[85vh] overflow-y-auto rounded-t-3xl"
+          className="w-full max-w-full overflow-x-hidden max-h-[85vh] overflow-y-auto rounded-t-3xl"
         >
           <SheetHeader>
             <SheetTitle>All Items</SheetTitle>
@@ -176,10 +176,10 @@ export default function ItemsSection({ returnTo = ROUTES.createOrder }) {
             {items.map((item) => (
               <div
                 key={item.id}
-                className="rounded-xl border border-slate-200 bg-slate-50 p-3.5"
+                className="w-full max-w-full overflow-hidden rounded-xl border border-slate-200 bg-slate-50 p-3.5"
               >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-semibold text-slate-900">
                       {item.name}
                     </p>
@@ -193,11 +193,11 @@ export default function ItemsSection({ returnTo = ROUTES.createOrder }) {
                     </p>
                   </div>
 
-                  <div className="shrink-0 text-right">
+                  <div className="w-full min-w-0 text-right sm:w-auto sm:shrink-0">
                     <p className="text-sm font-semibold text-slate-900">
                       {formatCurrency(item.totalAmount)}
                     </p>
-                    <div className="mt-1 flex items-center justify-end gap-1.5">
+                    <div className="mt-1 flex max-w-full flex-wrap items-center justify-end gap-1.5">
                       <button
                         type="button"
                         onClick={() => {
