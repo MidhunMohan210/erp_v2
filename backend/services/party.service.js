@@ -24,6 +24,7 @@ const PARTY_LIST_PROJECTION = {
   ac_no: 1,
   ifsc: 1,
   openingBalanceAmount: 1,
+  source: 1,
 };
 
 function createHttpError(message, statusCode = 500) {

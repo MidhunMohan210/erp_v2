@@ -109,6 +109,7 @@ const partySchema = new mongoose.Schema(
     // ---- Audit meta ----
     source: {
       type: String,
+      required: true,
       enum: ["tally", "web"],
       default: "tally",
     },
