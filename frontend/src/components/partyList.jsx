@@ -43,11 +43,14 @@ function getOutstandingTone(classification) {
 function PartyRow({ party, rightContent, onClick, className = "" }) {
   return (
     <Card
-      className={`cursor-pointer rounded-none  py-0 ring-0 border-b bg-slate-50  ${className}`}
+      className={`cursor-pointer rounded-none  py-0 ring-0 border-b   ${className}`}
       onClick={onClick}
     >
       <CardContent className=" flex items-center justify-between gap-3 p-3.5">
         <div className="min-w-0 flex items-center gap-3">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl  text-yellow-600">
+            <Users className="h-4 w-4" />
+          </div>
           <div className="min-w-0">
             <p className="truncate text-sm font-bold text-slate-900">
               {party?.partyName || "Untitled Party"}

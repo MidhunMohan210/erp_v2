@@ -5,26 +5,26 @@ import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 
 export default defineConfig(({ mode }) => {
-  const frontendRoot = path.resolve(__dirname);
-  const env = loadEnv(mode, frontendRoot, "");
-  const apiTarget = env.VITE_API_URL || "http://localhost:4000";
+  const env = loadEnv(mode, __dirname, "");
 
   return {
-    envDir: frontendRoot,
-    plugins: [
-      react(),
-      tailwindcss(),
-    ],
+    envDir: __dirname,
+
+    plugins: [react(), tailwindcss()],
+
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./src"),
       },
     },
+
     server: {
-      host: true,
+      host: "0.0.0.0",
+      port: 5173,
+
       proxy: {
         "/api": {
-          target: apiTarget,
+          target: env.VITE_API_URL || "http://localhost:4000",
           changeOrigin: true,
           secure: false,
         },

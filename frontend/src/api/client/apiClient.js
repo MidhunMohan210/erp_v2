@@ -9,7 +9,7 @@ import {
 
 const baseURL =
   import.meta.env.DEV
-    ? "http://localhost:4000/api" // uses Vite proxy in development
+    ? "/api" // uses Vite proxy in development
     : `${import.meta.env.VITE_API_URL}/api`; // direct API in production
 
 const api = axios.create({
