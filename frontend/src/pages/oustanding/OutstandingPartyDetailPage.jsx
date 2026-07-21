@@ -122,58 +122,55 @@ export default function OutstandingPartyDetailPage() {
     total < 0
       ? {
           label: "cr",
-          amountClassName: "text-rose-50",
+          dotClassName: "bg-rose-300",
           badgeClassName:
-            "border border-rose-400/60 bg-rose-500/90 text-rose-50",
+            "bg-rose-400/15 text-rose-100 ring-1 ring-rose-200/20",
         }
       : {
           label: "dr",
-          amountClassName: "text-emerald-50",
+          dotClassName: "bg-emerald-300",
           badgeClassName:
-            "border border-emerald-400/60 bg-emerald-500/90 text-emerald-50",
+            "bg-emerald-400/15 text-emerald-100 ring-1 ring-emerald-200/20",
         };
 
   return (
     <div className="w-full font-[sans-serif]">
       <div className="mx-auto w-full max-w-md space-y-3">
-        {/* Top header strip: dark blue bg with back, party, total, filter */}
-        <section className="rounded-sm bg-[#014f86] px-4 py-9 pt-3 text-slate-50 shadow-sm mt-4 ">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <LedgerFilter
-              value={ledgerType}
-              onChange={setLedgerType}
-              className="shrink-0"
-            />
-          </div>
+        <section className="mt-3 overflow-hidden rounded-lg border border-slate-200 bg-[#3e5c76] shadow-sm">
+          <div className="px-4 py-4 text-white">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.16em] text-white/90">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/10">
+                    <Building2 className="h-3.5 w-3.5 text-slate-100" />
+                  </span>
+                  <span className="truncate">{partyName || "Party"}</span>
+                </p>
+                <p className="mt-3 text-[11px] font-medium text-slate-200">
+                  Total Outstanding
+                </p>
+                <p className="mt-1 text-3xl font-bold tracking-tight text-white">
+                  {Math.abs(total).toLocaleString("en-IN", {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}
+                </p>
+                <p className="mt-1 text-xs text-slate-200">
+                  {filteredBills.length} outstanding bill{filteredBills.length === 1 ? "" : "s"}
+                </p>
+              </div>
 
-          <div className="flex items-end justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">
-                {partyName || "Party"}
-              </p>
-              <p className="mt-1 flex items-center gap-2 truncate text-base font-semibold text-slate-50">
-                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-slate-800/80">
-                  <Building2 className="h-3.5 w-3.5 text-slate-200" />
-                </span>
-                <span className="truncate">{partyName || "Party"}</span>
-              </p>
-            </div>
-
-            <div className="text-right">
-              <p className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">
-                Total Outstanding
-              </p>
-              <p
-                className={`mt-1 text-3xl font-bold leading-tight ${totalTone.amountClassName}`}
-              >
-                {Math.abs(total).toFixed(2)}
-              </p>
               <span
-                className={`mt-1 inline-flex rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${totalTone.badgeClassName}`}
+                className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${totalTone.badgeClassName}`}
               >
+                <span className={`h-1.5 w-1.5 rounded-full ${totalTone.dotClassName}`} />
                 {totalTone.label}
               </span>
             </div>
+          </div>
+
+          <div className="border-t border-white/10 bg-slate-50 p-2">
+            <LedgerFilter value={ledgerType} onChange={setLedgerType} />
           </div>
         </section>
 

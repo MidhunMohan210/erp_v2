@@ -1,16 +1,30 @@
 // src/components/outstanding/LedgerFilter.jsx
 export function LedgerFilter({ value, onChange, className = "" }) {
+  const options = [
+    { value: "ledger", label: "Ledger" },
+    { value: "payable", label: "Payables" },
+    { value: "receivable", label: "Receivables" },
+  ];
+
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
-      <select
-        className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 outline-none transition focus:border-violet-300"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      >
-        <option value="ledger">Ledger</option>
-        <option value="payable">Payables</option>
-        <option value="receivable">Receivables</option>
-      </select>
+    <div
+      className={`grid w-full grid-cols-3 gap-1 rounded-lg bg-slate-200/70 p-1 ${className}`}
+    >
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          onClick={() => onChange(option.value)}
+          aria-pressed={value === option.value}
+          className={`min-w-0 rounded-md px-2 py-2 text-[11px] font-semibold transition ${
+            value === option.value
+              ? "bg-white text-slate-800 shadow-sm ring-1 ring-slate-200"
+              : "text-slate-500 hover:bg-white/60 hover:text-slate-700"
+          }`}
+        >
+          <span className="block truncate">{option.label}</span>
+        </button>
+      ))}
     </div>
   );
 }
