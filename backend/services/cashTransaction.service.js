@@ -93,15 +93,16 @@ async function updatePartyMonthlyBalance({
       upsert: true,
       session,
       runValidators: true,
-    }
+    },
   );
 
-  const net_amount = (Number(doc?.total_debit) || 0) - (Number(doc?.total_credit) || 0);
+  const net_amount =
+    (Number(doc?.total_debit) || 0) - (Number(doc?.total_credit) || 0);
 
   await PartyMonthlyBalance.updateOne(
     { _id: doc._id },
     { $set: { net_amount } },
-    { session }
+    { session },
   );
 }
 
@@ -124,7 +125,10 @@ async function createAdvanceReceiptOutstanding({
   const party = await Party.findById(party_id).session(session).lean();
 
   if (!party) {
-    throw createHttpError("Party not found for advance receipt outstanding", 404);
+    throw createHttpError(
+      "Party not found for advance receipt outstanding",
+      404,
+    );
   }
 
   await Outstanding.create(
@@ -150,7 +154,7 @@ async function createAdvanceReceiptOutstanding({
         source: "advance_receipt",
       },
     ],
-    { session }
+    { session },
   );
 }
 
@@ -172,7 +176,7 @@ async function cancelAdvanceReceiptOutstanding({
         bill_pending_amt: 0,
       },
     },
-    { session }
+    { session },
   );
 }
 
@@ -206,13 +210,16 @@ export async function createCashTransaction(data = {}, req) {
       ]);
 
       if (!party) {
-        throw createHttpError("Selected party does not belong to this company", 400);
+        throw createHttpError(
+          "Selected party does not belong to this company",
+          400,
+        );
       }
 
       if (!cashBank) {
         throw createHttpError(
           "Selected cash/bank ledger does not belong to this company",
-          400
+          400,
         );
       }
 
@@ -227,17 +234,20 @@ export async function createCashTransaction(data = {}, req) {
       const date = new Date(data.date);
       const settlement_details = normalizeSettlementDetails(
         data.settlement_details || [],
-        date
+        date,
       );
       const { party_ledger_side, cash_bank_ledger_side } = resolveLedgerSides(
-        data.voucher_type
+        data.voucher_type,
       );
       const settled_amount = settlement_details.reduce(
         (total, item) => total + (Number(item?.settled_amount) || 0),
-        0
+        0,
       );
       // Remaining amount after bill settlements is tracked as advance.
-      const advance_amount = Math.max((Number(data.amount) || 0) - settled_amount, 0);
+      const advance_amount = Math.max(
+        (Number(data.amount) || 0) - settled_amount,
+        0,
+      );
 
       const [cashTransaction] = await Receipt.create(
         [
@@ -249,7 +259,7 @@ export async function createCashTransaction(data = {}, req) {
             date,
           ),
         ],
-        { session }
+        { session },
       );
 
       await PartyLedger.create(
@@ -259,10 +269,10 @@ export async function createCashTransaction(data = {}, req) {
             cashTransaction._id,
             cashTransaction.voucher_number,
             date,
-            party_ledger_side
+            party_ledger_side,
           ),
         ],
-        { session }
+        { session },
       );
 
       await updatePartyMonthlyBalance({
@@ -281,10 +291,10 @@ export async function createCashTransaction(data = {}, req) {
             cashTransaction._id,
             cashTransaction.voucher_number,
             date,
-            cash_bank_ledger_side
+            cash_bank_ledger_side,
           ),
         ],
-        { session }
+        { session },
       );
 
       for (const item of settlement_details) {
@@ -302,7 +312,7 @@ export async function createCashTransaction(data = {}, req) {
         if (!outstanding) {
           throw createHttpError(
             "Outstanding bill not found for the selected company and party",
-            400
+            400,
           );
         }
 
@@ -312,7 +322,7 @@ export async function createCashTransaction(data = {}, req) {
         if (settledAmount <= 0 || settledAmount > currentPendingAmount) {
           throw createHttpError(
             "Settled amount cannot exceed the current pending amount",
-            400
+            400,
           );
         }
 
@@ -336,7 +346,10 @@ export async function createCashTransaction(data = {}, req) {
         .session(session)
         .lean();
 
-      await createVoucherTimelineEntry(buildVoucherTimelinePayload(cashTransaction), session);
+      await createVoucherTimelineEntry(
+        buildVoucherTimelinePayload(cashTransaction),
+        session,
+      );
     });
 
     return createdCashTransaction;
@@ -358,7 +371,7 @@ export async function cancelCashTransaction(id, data = {}, req) {
         applyTransactionCreatorScope(req, {
           _id: id,
           cmp_id: data.cmp_id,
-        })
+        }),
       ).session(session);
 
       if (!transaction) {
@@ -380,8 +393,12 @@ export async function cancelCashTransaction(id, data = {}, req) {
           voucher_id: transaction._id,
           voucher_type: transaction.voucher_type,
         },
-        { $set: { status: getCancelledTransactionStatus(transaction.voucher_type) } },
-        { session }
+        {
+          $set: {
+            status: getCancelledTransactionStatus(transaction.voucher_type),
+          },
+        },
+        { session },
       );
 
       await updatePartyMonthlyBalance({
@@ -399,8 +416,12 @@ export async function cancelCashTransaction(id, data = {}, req) {
           voucher_id: transaction._id,
           voucher_type: transaction.voucher_type,
         },
-        { $set: { status: getCancelledTransactionStatus(transaction.voucher_type) } },
-        { session }
+        {
+          $set: {
+            status: getCancelledTransactionStatus(transaction.voucher_type),
+          },
+        },
+        { session },
       );
 
       for (const item of transaction.settlement_details || []) {
@@ -418,13 +439,16 @@ export async function cancelCashTransaction(id, data = {}, req) {
         if (!outstanding) {
           throw createHttpError(
             "Outstanding bill not found for the selected company and party",
-            400
+            400,
           );
         }
 
         const settledAmount = Number(item.settled_amount) || 0;
         if (settledAmount <= 0) {
-          throw createHttpError("Settled amount must be greater than zero", 400);
+          throw createHttpError(
+            "Settled amount must be greater than zero",
+            400,
+          );
         }
 
         const currentPendingAmount = Number(outstanding.bill_pending_amt) || 0;
@@ -448,8 +472,10 @@ export async function cancelCashTransaction(id, data = {}, req) {
           voucher_id: transaction._id,
           voucher_type: transaction.voucher_type,
         },
-        buildVoucherTimelineUpdatePayload(transaction, { status: transaction.status || null }),
-        session
+        buildVoucherTimelineUpdatePayload(transaction, {
+          status: transaction.status || null,
+        }),
+        session,
       );
     });
 
@@ -550,34 +576,28 @@ export async function getCashBankLedgerBalances(filters = {}, req) {
       .sort({ partyName: 1 })
       .lean(),
     CashBankLedger.aggregate([
-    { $match: scopedMatch },
-    {
-      $group: {
-        _id: {
-          cash_bank_id: "$cash_bank_id",
-          cash_bank_name: "$cash_bank_name",
-          cash_bank_type: "$cash_bank_type",
-        },
-        current_balance: {
-          $sum: {
-            $cond: [
-              { $eq: ["$ledger_side", "debit"] },
-              { $ifNull: ["$amount", 0] },
-              { $multiply: [{ $ifNull: ["$amount", 0] }, -1] },
-            ],
+      { $match: scopedMatch },
+      {
+        $group: {
+          _id: {
+            cash_bank_id: "$cash_bank_id",
+            cash_bank_name: "$cash_bank_name",
+            cash_bank_type: "$cash_bank_type",
+          },
+          current_balance: {
+            $sum: { $ifNull: ["$amount", 0] },
           },
         },
       },
-    },
-    {
-      $project: {
-        _id: "$_id.cash_bank_id",
-        cash_bank_name: "$_id.cash_bank_name",
-        cash_bank_type: "$_id.cash_bank_type",
-        current_balance: 1,
+      {
+        $project: {
+          _id: "$_id.cash_bank_id",
+          cash_bank_name: "$_id.cash_bank_name",
+          cash_bank_type: "$_id.cash_bank_type",
+          current_balance: 1,
+        },
       },
-    },
-    { $sort: { cash_bank_name: 1 } },
+      { $sort: { cash_bank_name: 1 } },
     ]),
   ]);
 
@@ -609,7 +629,9 @@ export async function getCashBankLedgerBalances(filters = {}, req) {
   }
 
   return balances.sort((left, right) =>
-    String(left?.cash_bank_name || "").localeCompare(String(right?.cash_bank_name || ""))
+    String(left?.cash_bank_name || "").localeCompare(
+      String(right?.cash_bank_name || ""),
+    ),
   );
 }
 
