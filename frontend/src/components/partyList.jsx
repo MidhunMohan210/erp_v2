@@ -453,46 +453,33 @@ export function PartyList({
         }`}
       >
         {mode === "outstanding" && (
-          <div className="relative overflow-hidden rounded-sm border border-blue-200/50 bg-[#014f86] px-4 py-4 text-white ">
-            <div className="absolute inset-x-0 top-0 h-px bg-white/20" />
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div>
-                {/* <p className="text-[11px] font-medium uppercase tracking-[0.24em] text-blue-100/80">
-                  Outstanding Snapshot
-                </p> */}
-                <p className="text-lg font-semibold text-white">
-                  {LEDGER_TYPE_LABELS[ledgerType]}
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <select
-                  className="rounded-full border border-blue-100/20 bg-white/12 px-3 py-1.5 text-xs font-medium text-white outline-none backdrop-blur-sm transition focus:border-blue-100/50"
-                  value={ledgerType}
-                  onChange={(e) => setLedgerType(e.target.value)}
-                >
-                  <option value="ledger">Ledger</option>
-                  <option value="payable">Payables</option>
-                  <option value="receivable">Receivables</option>
-                </select>
-              </div>
-            </div>
-            <div className="rounded border border-blue-100/15 bg-white/5 p-4 backdrop-blur-sm">
-              <div className="flex items-end justify-between gap-3">
-                <div>
-                  <p className="text-xs text-blue-100/75">Total</p>
-                  <div className="mt-1 text-3xl font-bold tracking-tight text-white">
-                    {Math.abs(headerBalance).toFixed(2)}
-                  </div>
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-[#3e5c76] shadow-sm">
+            <div className="px-4 py-4 text-white">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/90">
+                    Total Outstanding
+                  </p>
+                  <p className="mt-2 text-3xl font-bold tracking-tight text-white">
+                    {Math.abs(headerBalance).toLocaleString("en-IN", {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-200">
+                    {visibleParties.length} outstanding part{visibleParties.length === 1 ? "y" : "ies"}
+                  </p>
                 </div>
+
                 <span
-                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] ${
                     headerClassification === "cr"
-                      ? "bg-rose-500/15 text-rose-200"
-                      : "bg-emerald-500/15 text-emerald-200"
+                      ? "bg-rose-400/15 text-rose-100 ring-1 ring-rose-200/20"
+                      : "bg-emerald-400/15 text-emerald-100 ring-1 ring-emerald-200/20"
                   }`}
                 >
                   <span
-                    className={`h-2 w-2 rounded-full ${
+                    className={`h-1.5 w-1.5 rounded-full ${
                       headerClassification === "cr"
                         ? "bg-rose-300"
                         : "bg-emerald-300"
@@ -500,6 +487,26 @@ export function PartyList({
                   />
                   {headerClassification}
                 </span>
+              </div>
+            </div>
+
+            <div className="border-t border-white/10 bg-slate-50 p-2">
+              <div className="grid grid-cols-3 gap-1 rounded-lg bg-slate-200/70 p-1">
+                {Object.entries(LEDGER_TYPE_LABELS).map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => setLedgerType(value)}
+                    aria-pressed={ledgerType === value}
+                    className={`min-w-0 rounded-md px-2 py-2 text-[11px] font-semibold transition ${
+                      ledgerType === value
+                        ? "bg-white text-slate-800 shadow-sm ring-1 ring-slate-200"
+                        : "text-slate-500 hover:bg-white/60 hover:text-slate-700"
+                    }`}
+                  >
+                    <span className="block truncate">{label}</span>
+                  </button>
+                ))}
               </div>
             </div>
           </div>
