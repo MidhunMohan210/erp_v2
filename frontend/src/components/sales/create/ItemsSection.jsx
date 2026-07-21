@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronRight, Package2, Pencil } from "lucide-react";
+import { ChevronRight, Package2, Pencil, Trash2 } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
 
@@ -10,6 +10,7 @@ import {
   Sheet,
   SheetContent,
   SheetDescription,
+  SheetFooter,
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
@@ -26,6 +27,7 @@ export default function ItemsSection({ returnTo = ROUTES.createOrder }) {
   const party = useSelector((state) => state.transaction.party);
   const [editingItemId, setEditingItemId] = useState(null);
   const [itemsSheetOpen, setItemsSheetOpen] = useState(false);
+  const [itemPendingRemoval, setItemPendingRemoval] = useState(null);
   const editingItem = items.find((item) => item.id === editingItemId) || null;
   const previewItems = items.slice(0, 2);
   const hasParty = Boolean(party?._id || party?.id);
@@ -89,19 +91,30 @@ export default function ItemsSection({ returnTo = ROUTES.createOrder }) {
                       </p>
                     </div>
 
-                    <div className="text-right">
+                    <div className="shrink-0 text-right">
                       <p className="text-sm font-semibold text-slate-900">
                         {formatCurrency(item.totalAmount)}
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => setEditingItemId(item.id)}
-                        disabled={!hasParty}
-                        className="mt-3 inline-flex items-center gap-1 rounded-full border bg-white px-2.5 py-1 text-[10px] font-medium text-gray-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <Pencil className="h-3 w-3" />
-                        Edit
-                      </button>
+                      <div className="mt-3 flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditingItemId(item.id)}
+                          disabled={!hasParty}
+                          className="inline-flex items-center gap-1 rounded-full border bg-white px-2.5 py-1 text-[10px] font-medium text-gray-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <Pencil className="h-3 w-3" />
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setItemPendingRemoval(item)}
+                          className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2.5 py-1 text-[10px] font-medium text-red-600 transition hover:bg-red-50"
+                          aria-label={`Remove ${item.name}`}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Remove
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -180,27 +193,78 @@ export default function ItemsSection({ returnTo = ROUTES.createOrder }) {
                     </p>
                   </div>
 
-                  <div className="text-right">
+                  <div className="shrink-0 text-right">
                     <p className="text-sm font-semibold text-slate-900">
                       {formatCurrency(item.totalAmount)}
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setItemsSheetOpen(false);
-                        setEditingItemId(item.id);
-                      }}
-                      disabled={!hasParty}
-                      className="mt-1 inline-flex items-center gap-1 rounded-full border border-teal-200 bg-white px-2.5 py-1 text-[11px] font-medium text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      Edit
-                    </button>
+                    <div className="mt-1 flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setItemsSheetOpen(false);
+                          setEditingItemId(item.id);
+                        }}
+                        disabled={!hasParty}
+                        className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-white px-2.5 py-1 text-[11px] font-medium text-teal-700 transition hover:bg-teal-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setItemPendingRemoval(item)}
+                        className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2.5 py-1 text-[11px] font-medium text-red-600 transition hover:bg-red-50"
+                        aria-label={`Remove ${item.name}`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Remove
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
             ))}
           </div>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet
+        open={Boolean(itemPendingRemoval)}
+        onOpenChange={(open) => {
+          if (!open) setItemPendingRemoval(null);
+        }}
+      >
+        <SheetContent side="bottom" className="rounded-t-3xl">
+          <SheetHeader>
+            <SheetTitle>Remove item?</SheetTitle>
+            <SheetDescription>
+              {itemPendingRemoval?.name
+                ? `Are you sure you want to remove ${itemPendingRemoval.name} from this sale order?`
+                : "Are you sure you want to remove this item from the sale order?"}
+            </SheetDescription>
+          </SheetHeader>
+
+          <SheetFooter>
+            <button
+              type="button"
+              onClick={() => setItemPendingRemoval(null)}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!itemPendingRemoval?.id) return;
+                dispatch(removeItem({ id: itemPendingRemoval.id }));
+                setItemPendingRemoval(null);
+              }}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+            >
+              <Trash2 className="h-4 w-4" />
+              Remove item
+            </button>
+          </SheetFooter>
         </SheetContent>
       </Sheet>
     </>

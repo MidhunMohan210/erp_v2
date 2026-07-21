@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -111,6 +112,7 @@ export default function ItemEditSheet({
     discountValue: "",
     description: "",
   });
+  const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
 
   useEffect(() => {
     // Rebuild local form every time sheet opens with a new item.
@@ -173,23 +175,35 @@ export default function ItemEditSheet({
   };
 
   /**
-   * Emits remove action to parent and closes sheet.
+   * Opens the removal confirmation sheet.
    *
    * @returns {void}
    */
   const handleRemove = () => {
     if (!item || !onRemove) return;
+    setRemoveConfirmOpen(true);
+  };
+
+  /**
+   * Emits the confirmed remove action to parent and closes both sheets.
+   *
+   * @returns {void}
+   */
+  const handleConfirmRemove = () => {
+    if (!item || !onRemove) return;
     onRemove(item);
+    setRemoveConfirmOpen(false);
     onOpenChange(false);
   };
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="bottom"
-        className="max-h-[85vh] overflow-y-auto rounded-t-3xl"
-        onOpenAutoFocus={(event) => event.preventDefault()}
-      >
+    <>
+      <Sheet open={open} onOpenChange={onOpenChange}>
+        <SheetContent
+          side="bottom"
+          className="max-h-[85vh] overflow-y-auto rounded-t-3xl"
+          onOpenAutoFocus={(event) => event.preventDefault()}
+        >
         <SheetHeader>
           <SheetTitle className="text-sm">
             {item?.name || "Edit Item"}
@@ -418,7 +432,39 @@ export default function ItemEditSheet({
             Save
           </Button>
         </SheetFooter>
-      </SheetContent>
-    </Sheet>
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={removeConfirmOpen} onOpenChange={setRemoveConfirmOpen}>
+        <SheetContent side="bottom" className="rounded-t-3xl">
+          <SheetHeader>
+            <SheetTitle>Remove item?</SheetTitle>
+            <SheetDescription>
+              {item?.name
+                ? `Are you sure you want to remove ${item.name} from this sale order?`
+                : "Are you sure you want to remove this item from the sale order?"}
+            </SheetDescription>
+          </SheetHeader>
+
+          <SheetFooter>
+            <button
+              type="button"
+              onClick={() => setRemoveConfirmOpen(false)}
+              className="inline-flex min-h-11 items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmRemove}
+              className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700"
+            >
+              <Trash2 className="h-4 w-4" />
+              Remove item
+            </button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+    </>
   );
 }
