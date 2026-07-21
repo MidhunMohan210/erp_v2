@@ -152,6 +152,21 @@ export default function ItemEditSheet({
   };
 
   /**
+   * Keeps billed quantity in sync when actual quantity is changed.
+   * Billed quantity remains independently editable afterwards.
+   *
+   * @param {number|string} value
+   * @returns {void}
+   */
+  const handleActualQtyChange = (value) => {
+    setForm((current) => ({
+      ...current,
+      actualQty: value,
+      billedQty: value,
+    }));
+  };
+
+  /**
    * Emits normalized row changes to parent and closes sheet.
    *
    * @returns {void}
@@ -258,7 +273,7 @@ export default function ItemEditSheet({
               type="number"
               className="h-8 text-xs"
               value={form.actualQty}
-              onChange={(event) => handleChange("actualQty", event.target.value)}
+              onChange={(event) => handleActualQtyChange(event.target.value)}
             />
           </div>
 

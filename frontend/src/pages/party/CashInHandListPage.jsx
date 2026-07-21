@@ -67,11 +67,20 @@ export default function CashInHandListPage() {
     <div className="mx-auto w-full max-w-3xl px-1 pb-6 pt-3 sm:px-4">
       <div className="overflow-hidden rounded-lg border border-slate-200 bg-[#3e5c76] shadow-sm">
         <div className="px-4 py-4 text-white">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/90">
-            Cash In Hand
-          </p>
-          <p className="mt-2 text-3xl font-bold tracking-tight">{formatCurrency(total)}</p>
-          <p className="mt-1 text-xs text-slate-200">{items.length} cash ledger(s)</p>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-white/90">
+                Cash In Hand
+              </p>
+              <p className="mt-2 text-3xl font-bold tracking-tight">{formatCurrency(total)}</p>
+              <p className="mt-1 text-xs text-slate-200">
+                {items.length} cash ledger{items.length === 1 ? "" : "s"}
+              </p>
+            </div>
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white/10 text-emerald-100 ring-1 ring-white/10">
+              <Wallet className="h-4 w-4" />
+            </span>
+          </div>
         </div>
       </div>
 

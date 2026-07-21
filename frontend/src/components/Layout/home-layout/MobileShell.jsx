@@ -26,6 +26,12 @@ export default function MobileShell({
   const headerOptions =
     headerOptionsByPath[pathname] ?? DEFAULT_MOBILE_HEADER_OPTIONS;
   const isCompanyRegister = pathname === ROUTES.mastersCompanyRegister;
+  const showBottomBar = [
+    ROUTES.home,
+    ROUTES.mastersCompany,
+    ROUTES.mastersUsers,
+    ROUTES.settings,
+  ].includes(pathname);
   const showNoCompanyScreen =
     !isCheckingCompanies && !hasCompany && !isCompanyRegister;
 
@@ -39,9 +45,15 @@ export default function MobileShell({
           forceShowOnHome={isHome && showNoCompanyScreen}
         />
 
-        <main className="pb-[104px]">
+        <main className={showBottomBar ? "pb-[104px]" : "pb-4"}>
           {isCheckingCompanies ? (
-            <div className="flex min-h-[calc(100vh-104px)] items-center justify-center">
+            <div
+              className={`flex items-center justify-center ${
+                showBottomBar
+                  ? "min-h-[calc(100vh-104px)]"
+                  : "min-h-[calc(100vh-56px)]"
+              }`}
+            >
               <p className="text-sm text-slate-500">Checking your companies...</p>
             </div>
           ) : showNoCompanyScreen ? (
@@ -64,7 +76,7 @@ export default function MobileShell({
           )}
         </main>
 
-        <MobileBottomBar />
+        {showBottomBar ? <MobileBottomBar /> : null}
       </div>
     </div>
   );
