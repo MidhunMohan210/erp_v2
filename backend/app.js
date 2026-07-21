@@ -80,7 +80,7 @@ app.use(
   }),
 );
 app.use(hpp());
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "200mb" }));
 
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
