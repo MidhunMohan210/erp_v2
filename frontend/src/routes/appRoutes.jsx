@@ -18,6 +18,9 @@ const OutstandingsPage = lazy(
   () => import("@/pages/oustanding/OutstandingPartyListPage"),
 );
 const DaybookPage = lazy(() => import("@/pages/Home/DaybookPage"));
+const ConvertedOrdersPage = lazy(
+  () => import("@/pages/Home/ConvertedOrdersPage"),
+);
 const StockRegisterPage = lazy(() => import("@/pages/Home/StockRegisterPage"));
 const CashBankBalancePage = lazy(
   () => import("@/pages/party/CashBankBalancePage"),
@@ -95,6 +98,7 @@ export const appRoutes = (
       element={<OutstandingPartyDetailPage />}
     />
     <Route path={ROUTES.daybook} element={<DaybookPage />} />
+    <Route path={ROUTES.convertedOrders} element={<ConvertedOrdersPage />} />
     <Route path={ROUTES.stockRegister} element={<StockRegisterPage />} />
     <Route
       path={ROUTES.CashBankBalancePage}
