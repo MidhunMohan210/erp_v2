@@ -7,6 +7,7 @@ import {
   Bell,
   Boxes,
   FileText,
+  FileCheck2,
   Loader2,
   Package,
   Users,
@@ -393,6 +394,8 @@ export default function MobileWalletCard({
               showArrow={true}
             />
 
+           
+
             <QuickActionCard
               title="Outstandings"
               description="Pending dues"
@@ -422,6 +425,17 @@ export default function MobileWalletCard({
               className="border-slate-100 bg-gradient-to-r from-teal-50/80 to-white  !h-18"
               layout="horizontal" // icon + text in a row
               showArrow={true}
+            />
+
+             <QuickActionCard
+              title="Billed Orders"
+              description="Completed sale orders"
+              icon={FileCheck2}
+              onClick={() => navigate(ROUTES.convertedOrders)}
+              iconClassName="rounded-xl bg-emerald-100 text-emerald-600"
+              className="border-slate-100 bg-white !h-18"
+              layout="horizontal"
+              wide
             />
           </div>
         </CardContent>

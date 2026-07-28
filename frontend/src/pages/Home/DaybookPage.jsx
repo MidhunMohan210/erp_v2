@@ -90,7 +90,11 @@ function StatusBadge({ status, voucherType }) {
   return null;
 }
 
-export default function DaybookPage() {
+export default function DaybookPage({
+  title = "Daybook",
+  fixedStatus,
+  voucherTypeOptions = DEFAULT_DAYBOOK_VOUCHER_TYPES,
+}) {
   const cmpId = useSelector((state) => state.company.selectedCompanyId);
   const navigate = useNavigate();
   const initialPreset = useMemo(() => {
@@ -100,13 +104,13 @@ export default function DaybookPage() {
   const [filters, setFilters] = useState({
     from: initialPreset.from,
     to: initialPreset.to,
-    voucherTypes: DEFAULT_DAYBOOK_VOUCHER_TYPES.map((option) => option.value),
+    voucherTypes: voucherTypeOptions.map((option) => option.value),
   });
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
 
   const voucherTypeParam = buildVoucherTypeParam(
     filters.voucherTypes,
-    DEFAULT_DAYBOOK_VOUCHER_TYPES,
+    voucherTypeOptions,
   );
 
   const loadMoreRef = useRef(null);
@@ -121,7 +125,14 @@ export default function DaybookPage() {
     isFetchingNextPage,
     refetch,
   } = useInfiniteQuery({
-    queryKey: ["daybook", cmpId, filters.from, filters.to, voucherTypeParam],
+    queryKey: [
+      "daybook",
+      cmpId,
+      filters.from,
+      filters.to,
+      voucherTypeParam,
+      fixedStatus,
+    ],
     initialPageParam: 1,
     queryFn: async ({ pageParam = 1 }) => {
       const response = await api.get("/vouchers", {
@@ -130,6 +141,7 @@ export default function DaybookPage() {
           from: filters.from,
           to: filters.to,
           voucherType: voucherTypeParam,
+          ...(fixedStatus ? { status: fixedStatus } : {}),
           page: pageParam,
           limit: DAYBOOK_PAGE_SIZE,
         },
@@ -197,7 +209,7 @@ export default function DaybookPage() {
     <div className="mx-auto min-h-screen w-full max-w-3xl ">
       <div className="space-y-3 px-1 pb-6 pt-3 sm:px-4">
         <TransactionFilterSummaryCard
-          title="Daybook"
+          title={title}
           fromLabel={formatDateDisplay(filters.from)}
           toLabel={formatDateDisplay(filters.to)}
           subtitle={filterSubtitle}
@@ -221,7 +233,7 @@ export default function DaybookPage() {
               message={
                 error?.response?.data?.message ||
                 error?.message ||
-                "Failed to load daybook."
+                `Failed to load ${title.toLowerCase()}.`
               }
               onRetry={() => refetch()}
             />
@@ -328,7 +340,7 @@ export default function DaybookPage() {
         onOpenChange={setFilterSheetOpen}
         value={filters}
         onApply={setFilters}
-        voucherTypeOptions={DEFAULT_DAYBOOK_VOUCHER_TYPES}
+        voucherTypeOptions={voucherTypeOptions}
       />
     </div>
   );

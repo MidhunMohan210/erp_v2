@@ -157,7 +157,7 @@ export async function getVoucherTotalsSummary({ cmpId, date }, req) {
 }
 
 export async function getVouchers(filters = {}, req) {
-  const { from, to, voucherType, page, limit, cmpId } = filters;
+  const { from, to, voucherType, status, page, limit, cmpId } = filters;
 
   if (!cmpId) {
     throw createHttpError("cmpId is required", 400);
@@ -179,6 +179,14 @@ export async function getVouchers(filters = {}, req) {
 
   if (!voucherTypes.includes("all")) {
     timelineFilter.voucher_type = { $in: voucherTypes };
+  }
+
+  if (status) {
+    const allowedStatuses = ["open", "converted", "cancelled", "active"];
+    if (!allowedStatuses.includes(status)) {
+      throw createHttpError("Invalid voucher status", 400);
+    }
+    timelineFilter.status = status;
   }
 
   const [totalCount, timelineRows] = await Promise.all([
