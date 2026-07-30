@@ -24,8 +24,6 @@ const userSchema = new mongoose.Schema(
 
     email: {
       type: String,
-      unique: true,
-      sparse: true,
       lowercase: true,
       trim: true,
     },
@@ -61,6 +59,17 @@ const userSchema = new mongoose.Schema(
     },
   },
   { timestamps: true }
+);
+
+// Only enforce uniqueness when an email is actually present. A normal unique
+// index also indexes missing values as null, which allows only one mobile-only
+// staff user.
+userSchema.index(
+  { email: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { email: { $type: "string" } },
+  }
 );
 
 userSchema.index(
