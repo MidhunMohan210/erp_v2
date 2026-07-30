@@ -1,6 +1,9 @@
 import mongoose from "mongoose";
+import User from "../Model/UserSchema.js";
 
 let isConnected = null;
+
+
 
 const connectDB = async () => {
   if (process.env.NODE_ENV === "test") return;
@@ -19,7 +22,6 @@ const connectDB = async () => {
       // useNewUrlParser: true,
       // useUnifiedTopology: true,
     });
-
     isConnected = connection.connections[0].readyState;
     console.log(`✅ MongoDB connected: ${connection.connection.host}`);
   } catch (error) {

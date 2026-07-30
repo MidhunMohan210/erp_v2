@@ -76,7 +76,7 @@ describe("User staff routes", () => {
     expect(userInDb.password).not.toBe("Password123");
   });
 
-  it("creates a staff user without an email and allows mobile login", async () => {
+  it("creates multiple staff users without emails and allows mobile login", async () => {
     const admin = await loginAndGetAuthContext({
       userOverrides: {
         userName: "Email Optional Admin",
@@ -94,6 +94,15 @@ describe("User staff routes", () => {
         password: "Password123",
       });
 
+    const secondCreateRes = await request(app)
+      .post("/api/users/staff")
+      .set("Authorization", `Bearer ${admin.token}`)
+      .send({
+        userName: "Second Mobile Only Staff",
+        mobileNumber: "9888800091",
+        password: "Password123",
+      });
+
     const loginRes = await request(app).post("/api/auth/Login").send({
       identifier: "9888800090",
       password: "Password123",
@@ -102,6 +111,11 @@ describe("User staff routes", () => {
     expect(createRes.status).toBe(201);
     expect(createRes.body.user.userName).toBe("Mobile Only Staff");
     expect(createRes.body.user).not.toHaveProperty("email");
+    expect(secondCreateRes.status).toBe(201);
+    expect(secondCreateRes.body.user.userName).toBe(
+      "Second Mobile Only Staff"
+    );
+    expect(secondCreateRes.body.user).not.toHaveProperty("email");
     expect(loginRes.status).toBe(200);
     expect(loginRes.body.user.mobileNumber).toBe("9888800090");
   });
