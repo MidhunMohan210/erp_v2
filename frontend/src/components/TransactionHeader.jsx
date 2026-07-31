@@ -4,6 +4,8 @@ import "react-datepicker/dist/react-datepicker.css";
 import {
   AlertCircle,
   CalendarDays,
+  ChevronDown,
+  FileText,
   LoaderCircle,
 } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
@@ -20,24 +22,32 @@ import {
 } from "@/store/slices/transactionSlice";
 
 /**
- * Small icon-only button used as custom input for react-datepicker.
- *
- * @param {{onClick?: () => void}} props
- * @param {React.Ref<HTMLButtonElement>} ref
- * @returns {JSX.Element}
+ * Date selector used by transaction create/edit screens.
  */
-const DateIconInput = forwardRef(({ onClick }, ref) => (
-  <button
-    type="button"
-    ref={ref}
-    onClick={onClick}
-    className="inline-flex h-7 w-7 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-  >
-    <CalendarDays className="h-3.5 w-3.5" />
-  </button>
-));
+const DateCardInput = forwardRef(
+  ({ onClick, displayDate, disabled = false }, ref) => (
+    <button
+      type="button"
+      ref={ref}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={`Choose transaction date. Current date: ${displayDate}`}
+      className="flex min-h-14 w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-2 text-left transition hover:border-slate-300 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-20 sm:px-5 sm:py-3"
+    >
+      <span className="flex min-w-0 items-center gap-3">
+        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-sky-800 shadow-sm ring-1 ring-slate-100">
+          <CalendarDays className="h-5 w-5" strokeWidth={2.25} />
+        </span>
+        <span className="truncate text-[13px] font-semibold text-slate-950 sm:text-base">
+          {displayDate}
+        </span>
+      </span>
+      <ChevronDown className="h-5 w-5 shrink-0 text-slate-500" strokeWidth={2.5} />
+    </button>
+  ),
+);
 
-DateIconInput.displayName = "DateIconInput";
+DateCardInput.displayName = "DateCardInput";
 
 /**
  * Converts incoming value into valid Date object.
@@ -107,6 +117,9 @@ const formatVoucherForUi = ({ prefix, number, suffix }) =>
  *   onTransactionDateChange?: ((isoDate: string) => void)|undefined,
  *   selectedSeries?: object|undefined,
  *   onSelectedSeriesChange?: ((series: object|null) => void)|undefined,
+ *   cardTitle?: string,
+ *   cardSubtitle?: string,
+ *   cardIcon?: React.ComponentType,
  * }} props
  * @returns {JSX.Element}
  */
@@ -121,8 +134,12 @@ export default function TransactionHeader({
   onTransactionDateChange,
   selectedSeries: controlledSelectedSeries,
   onSelectedSeriesChange,
+  cardTitle = "Sale Order",
+  cardSubtitle = "Choose the transaction date and voucher number.",
+  cardIcon = FileText,
 }) {
   const dispatch = useDispatch();
+  const CardIcon = cardIcon;
   const [isSeriesModalOpen, setIsSeriesModalOpen] = useState(false);
   const isSeriesControlled =
     controlledSelectedSeries !== undefined &&
@@ -311,77 +328,104 @@ export default function TransactionHeader({
       "Unable to load voucher series right now."
     : null;
 
+  const displayDate = selectedDate.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+  const seriesDisabled =
+    editMode || !cmp_id || isError || seriesList.length === 0;
+
   return (
     <>
-      <header className="bg-white px-3 py-2">
-        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2">
-            <div className="flex flex-col">
-              {editMode ? (
-                <div className="mt-0.5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-700">
-                  <span className="font-semibold">
-                    {effectiveSeries?.seriesName || "Series"}
+      <header className="bg-slate-50 px-1 pt-1 sm:pt-4">
+        <section className="mx-auto max-w-5xl rounded-3xl border border-slate-200 bg-white px-4 py-4 shadow-[0_16px_36px_-30px_rgba(15,23,42,0.45)] sm:px-6 sm:py-6">
+          <div className="flex items-start gap-3">
+            <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-900 sm:h-12 sm:w-12 sm:rounded-2xl">
+              <CardIcon className="h-5 w-5 sm:h-6 sm:w-6" strokeWidth={2.2} />
+            </span>
+            <div className="min-w-0 pt-0.5">
+              <h2 className="text-[15px] font-bold leading-5 text-slate-950 sm:text-xl">
+                {cardTitle}
+              </h2>
+              <p className="mt-0.5 whitespace-nowrap text-[10px] leading-4 text-slate-500 sm:mt-1 sm:text-sm sm:leading-5">
+                {cardSubtitle}
+              </p>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-4 sm:mt-6 sm:space-y-5">
+            <div>
+              <label className="mb-2 block text-[12px]  text-slate-900 sm:text-sm">
+                Transaction date
+              </label>
+              <DatePicker
+                selected={selectedDate}
+                onChange={handleDateChange}
+                customInput={<DateCardInput displayDate={displayDate} />}
+                dateFormat="dd MMM yyyy"
+                wrapperClassName="w-full"
+                popperClassName="!z-[9999]"
+                showPopperArrow={false}
+                withPortal
+              />
+            </div>
+
+            <div>
+              <label className="mb-2 block text-[12px] fo text-slate-900 sm:text-sm">
+                Voucher number
+              </label>
+              <button
+                type="button"
+                onClick={() => setIsSeriesModalOpen(true)}
+                disabled={seriesDisabled}
+                aria-label={`Choose voucher series. Current series: ${
+                  effectiveSeries?.seriesName || "None"
+                }`}
+                className="flex min-h-14 w-full items-center justify-between rounded-2xl border border-slate-200 bg-slate-50/80 px-4 py-2 text-left transition hover:border-slate-300 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30 disabled:cursor-not-allowed disabled:opacity-60 sm:min-h-20 sm:px-5 sm:py-3"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-[13px] font-semibold text-slate-950 sm:text-base sm:font-bold">
+                    {effectiveSeries?.seriesName || "Select Series"}
                   </span>
-                  <span className="text-[10px] text-slate-500">
-                    {voucherNumber ? `No: #${voucherNumber}` : "Locked"}
+                  <span className="mt-0.5 block truncate text-[11px] text-slate-500 sm:text-sm">
+                    {isLoading || isFetching
+                      ? "Loading number..."
+                      : voucherNumber
+                        ? `No: #${voucherNumber}`
+                        : "Number unavailable"}
                   </span>
-                </div>
-              ) : (
+                </span>
+                {isLoading || isFetching ? (
+                  <LoaderCircle className="h-5 w-5 shrink-0 animate-spin text-slate-400" />
+                ) : (
+                  <ChevronDown
+                    className="h-5 w-5 shrink-0 text-slate-500"
+                    strokeWidth={2.5}
+                  />
+                )}
+              </button>
+            </div>
+          </div>
+
+          {headerMessage && (
+            <div className="mt-4 flex items-start justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <span>{headerMessage}</span>
+              </div>
+              {cmp_id && isError && (
                 <button
                   type="button"
-                  onClick={() => setIsSeriesModalOpen(true)}
-                  disabled={!cmp_id || isError || seriesList.length === 0}
-                  className="mt-0.5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-700 hover:border-slate-300 hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => refetch()}
+                  className="shrink-0 rounded-full border border-rose-300 px-2 py-0.5 font-semibold hover:bg-rose-100"
                 >
-                  <span className="font-semibold">
-                    {effectiveSeries?.seriesName || "Series"}
-                  </span>
-                  <span className="text-[10px] text-slate-500">
-                    {isLoading ? "Loading..." : `No: #${voucherNumber}`}
-                  </span>
+                  Retry
                 </button>
               )}
             </div>
-          </div>
-
-          <div className="flex items-center gap-1.5">
-            <div className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[11px] text-slate-600">
-              {!editMode && (isLoading || isFetching) && (
-                <LoaderCircle className="h-3 w-3 animate-spin text-slate-400" />
-              )}
-              <span className="truncate max-w-[140px]">
-                {selectedDate.toDateString()}
-              </span>
-            </div>
-
-            <DatePicker
-              selected={selectedDate}
-              onChange={handleDateChange}
-              customInput={<DateIconInput />}
-              dateFormat="yyyy-MM-dd"
-              popperClassName="!z-[9999]"
-              showPopperArrow={false}
-              withPortal
-            />
-          </div>
-        </div>
-        {headerMessage && (
-          <div className="mt-1.5 flex items-start justify-between gap-2 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-[11px] text-rose-700">
-            <div className="flex items-start gap-1.5">
-              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>{headerMessage}</span>
-            </div>
-            {cmp_id && isError && (
-              <button
-                type="button"
-                onClick={() => refetch()}
-                className="shrink-0 rounded-full border border-rose-300 px-2 py-0.5 text-[11px] font-semibold hover:bg-rose-100"
-              >
-                Retry
-              </button>
-            )}
-          </div>
-        )}
+          )}
+        </section>
       </header>
 
       {!editMode && (
