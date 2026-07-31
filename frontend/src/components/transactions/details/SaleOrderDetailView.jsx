@@ -195,7 +195,7 @@ export default function SaleOrderDetailView({
 
   return (
     <div className="mx-auto flex w-full flex-col gap-3 px-1 py-4">
-      <section className="overflow-hidden rounded-[15px] bg-[#004178] p-4 text-white shadow-sm">
+      <section className="overflow-hidden rounded-[15px] bg-[#3e5c76] p-4 text-white shadow-sm">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0 flex-1">
             <p className="text-[9px] font-extrabold uppercase tracking-[0.16em] text-sky-100/90">

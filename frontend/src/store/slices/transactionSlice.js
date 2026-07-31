@@ -196,6 +196,10 @@ const initialState = {
     finalAmount: 0,
     roundOff: 0,
   },
+  daybookFilters: {
+    daybook: null,
+    convertedOrders: null,
+  },
 };
 
 function mapSaleOrderParty(doc = {}) {
@@ -486,6 +490,20 @@ const transactionSlice = createSlice({
       repriceAllItemsInternal(state);
       recalculateTotals(state);
     },
+    setSavedDaybookFilters(state, action) {
+      const key = action.payload?.key || "daybook";
+      state.daybookFilters[key] = action.payload?.filters || null;
+    },
+    clearSavedDaybookFilters(state, action) {
+      const key = action.payload?.key;
+
+      if (key) {
+        state.daybookFilters[key] = null;
+        return;
+      }
+
+      state.daybookFilters = { ...initialState.daybookFilters };
+    },
     resetSaleOrderDraft(state) {
       // Reset keeps structure stable while dropping transient transaction content.
       state.cmp_id = initialState.cmp_id;
@@ -525,6 +543,8 @@ export const {
   setPriceLevel,
   setPriceLevelObject,
   repriceAllItems,
+  setSavedDaybookFilters,
+  clearSavedDaybookFilters,
   resetSaleOrderDraft,
 } = transactionSlice.actions;
 

@@ -8,6 +8,7 @@ export default function ConvertedOrdersPage() {
       title="Converted Orders"
       fixedStatus="converted"
       voucherTypeOptions={SALE_ORDER_ONLY}
+      filterStorageKey="convertedOrders"
     />
   );
 }

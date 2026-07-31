@@ -93,6 +93,84 @@ function parsePositiveInteger(value, fallback) {
   return parsed;
 }
 
+function normalizeObjectId(value, label = "id") {
+  if (!value || typeof value !== "string") {
+    throw createHttpError(`Invalid ${label}`, 400);
+  }
+
+  if (!mongoose.Types.ObjectId.isValid(value)) {
+    throw createHttpError(`Invalid ${label}`, 400);
+  }
+
+  return new mongoose.Types.ObjectId(value);
+}
+
+async function resolveVoucherIdsForCreator({
+  cmpId,
+  createdBy,
+  fromDate,
+  toDate,
+  voucherTypes,
+  status,
+}) {
+  if (!createdBy) return null;
+
+  const creatorId = normalizeObjectId(createdBy, "createdBy");
+  const resolvedVoucherTypes = voucherTypes.includes("all")
+    ? DEFAULT_VOUCHER_TYPES
+    : voucherTypes;
+
+  const dateFilter = {
+    $gte: fromDate,
+    $lte: toDate,
+  };
+
+  const queries = [];
+
+  if (resolvedVoucherTypes.includes("saleOrder")) {
+    const saleOrderFilter = {
+      cmp_id: cmpId,
+      created_by: creatorId,
+      date: dateFilter,
+    };
+
+    if (status && ["open", "converted", "cancelled"].includes(status)) {
+      saleOrderFilter.status = status;
+    }
+
+    queries.push(
+      SaleOrder.find(saleOrderFilter)
+        .select("_id")
+        .lean(),
+    );
+  }
+
+  if (resolvedVoucherTypes.includes("receipt")) {
+    const receiptFilter = {
+      cmp_id: cmpId,
+      created_by: creatorId,
+      date: dateFilter,
+    };
+
+    if (status && ["active", "cancelled"].includes(status)) {
+      receiptFilter.status = status;
+    }
+
+    queries.push(
+      Receipt.find(receiptFilter)
+        .select("_id")
+        .lean(),
+    );
+  }
+
+  const results = await Promise.all(queries);
+
+  return results
+    .flat()
+    .map((doc) => doc?._id)
+    .filter(Boolean);
+}
+
 export async function getVoucherTotalsSummary({ cmpId, date }, req) {
   if (!cmpId) {
     throw createHttpError("cmpId is required", 400);
@@ -157,7 +235,7 @@ export async function getVoucherTotalsSummary({ cmpId, date }, req) {
 }
 
 export async function getVouchers(filters = {}, req) {
-  const { from, to, voucherType, status, page, limit, cmpId } = filters;
+  const { from, to, voucherType, status, page, limit, cmpId, createdBy } = filters;
 
   if (!cmpId) {
     throw createHttpError("cmpId is required", 400);
@@ -167,14 +245,13 @@ export async function getVouchers(filters = {}, req) {
   const voucherTypes = resolveVoucherTypes(voucherType);
   const currentPage = parsePositiveInteger(page, 1);
   const pageSize = parsePositiveInteger(limit, 20);
-
-  const timelineFilter = applyTransactionCreatorScope(req, {
+  const timelineFilter = {
     cmp_id: cmpId,
     date: {
       $gte: fromDate,
       $lte: toDate,
     },
-  });
+  };
   const skip = (currentPage - 1) * pageSize;
 
   if (!voucherTypes.includes("all")) {
@@ -187,6 +264,20 @@ export async function getVouchers(filters = {}, req) {
       throw createHttpError("Invalid voucher status", 400);
     }
     timelineFilter.status = status;
+  }
+
+  const scopedCreatorId = applyTransactionCreatorScope(req, {}).created_by;
+  const creatorVoucherIds = await resolveVoucherIdsForCreator({
+    cmpId,
+    createdBy: scopedCreatorId ? String(scopedCreatorId) : createdBy,
+    fromDate,
+    toDate,
+    voucherTypes,
+    status,
+  });
+
+  if (Array.isArray(creatorVoucherIds)) {
+    timelineFilter.voucher_id = { $in: creatorVoucherIds };
   }
 
   const [totalCount, timelineRows] = await Promise.all([

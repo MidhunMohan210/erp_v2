@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useSelector } from "react-redux";
+import { useDispatch, useSelector } from "react-redux";
 import { FileText, LoaderCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -9,7 +9,9 @@ import ErrorRetryState from "@/components/common/ErrorRetryState";
 import TransactionFilterSheet from "@/components/filters/TransactionFilterSheet";
 import TransactionFilterSummaryCard from "@/components/filters/TransactionFilterSummaryCard";
 import { DEFAULT_DAYBOOK_VOUCHER_TYPES } from "@/components/filters/daybookFilterOptions";
+import { useUserOptionsQuery } from "@/hooks/queries/userQueries";
 import { ROUTES } from "@/routes/paths";
+import { setSavedDaybookFilters } from "@/store/slices/transactionSlice";
 import {
   buildDateRangePresetOptions,
   formatDateDisplay,
@@ -94,19 +96,67 @@ export default function DaybookPage({
   title = "Daybook",
   fixedStatus,
   voucherTypeOptions = DEFAULT_DAYBOOK_VOUCHER_TYPES,
+  filterStorageKey = "daybook",
 }) {
+  const dispatch = useDispatch();
   const cmpId = useSelector((state) => state.company.selectedCompanyId);
+  const currentUser = useSelector((state) => state.auth.user);
+  const savedFilters = useSelector(
+    (state) => state.transaction.daybookFilters?.[filterStorageKey] || null,
+  );
   const navigate = useNavigate();
+  const isAdminUser = currentUser?.role === "admin";
   const initialPreset = useMemo(() => {
     const presets = buildDateRangePresetOptions(new Date());
     return presets.find((preset) => preset.id === "this-month") || presets[0];
   }, []);
-  const [filters, setFilters] = useState({
-    from: initialPreset.from,
-    to: initialPreset.to,
-    voucherTypes: voucherTypeOptions.map((option) => option.value),
+  const [filters, setFilters] = useState(() => {
+    if (savedFilters) {
+      return {
+        from: savedFilters.from || initialPreset.from,
+        to: savedFilters.to || initialPreset.to,
+        voucherTypes:
+          savedFilters.voucherTypes?.length
+            ? savedFilters.voucherTypes
+            : voucherTypeOptions.map((option) => option.value),
+        createdBy: savedFilters.createdBy || "",
+      };
+    }
+
+    return {
+      from: initialPreset.from,
+      to: initialPreset.to,
+      voucherTypes: voucherTypeOptions.map((option) => option.value),
+      createdBy: "",
+    };
   });
   const [filterSheetOpen, setFilterSheetOpen] = useState(false);
+  const { data: staffOptions = [] } = useUserOptionsQuery(isAdminUser);
+
+  const userFilterOptions = useMemo(() => {
+    if (!isAdminUser) return [];
+
+    const options = [
+      { value: "", label: "All users" },
+      {
+        value: currentUser?._id || currentUser?.id || "",
+        label: currentUser?.userName || currentUser?.name || currentUser?.email || "Admin",
+        meta: "You",
+      },
+    ];
+
+    for (const user of staffOptions) {
+      if (!user?.id || user.id === options[1].value) continue;
+
+      options.push({
+        value: user.id,
+        label: user.name,
+        meta: user.email || user.mobile || "Staff user",
+      });
+    }
+
+    return options;
+  }, [currentUser, isAdminUser, staffOptions]);
 
   const voucherTypeParam = buildVoucherTypeParam(
     filters.voucherTypes,
@@ -131,6 +181,7 @@ export default function DaybookPage({
       filters.from,
       filters.to,
       voucherTypeParam,
+      filters.createdBy,
       fixedStatus,
     ],
     initialPageParam: 1,
@@ -141,6 +192,7 @@ export default function DaybookPage({
           from: filters.from,
           to: filters.to,
           voucherType: voucherTypeParam,
+          ...(filters.createdBy ? { createdBy: filters.createdBy } : {}),
           ...(fixedStatus ? { status: fixedStatus } : {}),
           page: pageParam,
           limit: DAYBOOK_PAGE_SIZE,
@@ -163,6 +215,23 @@ export default function DaybookPage({
     voucherTypeParam === "all"
       ? "All voucher types"
       : filters.voucherTypes.map(getVoucherTypeLabel).join(", ");
+  const selectedUserLabel = userFilterOptions.find(
+    (option) => option.value === (filters.createdBy || ""),
+  )?.label;
+  const summarySubtitle =
+    isAdminUser && selectedUserLabel
+      ? `${filterSubtitle} · ${selectedUserLabel}`
+      : filterSubtitle;
+
+  const handleApplyFilters = (nextFilters) => {
+    setFilters(nextFilters);
+    dispatch(
+      setSavedDaybookFilters({
+        key: filterStorageKey,
+        filters: nextFilters,
+      }),
+    );
+  };
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -212,7 +281,7 @@ export default function DaybookPage({
           title={title}
           fromLabel={formatDateDisplay(filters.from)}
           toLabel={formatDateDisplay(filters.to)}
-          subtitle={filterSubtitle}
+          subtitle={summarySubtitle}
           metaLabel="Transactions"
           count={totalCount}
           onOpenFilters={() => setFilterSheetOpen(true)}
@@ -339,8 +408,10 @@ export default function DaybookPage({
         open={filterSheetOpen}
         onOpenChange={setFilterSheetOpen}
         value={filters}
-        onApply={setFilters}
+        onApply={handleApplyFilters}
         voucherTypeOptions={voucherTypeOptions}
+        showUserFilter={isAdminUser}
+        userOptions={userFilterOptions}
       />
     </div>
   );
