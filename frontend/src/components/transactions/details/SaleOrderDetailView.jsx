@@ -1,5 +1,15 @@
-import { ArrowRight, FileText, Printer, SquarePen, Truck, User2 } from "lucide-react";
+import {
+  ArrowRight,
+  Ban,
+  FileText,
+  Pencil,
+  Printer,
+  Share2,
+  Truck,
+  User2,
+} from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 import CancelVoucherDialog from "@/components/transactions/details/CancelVoucherDialog";
 import { Button } from "@/components/ui/button";
@@ -156,71 +166,116 @@ export default function SaleOrderDetailView({
     });
   };
 
+  const handleShare = async () => {
+    const shareText = [
+      `Sale order: ${saleOrder?.voucher_number || "--"}`,
+      `Date: ${formatDate(saleOrder?.date)}`,
+      `Customer: ${saleOrder?.party_snapshot?.name || "No customer"}`,
+      `Status: ${saleOrder?.status || "open"}`,
+      `Final amount: ${formatAmount(totals.final_amount)}`,
+    ].join("\n");
+
+    try {
+      if (navigator.share) {
+        await navigator.share({
+          title: `Sale order ${saleOrder?.voucher_number || ""}`.trim(),
+          text: shareText,
+        });
+        return;
+      }
+
+      await navigator.clipboard.writeText(shareText);
+      toast.success("Sale order details copied");
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        toast.error("Could not share sale order");
+      }
+    }
+  };
+
   return (
-    <div className="mx-auto flex w-full  flex-col gap-3 py-4 px-1">
-      <section className="overflow-hidden rounded-xl  border-white border-4 bg-[#757bc8] px-4 py-4 text-white shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div className="space-y-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-200/80">
+    <div className="mx-auto flex w-full flex-col gap-3 px-1 py-4">
+      <section className="overflow-hidden rounded-[15px] bg-[#004178] p-4 text-white shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <p className="text-[9px] font-extrabold uppercase tracking-[0.16em] text-sky-100/90">
               Sale Order
             </p>
-            <h1 className="text-xl font-semibold tracking-[0.01em]">
+            <h1 className="mt-1 truncate text-[18px] font-extrabold tracking-[0.01em]">
               {saleOrder.voucher_number}
             </h1>
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-slate-100/90">
-              <span>{formatDate(saleOrder.date)}</span>
-              <span className="text-slate-300">•</span>
-              <span>{saleOrder.party_snapshot?.name || "No party selected"}</span>
+            <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] text-sky-100">
+              <span className="shrink-0 whitespace-nowrap">
+                {formatDate(saleOrder.date)}
+              </span>
+              <span aria-hidden="true">•</span>
+              <span className="truncate">
+                {saleOrder.party_snapshot?.name || "No party selected"}
+              </span>
             </div>
           </div>
 
-          <div className="flex flex-col items-start gap-3 md:items-end">
-            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusTone}`}>
-              {saleOrder.status || "open"}
-            </span>
-            <div className="text-left md:text-right">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-200/75">
-                Final Amount
-              </p>
-              <p className="mt-1 text-2xl font-semibold">
-                {formatAmount(totals.final_amount)}
-              </p>
-            </div>
-          </div>
+          <span
+            className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-extrabold uppercase ${statusTone}`}
+          >
+            {saleOrder.status || "open"}
+          </span>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            className="bg-white text-slate-900 hover:bg-slate-100"
-            onClick={handlePrint}
-          >
-            <Printer className="h-3.5 w-3.5" />
-            Print
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="border-white/25 bg-white/10 text-white hover:bg-white/15"
-            disabled={!isOpen}
-            onClick={() => navigate(`/sale-orders/${saleOrder._id}/edit`)}
-          >
-            <SquarePen className="h-3.5 w-3.5" />
-            Edit
-          </Button>
-          <CancelVoucherDialog
-            label="Cancel"
-            title="Cancel sale order?"
-            description="This will mark the sale order as cancelled. This action can be reverted later if needed."
-            isCancelled={isCancelled}
-            disabled={!isOpen}
-            isLoading={isCancelling}
-            onConfirm={onCancel}
-          />
+        <div className="mt-4 border-t border-white/35 pt-3">
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-sky-100/90">
+            Final Amount
+          </p>
+          <p className="mt-1 text-[21px] font-extrabold">
+            {formatAmount(totals.final_amount)}
+          </p>
         </div>
       </section>
+
+      <div className="grid grid-cols-4 gap-2">
+        <Button
+          type="button"
+          size="sm"
+          className="h-11 min-w-0 rounded-2xl border border-[#004178] bg-[#004178] px-1.5 text-[11px] font-extrabold text-white hover:bg-[#003763]"
+          disabled={!isOpen}
+          onClick={() => navigate(`/sale-orders/${saleOrder._id}/edit`)}
+        >
+          <Pencil className="size-3.5" />
+          <span className="truncate">Edit</span>
+        </Button>
+        <CancelVoucherDialog
+          label="Cancel"
+          title="Cancel sale order?"
+          description="This will mark the sale order as cancelled. This action can be reverted later if needed."
+          isCancelled={isCancelled}
+          hideWhenCancelled={false}
+          disabled={!isOpen}
+          isLoading={isCancelling}
+          onConfirm={onCancel}
+          triggerIcon={Ban}
+          triggerClassName="h-11 min-w-0 rounded-2xl border border-rose-200 bg-rose-50 px-1.5 text-[11px] font-extrabold text-rose-700 hover:bg-rose-100"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-11 min-w-0 rounded-2xl border-[#004178] bg-white px-1.5 text-[11px] font-extrabold text-[#004178] hover:bg-sky-50 hover:text-[#004178]"
+          onClick={handlePrint}
+        >
+          <Printer className="size-3.5" />
+          <span className="truncate">Print</span>
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-11 min-w-0 rounded-2xl border-[#004178] bg-white px-1.5 text-[11px] font-extrabold text-[#004178] hover:bg-sky-50 hover:text-[#004178]"
+          onClick={handleShare}
+        >
+          <Share2 className="size-3.5" />
+          <span className="truncate">Share</span>
+        </Button>
+      </div>
 
       <div className="grid gap-3 md:grid-cols-4">
         <SummaryTile label="Party" value={saleOrder.party_snapshot?.name || "--"} tone="blue" />

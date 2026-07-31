@@ -35,6 +35,9 @@ export default function MobileShell({
   const showNoCompanyScreen =
     !isCheckingCompanies && !hasCompany && !isCompanyRegister;
 
+    // console.log(headerOptions);
+    
+
   return (
     <div className="min-h-screen bg-slate-50 md:hidden">
       <div className="mx-auto min-h-screen w-full max-w-md bg-white shadow-sm">

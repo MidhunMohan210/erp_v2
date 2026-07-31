@@ -43,7 +43,7 @@ export default function TransactionDetailPage({
   const voucherId = params[idParam] || params.voucherId || params.saleOrderId || null;
 
   useEffect(() => {
-    setHeaderOptions({ showMenuDots: false });
+    setHeaderOptions({ showMenuDots: false, prominent: true });
     return () => resetHeaderOptions();
   }, [resetHeaderOptions, setHeaderOptions]);
 
