@@ -12,7 +12,10 @@ import {
   useCompanyOptionsQuery,
 } from "@/hooks/queries/companyQueries";
 import { ROUTES } from "@/routes/paths";
-import { resetSaleOrderDraft } from "@/store/slices/transactionSlice";
+import {
+  clearSavedDaybookFilters,
+  resetSaleOrderDraft,
+} from "@/store/slices/transactionSlice";
 import { clearSaleOrderDraftStorage } from "@/utils/transactionStorage";
 
 import CompanyDrawer from "./home-layout/CompanyDrawer";
@@ -30,6 +33,25 @@ function isSaleOrderContextPath(pathname) {
     pathname === ROUTES.salesSelectItems ||
     /^\/sale-orders\/[^/]+\/edit$/.test(pathname)
   );
+}
+
+function isDaybookContextPath(pathname) {
+  if (!pathname) return false;
+
+  return (
+    pathname === ROUTES.daybook ||
+    pathname === ROUTES.convertedOrders ||
+    /^\/transactions\/[^/]+\/[^/]+$/.test(pathname)
+  );
+}
+
+function isBottomTabPath(pathname) {
+  return [
+    ROUTES.home,
+    ROUTES.mastersCompany,
+    ROUTES.mastersUsers,
+    ROUTES.settings,
+  ].includes(pathname);
 }
 
 // Keeps route-level header state and company selection state in one place.
@@ -114,6 +136,14 @@ function useHomeLayoutState() {
     ) {
       clearSaleOrderDraftStorage(transactionCompanyId || selectedCompanyId);
       dispatch(resetSaleOrderDraft());
+    }
+
+    if (
+      previousPathname !== currentPathname &&
+      isDaybookContextPath(previousPathname) &&
+      isBottomTabPath(currentPathname)
+    ) {
+      dispatch(clearSavedDaybookFilters());
     }
 
     previousPathnameRef.current = currentPathname;

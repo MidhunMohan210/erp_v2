@@ -601,6 +601,9 @@ export default function CashTransactionScreen({ voucher_type = "receipt" }) {
         onTransactionDateChange={setTransactionDate}
         selectedSeries={selectedSeries}
         onSelectedSeriesChange={setSelectedSeries}
+        cardTitle={voucher_type === "payment" ? "Payment" : "Receipt"}
+        cardSubtitle="Choose the transaction date and voucher number."
+        cardIcon={ReceiptText}
       />
 
       <main

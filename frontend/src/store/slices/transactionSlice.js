@@ -155,6 +155,7 @@ const initialState = {
   transactionDate: null,
   selectedSeries: null,
   taxType: "igst",
+  mailingName: "",
   despatchDetails: {
     title: "Despatch Details",
     challanNo: "",
@@ -194,6 +195,10 @@ const initialState = {
     amountWithAdditionalCharge: 0,
     finalAmount: 0,
     roundOff: 0,
+  },
+  daybookFilters: {
+    daybook: null,
+    convertedOrders: null,
   },
 };
 
@@ -324,9 +329,15 @@ const transactionSlice = createSlice({
     resetDespatchDetails(state) {
       state.despatchDetails = { ...initialState.despatchDetails };
     },
+    setMailingName(state, action) {
+      state.mailingName = action.payload ?? "";
+    },
     setParty(state, action) {
       const party = action.payload || null;
       state.party = party;
+      // Selecting or changing the party starts the editable mailing name from
+      // that party's current display name.
+      state.mailingName = party?.partyName || "";
       // Party selection drives tax type and therefore per-line tax calculation.
       // Changing party can change tax regime (IGST vs CGST/SGST), so all rows must be recomputed.
       state.taxType = party?.taxType || "igst";
@@ -338,6 +349,7 @@ const transactionSlice = createSlice({
     },
     clearParty(state) {
       state.party = null;
+      state.mailingName = "";
       // Clearing party reverts tax context to default IGST.
       state.taxType = "igst";
       state.items = state.items.map((item) => ({
@@ -412,6 +424,8 @@ const transactionSlice = createSlice({
       state.transactionDate = doc?.date || null;
       state.taxType = taxType;
       state.party = mapSaleOrderParty(doc);
+      state.mailingName =
+        doc?.mailing_name || doc?.party_snapshot?.name || "";
       state.items = Array.isArray(doc?.items)
         ? doc.items.map((row) => mapSaleOrderItem(row, taxType))
         : [];
@@ -476,6 +490,20 @@ const transactionSlice = createSlice({
       repriceAllItemsInternal(state);
       recalculateTotals(state);
     },
+    setSavedDaybookFilters(state, action) {
+      const key = action.payload?.key || "daybook";
+      state.daybookFilters[key] = action.payload?.filters || null;
+    },
+    clearSavedDaybookFilters(state, action) {
+      const key = action.payload?.key;
+
+      if (key) {
+        state.daybookFilters[key] = null;
+        return;
+      }
+
+      state.daybookFilters = { ...initialState.daybookFilters };
+    },
     resetSaleOrderDraft(state) {
       // Reset keeps structure stable while dropping transient transaction content.
       state.cmp_id = initialState.cmp_id;
@@ -483,6 +511,7 @@ const transactionSlice = createSlice({
       state.transactionDate = initialState.transactionDate;
       state.selectedSeries = initialState.selectedSeries;
       state.taxType = initialState.taxType;
+      state.mailingName = initialState.mailingName;
       state.despatchDetails = { ...initialState.despatchDetails };
       state.party = initialState.party;
       state.priceLevel = initialState.priceLevel;
@@ -500,6 +529,7 @@ export const {
   setVoucherType,
   setTransactionDate,
   setSelectedSeries,
+  setMailingName,
   setDespatchDetails,
   resetDespatchDetails,
   setParty,
@@ -513,6 +543,8 @@ export const {
   setPriceLevel,
   setPriceLevelObject,
   repriceAllItems,
+  setSavedDaybookFilters,
+  clearSavedDaybookFilters,
   resetSaleOrderDraft,
 } = transactionSlice.actions;
 

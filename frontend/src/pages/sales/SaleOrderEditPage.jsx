@@ -8,6 +8,7 @@ import TransactionHeader from "@/components/TransactionHeader";
 import AdditionalChargesSection from "@/components/sales/create/AdditionalChargesSection";
 import DetailsSection from "@/components/sales/create/DetailsSection";
 import ItemsSection from "@/components/sales/create/ItemsSection";
+import MailingNameSection from "@/components/sales/create/MailingNameSection";
 import PartySection from "@/components/sales/create/PartySection";
 import SummarySection from "@/components/sales/create/SummarySection";
 import { useUpdateSaleOrder } from "@/hooks/mutations/useUpdateSaleOrder";
@@ -36,7 +37,15 @@ export default function SaleOrderEditPage() {
   );
   const transaction = useSelector((state) => state.transaction);
   // Draft values read by shared create/edit sections.
-  const { party, items, despatchDetails, additionalCharges, totals, priceLevelObject } =
+  const {
+    party,
+    mailingName,
+    items,
+    despatchDetails,
+    additionalCharges,
+    totals,
+    priceLevelObject,
+  } =
     transaction;
 
   // Query original document for editing.
@@ -80,6 +89,7 @@ export default function SaleOrderEditPage() {
     const payload = saleOrderService.buildUpdateSaleOrderPayload({
       cmp_id: effectiveCmpId,
       taxType: transaction.taxType,
+      mailingName,
       party,
       items,
       despatchDetails,
@@ -179,6 +189,7 @@ export default function SaleOrderEditPage() {
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-4">
           <PartySection locked />
+          <MailingNameSection />
           <DetailsSection />
           <ItemsSection
             returnTo={ROUTES.saleOrderEdit.replace(":id", saleOrder._id)}

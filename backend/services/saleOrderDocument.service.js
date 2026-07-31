@@ -429,6 +429,10 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
       mobile: party?.mobileNumber || null,
       state: party?.state || null,
     },
+    mailing_name:
+      String(body?.mailingName ?? body?.mailing_name ?? "").trim() ||
+      party?.partyName ||
+      null,
     tax_type: normalizeTaxType(body),
     // Price context at transaction time (snapshot-friendly)
     price_level_id: priceLevelObject?._id || null,
@@ -455,8 +459,15 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
 // Note: this function intentionally recalculates totals from latest line items/charges.
 export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
   const priceLevelObject = normalizePriceLevelObject(data);
+  const requestedMailingName = data?.mailingName ?? data?.mailing_name;
 
   saleOrder.date = new Date(data.transactionDate);
+  saleOrder.mailing_name =
+    (requestedMailingName == null
+      ? saleOrder?.mailing_name
+      : String(requestedMailingName).trim()) ||
+    saleOrder?.party_snapshot?.name ||
+    null;
   saleOrder.tax_type = normalizeTaxType(data);
   saleOrder.price_level_id = priceLevelObject?._id || null;
   saleOrder.price_level_name =

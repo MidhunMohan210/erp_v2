@@ -18,6 +18,7 @@ export default function MobileTopHeader({
   const { logoutUser } = useLogoutUser();
   const searchOptions = headerOptions?.search;
   const showSearch = Boolean(searchOptions?.show ?? searchOptions);
+  const prominent = Boolean(headerOptions?.prominent);
 
   const effectiveHeaderOptions =
     isHome && forceShowOnHome
@@ -91,16 +92,43 @@ export default function MobileTopHeader({
   };
 
   return (
-    <header className="sticky top-0 z-20 bg-white px-4 pt-4 text-slate-900">
+    <header
+      className={`sticky top-0 z-20 bg-white px-4 text-slate-900 ${
+        prominent ? "pb-2 pt-4" : "pt-4"
+      }`}
+    >
       <div className="w-full">
-        <div className="relative flex w-full items-center justify-between">
-          <button type="button" onClick={onBack} aria-label="Go back">
-            <ChevronLeft className="h-4 w-4 font-extrabold text-blue-600" />
+        <div
+          className={`relative flex w-full items-center justify-between ${
+            prominent ? "min-h-7" : ""
+          }`}
+        >
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Go back"
+            className={
+              prominent
+                ? "inline-flex h-7 w-7 items-center justify-center"
+                : undefined
+            }
+          >
+            <ChevronLeft
+              className={`font-extrabold text-blue-600 ${
+                prominent ? "h-5 w-5" : "h-4 w-4"
+              }`}
+            />
           </button>
-          <h1 className="pointer-events-none absolute left-1/2 -translate-x-1/2 text-sm font-bold text-slate-900">
+          <h1
+            className={`pointer-events-none absolute left-1/2 -translate-x-1/2 text-slate-900 ${
+              prominent ? "text-sm font-bold" : "text-sm font-bold"
+            }`}
+          >
             {title}
           </h1>
-          <div className="flex min-w-9 justify-end">
+          <div
+            className={`flex justify-end ${prominent ? "min-w-8" : "min-w-9"}`}
+          >
             {effectiveHeaderOptions?.showMenuDots ? (
               <MobileHeaderActions
                 options={{ ...effectiveHeaderOptions, actionButtons: [] }}

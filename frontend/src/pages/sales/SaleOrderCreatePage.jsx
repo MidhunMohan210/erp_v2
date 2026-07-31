@@ -6,6 +6,7 @@ import { saleOrderService } from "@/api/services/saleOrder.service";
 import AdditionalChargesSection from "@/components/sales/create/AdditionalChargesSection";
 import DetailsSection from "@/components/sales/create/DetailsSection";
 import ItemsSection from "@/components/sales/create/ItemsSection";
+import MailingNameSection from "@/components/sales/create/MailingNameSection";
 import PartySection from "@/components/sales/create/PartySection";
 import SummarySection from "@/components/sales/create/SummarySection";
 import { useCreateSaleOrder } from "@/hooks/mutations/useCreateSaleOrder";
@@ -24,6 +25,7 @@ export default function SaleOrderCreatePage() {
   const cmp_id = useSelector((state) => state.company.selectedCompanyId);
   // Transaction draft pieces collected from individual sections.
   const party = useSelector((state) => state.transaction.party);
+  const mailingName = useSelector((state) => state.transaction.mailingName);
   const items = useSelector((state) => state.transaction.items);
   const despatchDetails = useSelector((state) => state.transaction.despatchDetails);
   const additionalCharges = useSelector((state) => state.transaction.additionalCharges);
@@ -85,6 +87,7 @@ export default function SaleOrderCreatePage() {
     const payload = saleOrderService.buildCreateSaleOrderPayload({
       cmp_id,
       taxType,
+      mailingName,
       party,
       items,
       despatchDetails,
@@ -119,6 +122,7 @@ export default function SaleOrderCreatePage() {
       >
         <div className="mx-auto flex max-w-5xl flex-col gap-4">
           <PartySection />
+          <MailingNameSection />
           <DetailsSection />
           <ItemsSection />
           <AdditionalChargesSection />

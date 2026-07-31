@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import app from "../../app.js";
 import SaleOrder from "../../Model/SaleOrder.js";
 import TransactionCounter from "../../Model/TransactionCounter.js";
+import User from "../../Model/UserSchema.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
 import { createTestCompany } from "../helpers/company.js";
@@ -32,6 +33,23 @@ const BASE_COMPANY = {
   pan: "ABCDE1234G",
   website: "https://sale-order-company.example",
 };
+
+async function createOwnedStaffUser({
+  owner,
+  userName = "Sale Order Staff",
+  email = "sale-order-staff@example.com",
+  mobileNumber = "9111111111",
+  password = "Password123",
+} = {}) {
+  return User.create({
+    userName,
+    email,
+    mobileNumber,
+    password,
+    role: "staff",
+    owner,
+  });
+}
 
 function buildPartySelection(party) {
   return {
@@ -90,6 +108,7 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
 
   return {
     cmp_id: String(baseContext.companyId),
+    mailingName: baseContext.party.partyName,
     transactionDate: "2026-06-29T00:00:00.000Z",
     tax_type: "igst",
     selectedSeries: {
@@ -392,6 +411,26 @@ describe("POST /api/sale-orders — DB side effects (assert after valid create)"
     expect(saleOrder).not.toBeNull();
     expect(String(saleOrder.cmp_id)).toBe(String(baseContext.companyId));
     expect(String(saleOrder.party_id)).toBe(String(baseContext.party._id));
+    expect(saleOrder.mailing_name).toBe(baseContext.party.partyName);
+  });
+
+  it("stores an edited mailing name independently from the party name", async () => {
+    const res = await createSaleOrderForTest({
+      mailingName: "Accounts Department",
+    });
+
+    const saleOrder = await SaleOrder.findById(res.body.data.saleOrder._id).lean();
+
+    expect(saleOrder.mailing_name).toBe("Accounts Department");
+    expect(saleOrder.party_snapshot.name).toBe(baseContext.party.partyName);
+  });
+
+  it("falls back to the party name when mailing name is blank", async () => {
+    const res = await createSaleOrderForTest({ mailingName: "   " });
+
+    const saleOrder = await SaleOrder.findById(res.body.data.saleOrder._id).lean();
+
+    expect(saleOrder.mailing_name).toBe(baseContext.party.partyName);
   });
 
   it("VoucherTimeline document created with matching voucher_id", async () => {
@@ -517,12 +556,63 @@ describe("GET /api/sale-orders/:saleOrderId", () => {
   });
 });
 
+describe("GET /api/vouchers", () => {
+  it("lets an admin filter daybook entries by the user who created them", async () => {
+    const staffUser = await createOwnedStaffUser({
+      owner: baseContext.userId,
+      userName: "Daybook Staff",
+      email: "daybook-staff@example.com",
+      mobileNumber: "9222222222",
+    });
+
+    const staffLogin = await request(app).post("/api/auth/Login").send({
+      identifier: "daybook-staff@example.com",
+      password: "Password123",
+    });
+
+    await createSaleOrderForTest({
+      transactionDate: "2026-06-10T00:00:00.000Z",
+      mailingName: "Admin Created",
+    });
+
+    const staffCreateRes = await postSaleOrder(
+      staffLogin.body.token,
+      buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+        transactionDate: "2026-06-11T00:00:00.000Z",
+        mailingName: "Staff Created",
+      }),
+    );
+
+    expect(staffCreateRes.status).toBe(201);
+
+    const res = await request(app)
+      .get("/api/vouchers")
+      .set("Authorization", `Bearer ${baseContext.token}`)
+      .query({
+        cmpId: String(baseContext.companyId),
+        from: "2026-06-01",
+        to: "2026-06-30",
+        voucherType: "saleOrder",
+        createdBy: String(staffUser._id),
+      });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.count).toBe(1);
+    expect(res.body.data.vouchers).toHaveLength(1);
+    expect(res.body.data.vouchers[0]._id).toBe(
+      staffCreateRes.body.data.saleOrder._id,
+    );
+  });
+});
+
 describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
   it("Update open order → 200, items/totals recalculated", async () => {
     const createRes = await createSaleOrderForTest();
 
     const res = await updateSaleOrderRequest(createRes.body.data.saleOrder._id, {
       transactionDate: "2026-07-01T00:00:00.000Z",
+      mailingName: "Updated Mailing Name",
       tax_type: "igst",
       items: [
         {
@@ -552,6 +642,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
     expect(saleOrder.totals.sub_total).toBe(450);
     expect(saleOrder.totals.total_tax_amount).toBe(81);
     expect(saleOrder.totals.final_amount).toBe(531);
+    expect(saleOrder.mailing_name).toBe("Updated Mailing Name");
   });
 
   it("Sending new party in update body → party_id and party_snapshot must NOT change (frozen after create)", async () => {

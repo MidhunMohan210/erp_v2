@@ -19,8 +19,13 @@ export default function CancelVoucherDialog({
   warning,
   disabled = false,
   isCancelled = false,
+  hideWhenCancelled = true,
   isLoading = false,
   onConfirm,
+  triggerClassName,
+  triggerIcon: TriggerIcon,
+  triggerSize = "sm",
+  triggerVariant = "destructive",
 }) {
   const [open, setOpen] = useState(false);
 
@@ -30,7 +35,7 @@ export default function CancelVoucherDialog({
     setOpen(false);
   };
 
-  if (isCancelled) {
+  if (isCancelled && hideWhenCancelled) {
     return null;
   }
 
@@ -38,12 +43,13 @@ export default function CancelVoucherDialog({
     <>
       <Button
         type="button"
-        size="sm"
-        variant="destructive"
-        className="bg-rose-600 text-white hover:bg-rose-700"
+        size={triggerSize}
+        variant={triggerVariant}
+        className={triggerClassName || "bg-rose-600 text-white hover:bg-rose-700"}
         disabled={disabled || isLoading}
         onClick={() => setOpen(true)}
       >
+        {TriggerIcon ? <TriggerIcon aria-hidden="true" /> : null}
         {isLoading ? "Cancelling..." : label}
       </Button>
 

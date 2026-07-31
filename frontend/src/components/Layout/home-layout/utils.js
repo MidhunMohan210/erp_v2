@@ -16,6 +16,15 @@ export function getInitials(name) {
 
 export function getPageTitle(pathname) {
   if (routeTitleMap[pathname]) return routeTitleMap[pathname];
+  if (
+    /^\/transactions\/saleOrder\/[^/]+$/.test(pathname) ||
+    /^\/sale-orders\/[^/]+$/.test(pathname)
+  ) {
+    return "Sale Order Details";
+  }
+  if (/^\/sale-orders\/[^/]+\/edit$/.test(pathname)) {
+    return "Edit Sale Order";
+  }
   if (pathname.startsWith("/outstanding/party/")) {
     return "Outstanding Details";
   }
