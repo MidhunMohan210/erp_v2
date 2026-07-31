@@ -90,6 +90,7 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
 
   return {
     cmp_id: String(baseContext.companyId),
+    mailingName: baseContext.party.partyName,
     transactionDate: "2026-06-29T00:00:00.000Z",
     tax_type: "igst",
     selectedSeries: {
@@ -392,6 +393,26 @@ describe("POST /api/sale-orders — DB side effects (assert after valid create)"
     expect(saleOrder).not.toBeNull();
     expect(String(saleOrder.cmp_id)).toBe(String(baseContext.companyId));
     expect(String(saleOrder.party_id)).toBe(String(baseContext.party._id));
+    expect(saleOrder.mailing_name).toBe(baseContext.party.partyName);
+  });
+
+  it("stores an edited mailing name independently from the party name", async () => {
+    const res = await createSaleOrderForTest({
+      mailingName: "Accounts Department",
+    });
+
+    const saleOrder = await SaleOrder.findById(res.body.data.saleOrder._id).lean();
+
+    expect(saleOrder.mailing_name).toBe("Accounts Department");
+    expect(saleOrder.party_snapshot.name).toBe(baseContext.party.partyName);
+  });
+
+  it("falls back to the party name when mailing name is blank", async () => {
+    const res = await createSaleOrderForTest({ mailingName: "   " });
+
+    const saleOrder = await SaleOrder.findById(res.body.data.saleOrder._id).lean();
+
+    expect(saleOrder.mailing_name).toBe(baseContext.party.partyName);
   });
 
   it("VoucherTimeline document created with matching voucher_id", async () => {
@@ -523,6 +544,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
 
     const res = await updateSaleOrderRequest(createRes.body.data.saleOrder._id, {
       transactionDate: "2026-07-01T00:00:00.000Z",
+      mailingName: "Updated Mailing Name",
       tax_type: "igst",
       items: [
         {
@@ -552,6 +574,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
     expect(saleOrder.totals.sub_total).toBe(450);
     expect(saleOrder.totals.total_tax_amount).toBe(81);
     expect(saleOrder.totals.final_amount).toBe(531);
+    expect(saleOrder.mailing_name).toBe("Updated Mailing Name");
   });
 
   it("Sending new party in update body → party_id and party_snapshot must NOT change (frozen after create)", async () => {

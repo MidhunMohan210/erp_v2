@@ -154,6 +154,9 @@ const SaleOrderSchema = new Schema(
     // `party_snapshot` intentionally denormalizes key fields to preserve historical context.
     party_id: { type: Schema.Types.ObjectId, ref: "Party", required: true },
     party_snapshot: { type: PartySnapshotSchema, required: true },
+    // Editable addressee used for correspondence. Legacy orders may not have this
+    // field, so read layers fall back to `party_snapshot.name`.
+    mailing_name: { type: String, trim: true, maxlength: 200, default: null },
 
     // Tax type — derived from company state vs party state
     tax_type: { type: String, enum: ["igst", "cgst_sgst"], required: true },

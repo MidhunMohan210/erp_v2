@@ -6,7 +6,7 @@
  *   required?: boolean,
  *   subtitle?: string,
  *   icon?: React.ComponentType,
- *   tone?: "slate"|"blue"|"amber"|"teal",
+ *   tone?: "slate"|"blue"|"amber"|"teal"|"violet",
  *   children: React.ReactNode
  * }} props
  * @returns {JSX.Element}
@@ -35,6 +35,10 @@ export default function SectionCard({
     teal: {
       icon: "border-teal-200 bg-teal-50 text-teal-700",
       card: "border-teal-100 bg-white",
+    },
+    violet: {
+      icon: "border-violet-200 bg-violet-50 text-violet-700",
+      card: "border-violet-100 bg-white",
     },
   };
   const currentTone = tones[tone] || tones.slate;

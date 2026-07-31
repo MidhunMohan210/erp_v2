@@ -125,6 +125,8 @@ export default function SaleOrderDetailView({
   const totals = saleOrder?.totals || {};
   const items = saleOrder?.items || [];
   const additionalCharges = saleOrder?.additional_charges || [];
+  const mailingName =
+    saleOrder?.mailing_name || saleOrder?.party_snapshot?.name || "--";
   const isCancelled = saleOrder?.status === "cancelled";
   const isOpen = saleOrder?.status === "open";
   const statusTone =
@@ -220,8 +222,9 @@ export default function SaleOrderDetailView({
         </div>
       </section>
 
-      <div className="grid gap-3 md:grid-cols-3">
+      <div className="grid gap-3 md:grid-cols-4">
         <SummaryTile label="Party" value={saleOrder.party_snapshot?.name || "--"} tone="blue" />
+        <SummaryTile label="Mailing Name" value={mailingName} tone="blue" />
         <SummaryTile label="Date" value={formatDate(saleOrder.date)} />
         <SummaryTile label="Amount" value={formatAmount(totals.final_amount)} tone="teal" />
       </div>
@@ -285,9 +288,22 @@ export default function SaleOrderDetailView({
         <div className="space-y-3">
           <SectionCard title="Party Details" icon={User2}>
             <div className="space-y-2">
-              <p className="text-[13px] font-semibold text-slate-900">
-                {saleOrder.party_snapshot?.name || "--"}
-              </p>
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Mailing name
+                </p>
+                <p className="mt-1 text-[13px] font-semibold text-slate-900">
+                  {mailingName}
+                </p>
+              </div>
+              <div className="border-t border-slate-100 pt-2">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  Party
+                </p>
+                <p className="text-[13px] font-semibold text-slate-900">
+                  {saleOrder.party_snapshot?.name || "--"}
+                </p>
+              </div>
               {partyLines.length > 0 ? (
                 partyLines.map((line) => (
                   <p key={line} className="text-[12px] text-slate-600">
