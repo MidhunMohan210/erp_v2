@@ -266,6 +266,7 @@ function mapSaleOrderAdditionalCharge(charge = {}, taxType = "igst") {
   // Converts saved additional-charge schema -> UI row and re-derives tax/final value.
   return normalizeAdditionalCharge({
     _id: charge?._id || null,
+    masterChargeId: charge?.masterChargeId || charge?.additional_charge_id || null,
     option: charge?.option || "",
     value: charge?.value ?? "",
     action: charge?.action === "subtract" ? "subtract" : "add",

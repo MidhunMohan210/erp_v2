@@ -89,7 +89,8 @@ export function buildCreateSaleOrderPayload({
     // Document-level sections
     despatchDetails,
     additionalCharges: (additionalCharges || []).map((charge) => ({
-      _id: charge?._id ?? null,
+      _id: charge?.masterChargeId ?? charge?._id ?? null,
+      masterChargeId: charge?.masterChargeId ?? charge?._id ?? null,
       option: charge?.option || "",
       value: Number(charge?.value) || 0,
       action: charge?.action === "subtract" ? "subtract" : "add",
