@@ -1,11 +1,12 @@
 import { useMemo, useState } from "react";
-import { ChevronRight, ReceiptText } from "lucide-react";
+import { ChevronRight, ReceiptText, Trash2 } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 
 import {
   buildAdditionalChargeSelection,
   calculateAdditionalChargeRow,
   formatCurrency,
+  matchesAdditionalChargeSelection,
 } from "@/components/sales/create/helpers";
 import SectionCard from "@/components/sales/create/SectionCard";
 import { Button } from "@/components/ui/button";
@@ -50,22 +51,34 @@ export default function AdditionalChargesSection() {
 
   const toggleCharge = (charge) => {
     setDraftCharges((current) => {
-      const exists = current.find((item) => item._id === charge?._id);
+      const exists = current.find((item) =>
+        matchesAdditionalChargeSelection(item, charge),
+      );
       if (exists) {
-        return current.filter((item) => item._id !== charge?._id);
+        return current.filter(
+          (item) => !matchesAdditionalChargeSelection(item, charge),
+        );
       }
 
       return [...current, buildAdditionalChargeSelection(charge, null, taxType)];
     });
   };
 
-  const updateDraftCharge = (chargeId, changes) => {
+  const removeDraftCharge = (charge) => {
+    setDraftCharges((current) =>
+      current.filter((row) => !matchesAdditionalChargeSelection(row, charge)),
+    );
+  };
+
+  const updateDraftCharge = (charge, changes) => {
     setDraftCharges((current) =>
       current.map((row) =>
-        row._id === chargeId
+        matchesAdditionalChargeSelection(row, charge)
           ? calculateAdditionalChargeRow({
               ...row,
               ...changes,
+              masterChargeId:
+                row?.masterChargeId || charge?._id || row?._id || null,
             }, taxType)
           : row,
       ),
@@ -78,8 +91,9 @@ export default function AdditionalChargesSection() {
     setOpen(false);
   };
 
-  const getSelectedDraft = (chargeId) =>
-    draftCharges.find((row) => row._id === chargeId) || null;
+  const getSelectedDraft = (charge) =>
+    draftCharges.find((row) => matchesAdditionalChargeSelection(row, charge)) ||
+    null;
 
   const handleOpenChange = (nextOpen) => {
     if (nextOpen) {
@@ -159,7 +173,7 @@ export default function AdditionalChargesSection() {
             )}
 
             {charges.map((charge) => {
-              const selected = getSelectedDraft(charge?._id);
+              const selected = getSelectedDraft(charge);
 
               return (
                 <div
@@ -214,7 +228,7 @@ export default function AdditionalChargesSection() {
                           type="number"
                           value={selected.value}
                           onChange={(event) =>
-                            updateDraftCharge(charge._id, {
+                            updateDraftCharge(charge, {
                               value: event.target.value,
                             })
                           }
@@ -229,7 +243,7 @@ export default function AdditionalChargesSection() {
                         <select
                           value={selected.action}
                           onChange={(event) =>
-                            updateDraftCharge(charge._id, {
+                            updateDraftCharge(charge, {
                               action: event.target.value,
                             })
                           }
@@ -248,6 +262,16 @@ export default function AdditionalChargesSection() {
                       </div>
                       <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-700 md:col-span-2">
                         Final impact: {formatCurrency(selected.finalValue)}
+                      </div>
+                      <div className="md:col-span-2">
+                        <button
+                          type="button"
+                          onClick={() => removeDraftCharge(charge)}
+                          className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-white px-2.5 py-1 text-[11px] font-medium text-red-600 transition hover:bg-red-50"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Remove
+                        </button>
                       </div>
                     </div>
                   )}
