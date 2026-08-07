@@ -2,6 +2,13 @@ import mongoose from "mongoose";
 
 const { Schema } = mongoose;
 
+const isPositiveNumber = (value) => {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0;
+};
+
+const hasText = (value) => typeof value === "string" && value.trim().length > 0;
+
 // Optional: your existing date conversion helper
 function convertToUTCMidnight(value) {
   if (!value) return null;
@@ -124,7 +131,7 @@ const productSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "Subcategory",
     },
-    unit: {
+    base_unit: {
       type: String,
       required: true,
       trim: true,
@@ -132,12 +139,15 @@ const productSchema = new Schema(
     alt_unit: {
       type: String,
       trim: true,
+      default: null,
     },
-    unit_conversion: {
+    base_denominator: {
       type: Number,
+      default: null,
     },
-    alt_unit_conversion: {
+    alt_conversion: {
       type: Number,
+      default: null,
     },
     hsn_code: {
       type: String,
@@ -180,6 +190,36 @@ const productSchema = new Schema(
   },
   { timestamps: true }
 );
+
+productSchema.pre("validate", function validateUnitContract() {
+  const hasAltUnit = hasText(this.alt_unit);
+  const hasBaseDenominator =
+    this.base_denominator !== null && this.base_denominator !== undefined;
+  const hasAltConversion =
+    this.alt_conversion !== null && this.alt_conversion !== undefined;
+
+  if (hasAltUnit) {
+    if (
+      !hasBaseDenominator ||
+      !hasAltConversion ||
+      !isPositiveNumber(this.base_denominator) ||
+      !isPositiveNumber(this.alt_conversion)
+    ) {
+      this.invalidate(
+        "alt_unit",
+        "base_denominator and alt_conversion must be greater than 0 when alt_unit is present",
+      );
+    }
+    return;
+  }
+
+  if (hasBaseDenominator || hasAltConversion) {
+    this.invalidate(
+      "alt_unit",
+      "base_denominator and alt_conversion must be null when alt_unit is not present",
+    );
+  }
+});
 
 // Indexes
 productSchema.index(

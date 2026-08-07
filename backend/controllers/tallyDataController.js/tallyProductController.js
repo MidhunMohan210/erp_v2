@@ -10,6 +10,57 @@ import {
 } from "../../Model/ProductSubDetails.js";
 import PriceLevel from "../../Model/PriceLevel.js";
 
+const isPositiveNumber = (value) => {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue > 0;
+};
+
+const normalizeUnitConfig = (product) => {
+  const normalizedBaseUnit =
+    typeof product?.base_unit === "string" ? product.base_unit.trim() : "";
+  const normalizedAltUnit =
+    typeof product?.alt_unit === "string" && product.alt_unit.trim()
+      ? product.alt_unit.trim()
+      : null;
+  const hasBaseDenominator =
+    product?.base_denominator !== null &&
+    product?.base_denominator !== undefined;
+  const hasAltConversion =
+    product?.alt_conversion !== null &&
+    product?.alt_conversion !== undefined;
+
+  const hasValidBaseDenominator =
+    hasBaseDenominator && isPositiveNumber(product.base_denominator);
+  const hasValidAltConversion =
+    hasAltConversion && isPositiveNumber(product.alt_conversion);
+
+  if (!normalizedAltUnit && !hasBaseDenominator && !hasAltConversion) {
+    return {
+      isValid: true,
+      base_unit: normalizedBaseUnit,
+      alt_unit: null,
+      base_denominator: null,
+      alt_conversion: null,
+    };
+  }
+
+  if (normalizedAltUnit && hasValidBaseDenominator && hasValidAltConversion) {
+    return {
+      isValid: true,
+      base_unit: normalizedBaseUnit,
+      alt_unit: normalizedAltUnit,
+      base_denominator: Number(product.base_denominator),
+      alt_conversion: Number(product.alt_conversion),
+    };
+  }
+
+  return {
+    isValid: false,
+    reason:
+      "Invalid unit configuration: alt_unit, base_denominator, and alt_conversion must be provided together; conversions must be finite numbers greater than 0",
+  };
+};
+
 /**
  * Tally Product sync controller.
  *
@@ -78,6 +129,12 @@ export const addProducts = async (req, res) => {
       if (!rawPrimaryUserId) missingFields.push("Primary_user_id");
       if (!rawProductMasterId) missingFields.push("product_master_id");
       if (!product?.product_name) missingFields.push("product_name");
+      if (
+        typeof product?.base_unit !== "string" ||
+        product.base_unit.trim().length === 0
+      ) {
+        missingFields.push("base_unit");
+      }
 
       if (missingFields.length > 0) {
         results.skipped.push({
@@ -91,7 +148,20 @@ export const addProducts = async (req, res) => {
         continue;
       }
 
-      validProducts.push({ product, itemIndex });
+      const unitConfig = normalizeUnitConfig(product);
+      if (!unitConfig.isValid) {
+        results.skipped.push({
+          item: itemIndex,
+          reason: unitConfig.reason,
+          data: {
+            product_master_id: rawProductMasterId,
+            product_name: product?.product_name || null,
+          },
+        });
+        continue;
+      }
+
+      validProducts.push({ product, itemIndex, unitConfig });
     }
 
     if (validProducts.length === 0) {
@@ -246,10 +316,11 @@ export const addProducts = async (req, res) => {
 
     // 7) Build operations array, skipping when brand/category/subcategory/priceLevel not found
     const ops = [];
+    const legacyUnitCleanupIds = [];
     const BATCH_SIZE = 200;
 
     for (const vp of validProducts) {
-      const { product, itemIndex } = vp;
+      const { product, itemIndex, unitConfig } = vp;
 
       // 7.a Resolve brand (optional, but if provided must exist)
       let brandObjectId = null;
@@ -352,6 +423,10 @@ export const addProducts = async (req, res) => {
         ...product,
         cmp_id: cmpObjectId,
         Primary_user_id: primaryUserObjectId,
+        base_unit: unitConfig.base_unit,
+        alt_unit: unitConfig.alt_unit,
+        base_denominator: unitConfig.base_denominator,
+        alt_conversion: unitConfig.alt_conversion,
         brand: brandObjectId,
         category: categoryObjectId,
         sub_category: subcategoryObjectId,
@@ -368,6 +443,7 @@ export const addProducts = async (req, res) => {
       const existingProduct = existingProductMap[product.product_master_id];
 
       if (existingProduct) {
+        legacyUnitCleanupIds.push(existingProduct._id);
         ops.push({
           updateOne: {
             filter: {
@@ -411,6 +487,19 @@ export const addProducts = async (req, res) => {
           data: {},
         });
       }
+    }
+
+    if (legacyUnitCleanupIds.length > 0) {
+      await productModel.collection.updateMany(
+        { _id: { $in: legacyUnitCleanupIds } },
+        {
+          $unset: {
+            unit: "",
+            unit_conversion: "",
+            alt_unit_conversion: "",
+          },
+        },
+      );
     }
 
     // 9) Build final response via buildBulkResponse

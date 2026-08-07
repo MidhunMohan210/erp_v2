@@ -22,7 +22,10 @@ const buildTallyProductItem = (overrides = {}) => ({
   cmp_id: new mongoose.Types.ObjectId().toString(),
   product_master_id: "PRD-1001",
   product_name: "Sample Product",
-  unit: "Nos",
+  base_unit: "Nos",
+  alt_unit: null,
+  base_denominator: null,
+  alt_conversion: null,
   brand: "BR-1001",
   category: "CAT-1001",
   sub_category: "SUBCAT-1001",
@@ -161,6 +164,56 @@ const createPriceLevel = async ({
     lastUpdatedBySource: "test-suite",
     ...overrides,
   });
+};
+
+const createTallyProductDependencies = async (context, suffix = "UNIT") => {
+  await createDefaultGodown({
+    cmp_id: context.company._id,
+    Primary_user_id: context.user._id,
+    godown_id: `GDN-${suffix}`,
+  });
+  await createBrand({
+    cmp_id: context.company._id,
+    Primary_user_id: context.user._id,
+    brand_id: `BR-${suffix}`,
+  });
+  const category = await createCategory({
+    cmp_id: context.company._id,
+    Primary_user_id: context.user._id,
+    category_id: `CAT-${suffix}`,
+  });
+  await createSubcategory({
+    cmp_id: context.company._id,
+    Primary_user_id: context.user._id,
+    category: category._id,
+    subcategory_id: `SUBCAT-${suffix}`,
+  });
+  await createPriceLevel({
+    cmp_id: context.company._id,
+    Primary_user_id: context.user._id,
+    pricelevel_id: `PL-${suffix}`,
+  });
+
+  return {
+    brand: `BR-${suffix}`,
+    category: `CAT-${suffix}`,
+    sub_category: `SUBCAT-${suffix}`,
+    priceLevels: [
+      {
+        priceLevel: `PL-${suffix}`,
+        priceRate: 120,
+        priceDisc: 0,
+        applicabledt: "2026-06-01",
+      },
+    ],
+  };
+};
+
+const expectUnitFields = (product, expected) => {
+  expect(product.base_unit).toBe(expected.base_unit);
+  expect(product.alt_unit).toBe(expected.alt_unit);
+  expect(product.base_denominator).toBe(expected.base_denominator);
+  expect(product.alt_conversion).toBe(expected.alt_conversion);
 };
 
 describe("POST /api/tally/products", () => {
@@ -433,6 +486,422 @@ describe("POST /api/tally/products", () => {
     );
     expect(productInDb.GodownList[0].batch).toBe("Primary Batch");
     expect(productInDb.GodownList[0].balance_stock).toBe(0);
+  });
+
+  it("should save product alternate unit fields from Tally", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Unit Admin A",
+        mobileNumber: "9910010101",
+        email: "tally-product-unit-admin-a@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "UNIT-A");
+
+    const unitFields = {
+      base_unit: "Box",
+      alt_unit: "Piece",
+      base_denominator: 1,
+      alt_conversion: 12,
+    };
+
+    const res = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-A",
+          ...dependencies,
+          ...unitFields,
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-A",
+    }).lean();
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("success");
+    expectUnitFields(productInDb, unitFields);
+  });
+
+  it("should normalize numeric string alternate unit conversions from Tally", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Numeric String Unit Admin",
+        mobileNumber: "9910010105",
+        email: "tally-product-numeric-string-unit-admin@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(
+      context,
+      "UNIT-NUMERIC-STRING",
+    );
+
+    const res = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-NUMERIC-STRING",
+          ...dependencies,
+          base_unit: "Box",
+          alt_unit: " Piece ",
+          base_denominator: "1",
+          alt_conversion: "12",
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-NUMERIC-STRING",
+    }).lean();
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("success");
+    expectUnitFields(productInDb, {
+      base_unit: "Box",
+      alt_unit: "Piece",
+      base_denominator: 1,
+      alt_conversion: 12,
+    });
+  });
+
+  it("should save reverse orientation alternate unit fields from Tally", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Unit Admin B",
+        mobileNumber: "9910010102",
+        email: "tally-product-unit-admin-b@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "UNIT-B");
+
+    const unitFields = {
+      base_unit: "Piece",
+      alt_unit: "Box",
+      base_denominator: 12,
+      alt_conversion: 1,
+    };
+
+    const res = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-B",
+          ...dependencies,
+          ...unitFields,
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-B",
+    }).lean();
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("success");
+    expectUnitFields(productInDb, unitFields);
+  });
+
+  it("should save product without alternate unit fields from Tally", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Unit Admin C",
+        mobileNumber: "9910010103",
+        email: "tally-product-unit-admin-c@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "UNIT-C");
+
+    const unitFields = {
+      base_unit: "Nos",
+      alt_unit: null,
+      base_denominator: null,
+      alt_conversion: null,
+    };
+
+    const res = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-C",
+          ...dependencies,
+          ...unitFields,
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-C",
+    }).lean();
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("success");
+    expectUnitFields(productInDb, unitFields);
+  });
+
+  it("should clear alternate unit fields when an existing product loses alternate unit", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Unit Admin D",
+        mobileNumber: "9910010104",
+        email: "tally-product-unit-admin-d@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "UNIT-D");
+
+    const firstRes = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-D",
+          ...dependencies,
+          base_unit: "Box",
+          alt_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+        }),
+      ],
+    });
+
+    expect(firstRes.status).toBe(201);
+
+    const createdProduct = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-D",
+    }).lean();
+
+    await Product.collection.updateOne(
+      { _id: createdProduct._id },
+      {
+        $set: {
+          unit: "Box",
+          unit_conversion: 1,
+          alt_unit_conversion: 12,
+        },
+      },
+    );
+
+    const secondRes = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-D",
+          ...dependencies,
+          base_unit: "Box",
+          alt_unit: null,
+          base_denominator: null,
+          alt_conversion: null,
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-D",
+    }).lean();
+    const rawProductInDb = await Product.collection.findOne({
+      _id: productInDb._id,
+    });
+
+    expect(secondRes.status).toBe(201);
+    expect(secondRes.body.summary).toMatchObject({
+      insertedCount: 0,
+      updatedCount: 1,
+    });
+    expectUnitFields(productInDb, {
+      base_unit: "Box",
+      alt_unit: null,
+      base_denominator: null,
+      alt_conversion: null,
+    });
+    expect(rawProductInDb.unit).toBeUndefined();
+    expect(rawProductInDb.unit_conversion).toBeUndefined();
+    expect(rawProductInDb.alt_unit_conversion).toBeUndefined();
+  });
+
+  it.each([
+    ["alt_unit exists, conversions absent", "ALT-NO-CONV", "9910010201", "Piece", null, null],
+    ["alt_unit exists, alt_conversion missing", "ALT-MISSING-ALT", "9910010202", "Piece", 1, null],
+    ["alt_unit exists, base_denominator missing", "ALT-MISSING-BASE", "9910010203", "Piece", null, 12],
+    ["alt_unit absent, both conversions present", "NO-ALT-BOTH", "9910010204", null, 10, 1],
+    ["alt_unit absent, only base_denominator present", "NO-ALT-BASE", "9910010205", null, 10, null],
+    ["alt_unit absent, only alt_conversion present", "NO-ALT-CONV", "9910010206", null, null, 1],
+    ["zero base_denominator", "ZERO-BASE", "9910010207", "Piece", 0, 12],
+    ["zero alt_conversion", "ZERO-ALT", "9910010208", "Piece", 1, 0],
+    ["negative base_denominator", "NEG-BASE", "9910010209", "Piece", -1, 12],
+    ["negative alt_conversion", "NEG-ALT", "9910010210", "Piece", 1, -12],
+    ["non-numeric conversion", "NON-NUMERIC", "9910010211", "Piece", "abc", 12],
+    ["blank alt_unit with conversions", "BLANK-ALT", "9910010212", "   ", 10, 1],
+  ])(
+    "should skip product with invalid alternate unit configuration: %s",
+    async (
+      _label,
+      testId,
+      mobileNumber,
+      alt_unit,
+      base_denominator,
+      alt_conversion,
+    ) => {
+      const context = await setupTallyIntegrationContext({
+        userOverrides: {
+          userName: `Tally Product Invalid Unit Admin ${testId}`,
+          mobileNumber,
+          email: `tally-product-invalid-unit-${testId.toLowerCase()}@example.com`,
+        },
+      });
+      const dependencies = await createTallyProductDependencies(
+        context,
+        `INVALID-${testId}`,
+      );
+
+      const res = await postTallyProducts({
+        cmpId: context.company._id,
+        data: [
+          buildTallyProductItem({
+            Primary_user_id: context.user._id.toString(),
+            cmp_id: context.company._id.toString(),
+            product_master_id: `PRD-TALLY-INVALID-${testId}`,
+            ...dependencies,
+            base_unit: "Box",
+            alt_unit,
+            base_denominator,
+            alt_conversion,
+          }),
+        ],
+      });
+
+      const productCount = await Product.countDocuments({
+        cmp_id: context.company._id,
+        Primary_user_id: context.user._id,
+        product_master_id: `PRD-TALLY-INVALID-${testId}`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("failure");
+      expect(res.body.summary).toMatchObject({
+        totalReceived: 1,
+        insertedCount: 0,
+        updatedCount: 0,
+        skippedCount: 1,
+      });
+      expect(res.body.skippedItems[0]).toMatchObject({
+        item: 1,
+        reason:
+          "Invalid unit configuration: alt_unit, base_denominator, and alt_conversion must be provided together; conversions must be finite numbers greater than 0",
+      });
+      expect(productCount).toBe(0);
+    },
+  );
+
+  it("should continue processing valid products when one row has invalid unit configuration", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Mixed Unit Admin",
+        mobileNumber: "9910010213",
+        email: "tally-product-mixed-unit-admin@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "MIXED");
+
+    const res = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-MIXED-VALID-1",
+          product_name: "Mixed Valid Product One",
+          ...dependencies,
+          base_unit: "Box",
+          alt_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+        }),
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-MIXED-INVALID",
+          product_name: "Mixed Invalid Product",
+          ...dependencies,
+          base_unit: "Nos",
+          alt_unit: null,
+          base_denominator: 10,
+          alt_conversion: 1,
+        }),
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-MIXED-VALID-2",
+          product_name: "Mixed Valid Product Two",
+          ...dependencies,
+          base_unit: "Nos",
+          alt_unit: null,
+          base_denominator: null,
+          alt_conversion: null,
+        }),
+      ],
+    });
+
+    const importedProducts = await Product.find({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: {
+        $in: [
+          "PRD-TALLY-MIXED-VALID-1",
+          "PRD-TALLY-MIXED-INVALID",
+          "PRD-TALLY-MIXED-VALID-2",
+        ],
+      },
+    })
+      .sort({ product_master_id: 1 })
+      .lean();
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("partial_success");
+    expect(res.body.summary).toEqual({
+      totalReceived: 3,
+      insertedCount: 2,
+      updatedCount: 0,
+      successCount: 2,
+      skippedCount: 1,
+    });
+    expect(res.body.skippedItems).toHaveLength(1);
+    expect(res.body.skippedItems[0]).toMatchObject({
+      item: 2,
+      reason:
+        "Invalid unit configuration: alt_unit, base_denominator, and alt_conversion must be provided together; conversions must be finite numbers greater than 0",
+      data: {
+        product_master_id: "PRD-TALLY-MIXED-INVALID",
+        product_name: "Mixed Invalid Product",
+      },
+    });
+    expect(importedProducts.map((product) => product.product_master_id)).toEqual([
+      "PRD-TALLY-MIXED-VALID-1",
+      "PRD-TALLY-MIXED-VALID-2",
+    ]);
   });
 
   it("should update existing product when same product_master_id is imported again", async () => {
