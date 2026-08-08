@@ -6,6 +6,34 @@ function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
+function roundQuantity(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return 0;
+  return Math.round((number + Number.EPSILON) * 1_000_000) / 1_000_000;
+}
+
+function hasAlternateUnitConfig(item) {
+  const alternateUnit = String(item?.alternateUnit ?? "").trim();
+  const baseDenominator = Number(item?.baseDenominator);
+  const altConversion = Number(item?.altConversion);
+
+  return (
+    alternateUnit.length > 0 &&
+    Number.isFinite(baseDenominator) &&
+    baseDenominator > 0 &&
+    Number.isFinite(altConversion) &&
+    altConversion > 0
+  );
+}
+
+function calculateAlternateQty(baseQty, item) {
+  if (!hasAlternateUnitConfig(item)) return null;
+
+  return roundQuantity(
+    toNumber(baseQty) * (Number(item?.altConversion) / Number(item?.baseDenominator)),
+  );
+}
+
 export function resolveTaxType(companyState, partyState) {
   // Same-state -> intra-state tax split, else IGST.
   if (!companyState || !partyState) return "igst";
@@ -128,6 +156,7 @@ export function calculateAdditionalChargeTotals(
 export function calculateItemAmounts(item, taxType = "igst") {
   // This is the core per-row pricing engine used across create/edit flows.
   // All UI totals are derived from this function, not manual arithmetic in components.
+  const actualQty = toNumber(item?.actualQty ?? item?.actual_qty);
   const billedQty = toNumber(item?.billedQty ?? item?.billed_qty ?? item?.quantity);
   const rate = toNumber(item?.rate);
   const discountType = item?.discountType || "percentage";
@@ -187,6 +216,7 @@ export function calculateItemAmounts(item, taxType = "igst") {
   return {
     ...item,
     taxType,
+    actualQty,
     billedQty,
     rate,
     taxRate: roundMoney(applicableGstRate),
@@ -205,6 +235,8 @@ export function calculateItemAmounts(item, taxType = "igst") {
     cessAmount: roundMoney(cessAmount),
     addlCessAmount: roundMoney(addlCessAmount),
     totalAmount: roundMoney(totalAmount),
+    alternateActualQty: calculateAlternateQty(actualQty, item),
+    alternateBilledQty: calculateAlternateQty(billedQty, item),
   };
 }
 
@@ -288,7 +320,13 @@ export function buildItemForCalculation(stagedItem) {
   // Convert staged item object to minimal normalized shape consumed by calculator.
   return {
     billedQty: toNumber(stagedItem?.billedQty ?? stagedItem?.quantity),
+    actualQty: toNumber(stagedItem?.actualQty ?? stagedItem?.quantity),
     rate: toNumber(stagedItem?.rate),
+    alternateUnit: stagedItem?.alternateUnit ?? stagedItem?.productDetail?.alternateUnit ?? null,
+    baseDenominator:
+      stagedItem?.baseDenominator ?? stagedItem?.productDetail?.baseDenominator ?? null,
+    altConversion:
+      stagedItem?.altConversion ?? stagedItem?.productDetail?.altConversion ?? null,
     taxInclusive: Boolean(stagedItem?.taxInclusive),
     discountType: stagedItem?.discountType || "percentage",
     discountAmount: toNumber(stagedItem?.discountAmount),

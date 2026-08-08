@@ -189,6 +189,30 @@ function getProductTaxRate(productDetail) {
   return (Number(productDetail?.cgst) || 0) + (Number(productDetail?.sgst) || 0);
 }
 
+function getProductBaseUnit(product) {
+  return product?.base_unit || product?.baseUnit || "";
+}
+
+function getAlternateUnitSnapshot(product) {
+  const alternateUnit = product?.alt_unit ?? product?.alternateUnit ?? null;
+  const baseDenominator = product?.base_denominator ?? product?.baseDenominator ?? null;
+  const altConversion = product?.alt_conversion ?? product?.altConversion ?? null;
+
+  if (!alternateUnit || baseDenominator == null || altConversion == null) {
+    return {
+      alternateUnit: null,
+      baseDenominator: null,
+      altConversion: null,
+    };
+  }
+
+  return {
+    alternateUnit,
+    baseDenominator: Number(baseDenominator),
+    altConversion: Number(altConversion),
+  };
+}
+
 /**
  * Converts product data from any source into a normalized "product detail" shape
  * used by staging, rate lookups, and item editing.
@@ -217,7 +241,9 @@ function buildProductDetail(product) {
     _id: getProductId(detail),
     product_name: detail?.product_name || detail?.name || "Untitled Product",
     hsn: detail?.hsn || detail?.hsn_code || "",
-    unit: detail?.unit || "",
+    base_unit: getProductBaseUnit(detail),
+    unit: getProductBaseUnit(detail),
+    ...getAlternateUnitSnapshot(detail),
     cgst: Number(detail?.cgst) || 0,
     sgst: Number(detail?.sgst) || 0,
     igst: Number(detail?.igst) || 0,
@@ -256,6 +282,8 @@ function buildCalcItemFromStaged(stagedItem) {
   if (!stagedItem) return null;
   return {
     rate: Number(stagedItem.rate) || 0,
+    actualQty:
+      Number(stagedItem.actualQty != null ? stagedItem.actualQty : stagedItem.quantity) || 0,
     billedQty:
       Number(stagedItem.billedQty != null ? stagedItem.billedQty : stagedItem.quantity) || 0,
     taxRate: Number(stagedItem.productDetail?.taxRate ?? stagedItem.taxRate ?? 0) || 0,
@@ -276,6 +304,22 @@ function buildCalcItemFromStaged(stagedItem) {
     discountType: stagedItem.discountType || "percentage",
     discountPercentage: Number(stagedItem.discountPercentage) || 0,
     discountAmount: Number(stagedItem.discountAmount) || 0,
+    alternateUnit: stagedItem?.alternateUnit ?? stagedItem.productDetail?.alternateUnit ?? null,
+    baseDenominator:
+      stagedItem?.baseDenominator ?? stagedItem.productDetail?.baseDenominator ?? null,
+    altConversion:
+      stagedItem?.altConversion ?? stagedItem.productDetail?.altConversion ?? null,
+  };
+}
+
+function recalculateStagedItem(stagedItem) {
+  const calculated = recalculateItem(buildCalcItemFromStaged(stagedItem));
+  return {
+    ...stagedItem,
+    actualQty: calculated.actualQty,
+    billedQty: calculated.billedQty,
+    alternateActualQty: calculated.alternateActualQty,
+    alternateBilledQty: calculated.alternateBilledQty,
   };
 }
 
@@ -309,7 +353,10 @@ function createStagedItemFromTransactionItem(item) {
     _id: item?.id,
     product_name: item?.name,
     hsn: item?.hsn,
-    unit: item?.unit,
+    base_unit: item?.unit,
+    alternateUnit: item?.alternateUnit ?? null,
+    baseDenominator: item?.baseDenominator ?? null,
+    altConversion: item?.altConversion ?? null,
     taxRate: item?.taxRate,
     cgst: item?.cgst,
     sgst: item?.sgst,
@@ -318,7 +365,7 @@ function createStagedItemFromTransactionItem(item) {
     addl_cess: item?.addl_cess ?? item?.addlCess,
     priceLevels: item?.priceLevels,
   });
-  return {
+  return recalculateStagedItem({
     quantity: billedQty,
     originalQuantity: billedQty,
     productDetail: detail,
@@ -328,6 +375,11 @@ function createStagedItemFromTransactionItem(item) {
     taxInclusive: Boolean(item?.taxInclusive),
     actualQty,
     billedQty,
+    alternateUnit: item?.alternateUnit ?? null,
+    baseDenominator: item?.baseDenominator ?? null,
+    altConversion: item?.altConversion ?? null,
+    alternateActualQty: item?.alternateActualQty ?? null,
+    alternateBilledQty: item?.alternateBilledQty ?? null,
     discountType: item?.discountType || "percentage",
     discountPercentage: Number(item?.discountPercentage) || 0,
     discountAmount: Number(item?.discountAmount) || 0,
@@ -344,7 +396,7 @@ function createStagedItemFromTransactionItem(item) {
       description: item?.description || "",
       warrantyCardId: item?.warrantyCardId || null,
     },
-  };
+  });
 }
 
 /**
@@ -361,6 +413,11 @@ function buildEditableItem(productId, stagedItem) {
     name: detail?.product_name || "Untitled Product",
     hsn: detail?.hsn || "",
     unit: detail?.unit || "",
+    alternateUnit: stagedItem?.alternateUnit ?? detail?.alternateUnit ?? null,
+    baseDenominator: stagedItem?.baseDenominator ?? detail?.baseDenominator ?? null,
+    altConversion: stagedItem?.altConversion ?? detail?.altConversion ?? null,
+    alternateActualQty: stagedItem?.alternateActualQty ?? null,
+    alternateBilledQty: stagedItem?.alternateBilledQty ?? null,
     taxRate: getProductTaxRate(detail),
     cgst: Number(detail?.cgst) || 0,
     sgst: Number(detail?.sgst) || 0,
@@ -679,6 +736,7 @@ function FilterSheet({
  */
 function ProductRow({ product, stagedItem, loading, priceLevel, onAdd, onEdit, onIncrement, onDecrement }) {
   const quantity = Number(stagedItem?.quantity) || 0;
+  const baseUnit = getProductBaseUnit(product);
   const displayRate =
     (stagedItem?.rate > 0 ? stagedItem.rate : null) ??
     getPriceLevelRate(buildProductDetail(product), priceLevel) ??
@@ -735,6 +793,11 @@ function ProductRow({ product, stagedItem, loading, priceLevel, onAdd, onEdit, o
             >
               +
             </button>
+            {baseUnit ? (
+              <span className="ml-1 text-xs font-medium text-slate-500">
+                {baseUnit}
+              </span>
+            ) : null}
           </div>
 
           <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
@@ -1030,12 +1093,12 @@ export default function ProductSelectPage() {
           const nextRate = getPriceLevelRate(productDetail, priceLevel);
           return [
             productId,
-            {
+            recalculateStagedItem({
               ...staged,
               productDetail,
               rate: nextRate != null ? Number(nextRate) || 0 : 0,
               initialPriceSource: "priceLevel",
-            },
+            }),
           ];
         }),
       );
@@ -1126,12 +1189,12 @@ export default function ProductSelectPage() {
       const nextQty = (Number(existingItem?.quantity) || 0) + 1;
       setStagedItems((cur) => ({
         ...cur,
-        [productId]: {
+        [productId]: recalculateStagedItem({
           ...cur[productId],
           quantity: nextQty,
           billedQty: nextQty,
           actualQty: nextQty,
-        },
+        }),
       }));
       return;
     }
@@ -1146,26 +1209,30 @@ export default function ProductSelectPage() {
         productDetail,
         priceLevel: committedPriceLevelRef.current || "",
       });
-      setStagedItems((cur) => ({
-        ...cur,
-        [productId]: {
-          quantity: 1,
-          originalQuantity: 0,
-          productDetail,
-          rate,
-          taxType: taxType || "igst",
-          initialPriceSource: source,
-          taxInclusive: false,
-          actualQty: 1,
-          billedQty: 1,
-          discountType: "percentage",
-          discountPercentage: 0,
-          discountAmount: 0,
-          description: "",
-          warrantyCardId: null,
-          originalSnapshot: null,
-        },
-      }));
+      setStagedItems((cur) => {
+        const alternateSnapshot = getAlternateUnitSnapshot(productDetail);
+        return {
+          ...cur,
+          [productId]: recalculateStagedItem({
+            quantity: 1,
+            originalQuantity: 0,
+            productDetail,
+            rate,
+            taxType: taxType || "igst",
+            initialPriceSource: source,
+            taxInclusive: false,
+            actualQty: 1,
+            billedQty: 1,
+            ...alternateSnapshot,
+            discountType: "percentage",
+            discountPercentage: 0,
+            discountAmount: 0,
+            description: "",
+            warrantyCardId: null,
+            originalSnapshot: null,
+          }),
+        };
+      });
     } catch (e) {
       toast.error(e?.response?.data?.message || e?.message || "Failed to add product");
     } finally {
@@ -1193,12 +1260,12 @@ export default function ProductSelectPage() {
         if ((Number(existing?.originalQuantity) || 0) > 0) {
           return {
             ...cur,
-            [productId]: {
+            [productId]: recalculateStagedItem({
               ...existing,
               quantity: 0,
               billedQty: 0,
               actualQty: 0,
-            },
+            }),
           };
         }
         const next = { ...cur };
@@ -1207,7 +1274,12 @@ export default function ProductSelectPage() {
       }
       return {
         ...cur,
-        [productId]: { ...existing, quantity: nextQty, billedQty: nextQty, actualQty: nextQty },
+        [productId]: recalculateStagedItem({
+          ...existing,
+          quantity: nextQty,
+          billedQty: nextQty,
+          actualQty: nextQty,
+        }),
       };
     });
   };
@@ -1231,7 +1303,11 @@ export default function ProductSelectPage() {
       const productDetail = await ensureProductDetail(product, stagedItem);
       setStagedItems((cur) => ({
         ...cur,
-        [productId]: { ...cur[productId], productDetail },
+        [productId]: recalculateStagedItem({
+          ...cur[productId],
+          productDetail,
+          ...getAlternateUnitSnapshot(productDetail),
+        }),
       }));
       setEditingProductId(productId);
     } catch (e) {
@@ -1254,7 +1330,7 @@ export default function ProductSelectPage() {
       const nextActualQty = Number(changes?.actualQty) || nextBilledQty;
       return {
         ...cur,
-        [editingProductId]: {
+        [editingProductId]: recalculateStagedItem({
           ...existing,
           ...changes,
           quantity: nextBilledQty,
@@ -1264,7 +1340,7 @@ export default function ProductSelectPage() {
           discountType: changes?.discountType || existing?.discountType || "percentage",
           discountPercentage: Number(changes?.discountPercentage) || 0,
           discountAmount: Number(changes?.discountAmount) || 0,
-        },
+        }),
       };
     });
   };
@@ -1286,12 +1362,12 @@ export default function ProductSelectPage() {
       if ((Number(existing?.originalQuantity) || 0) > 0) {
         return {
           ...cur,
-          [productId]: {
+          [productId]: recalculateStagedItem({
             ...existing,
             quantity: 0,
             billedQty: 0,
             actualQty: 0,
-          },
+          }),
         };
       }
 
@@ -1345,6 +1421,9 @@ export default function ProductSelectPage() {
               ...baseChanges,
               actualQty: nextActualQty,
               billedQty: quantity,
+              alternateUnit: staged?.alternateUnit ?? null,
+              baseDenominator: staged?.baseDenominator ?? null,
+              altConversion: staged?.altConversion ?? null,
             },
           }),
         );
@@ -1363,6 +1442,9 @@ export default function ProductSelectPage() {
         name: detail?.product_name || "Untitled Product",
         hsn: detail?.hsn || "",
         unit: detail?.unit || "",
+        alternateUnit: staged?.alternateUnit ?? detail?.alternateUnit ?? null,
+        baseDenominator: staged?.baseDenominator ?? detail?.baseDenominator ?? null,
+        altConversion: staged?.altConversion ?? detail?.altConversion ?? null,
         taxRate: getProductTaxRate(detail),
         priceLevels: Array.isArray(detail?.priceLevels) ? detail.priceLevels : [],
         priceLevel: committedPriceLevelRef.current || null,

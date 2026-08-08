@@ -3,11 +3,106 @@ import mongoose from "mongoose";
 import { calculateSaleOrderTotals } from "./calculation.service.js";
 import { getInitialTransactionStatus } from "./transactionState.service.js";
 
+const ALTERNATE_QTY_TOLERANCE = 0.000001;
+
 // Return the first non-`undefined` value.
 // Important: `null`, `0`, false are considered defined and will be returned.
 // This is used heavily to support multiple incoming payload naming conventions.
 function firstDefined(...values) {
   return values.find((value) => value !== undefined);
+}
+
+function createValidationError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function isBlank(value) {
+  return value == null || String(value).trim() === "";
+}
+
+function hasNumericInput(value) {
+  return value != null && String(value).trim() !== "";
+}
+
+function normalizeRequiredNumber(value, { fieldName, min, itemName }) {
+  const normalized = Number(value);
+
+  if (!Number.isFinite(normalized) || normalized < min) {
+    throw createValidationError(
+      `Invalid alternate unit configuration for sale order item "${itemName || "Unknown item"}": ${fieldName} is required`
+    );
+  }
+
+  return normalized;
+}
+
+function readAlternateUnitFields(row = {}) {
+  return {
+    alternateUnit: firstDefined(row?.alternateUnit, row?.alternate_unit),
+    baseDenominator: firstDefined(row?.baseDenominator, row?.base_denominator),
+    altConversion: firstDefined(row?.altConversion, row?.alt_conversion),
+    alternateActualQty: firstDefined(
+      row?.alternateActualQty,
+      row?.alternate_actual_qty
+    ),
+    alternateBilledQty: firstDefined(
+      row?.alternateBilledQty,
+      row?.alternate_billed_qty
+    ),
+  };
+}
+
+function normalizeAlternateUnitFields(row = {}) {
+  const itemName = row?.name || row?.product_name || row?.item_name || "";
+  const fields = readAlternateUnitFields(row);
+  const hasAnyAlternateInput =
+    !isBlank(fields.alternateUnit) ||
+    hasNumericInput(fields.baseDenominator) ||
+    hasNumericInput(fields.altConversion) ||
+    hasNumericInput(fields.alternateActualQty) ||
+    hasNumericInput(fields.alternateBilledQty);
+
+  if (!hasAnyAlternateInput) {
+    return {
+      alternate_unit: null,
+      base_denominator: null,
+      alt_conversion: null,
+      alternate_actual_qty: null,
+      alternate_billed_qty: null,
+    };
+  }
+
+  if (isBlank(fields.alternateUnit)) {
+    throw createValidationError(
+      `Invalid alternate unit configuration for sale order item "${itemName || "Unknown item"}": alternate_unit is required`
+    );
+  }
+
+  return {
+    alternate_unit: String(fields.alternateUnit).trim(),
+    base_denominator: normalizeRequiredNumber(fields.baseDenominator, {
+      fieldName: "base_denominator",
+      min: Number.MIN_VALUE,
+      itemName,
+    }),
+    alt_conversion: normalizeRequiredNumber(fields.altConversion, {
+      fieldName: "alt_conversion",
+      min: Number.MIN_VALUE,
+      itemName,
+    }),
+    alternate_actual_qty: normalizeRequiredNumber(fields.alternateActualQty, {
+      fieldName: "alternate_actual_qty",
+      min: 0,
+      itemName,
+    }),
+    alternate_billed_qty: normalizeRequiredNumber(fields.alternateBilledQty, {
+      fieldName: "alternate_billed_qty",
+      min: 0,
+      itemName,
+    }),
+  };
 }
 
 // Normalize totals from incoming request into a single internal shape.
@@ -174,6 +269,7 @@ function mapSaleOrderItems(items = [], { preserveIds = false } = {}) {
     item_name: row?.name || row?.product_name || "",
     hsn: row?.hsn || row?.hsn_code || null,
     unit: row?.unit || null,
+    ...normalizeAlternateUnitFields(row),
     actual_qty: Number(firstDefined(row?.actualQty, row?.actual_qty)) || 0,
     billed_qty: Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0,
     rate: Number(row?.rate) || 0,
@@ -366,6 +462,59 @@ export function buildSaleOrderTotals(body = {}) {
   };
 }
 
+function logSaleOrderAlternateQuantityMismatches(body = {}) {
+  (body.items || []).forEach((row) => {
+    let alternateFields;
+
+    try {
+      alternateFields = normalizeAlternateUnitFields(row);
+    } catch {
+      return;
+    }
+
+    if (!alternateFields.alternate_unit) return;
+
+    const actualQty = Number(firstDefined(row?.actualQty, row?.actual_qty)) || 0;
+    const billedQty = Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0;
+    const conversionFactor =
+      alternateFields.alt_conversion / alternateFields.base_denominator;
+    const expectedAlternateActualQty = actualQty * conversionFactor;
+    const expectedAlternateBilledQty = billedQty * conversionFactor;
+    const actualDifference = Math.abs(
+      alternateFields.alternate_actual_qty - expectedAlternateActualQty
+    );
+    const billedDifference = Math.abs(
+      alternateFields.alternate_billed_qty - expectedAlternateBilledQty
+    );
+
+    if (
+      actualDifference <= ALTERNATE_QTY_TOLERANCE &&
+      billedDifference <= ALTERNATE_QTY_TOLERANCE
+    ) {
+      return;
+    }
+
+    console.warn("Sale order alternate quantity mismatch detected", {
+      itemId: row?.id || row?._id || row?.item_id || null,
+      itemName: row?.name || row?.product_name || row?.item_name || null,
+      unit: row?.unit || null,
+      alternateUnit: alternateFields.alternate_unit,
+      actualQty,
+      billedQty,
+      baseDenominator: alternateFields.base_denominator,
+      altConversion: alternateFields.alt_conversion,
+      sent: {
+        alternateActualQty: alternateFields.alternate_actual_qty,
+        alternateBilledQty: alternateFields.alternate_billed_qty,
+      },
+      expected: {
+        alternateActualQty: expectedAlternateActualQty,
+        alternateBilledQty: expectedAlternateBilledQty,
+      },
+    });
+  });
+}
+
 // Debug-only guard:
 // If client-submitted totals differ significantly from server recomputation,
 // we log it for investigation. Save operation still continues.
@@ -391,6 +540,8 @@ export function logSaleOrderTotalsMismatch(body = {}) {
       serverTotals,
     });
   }
+
+  logSaleOrderAlternateQuantityMismatches(body);
 }
 
 // Build the full SaleOrder document for insert.
