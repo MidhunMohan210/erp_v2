@@ -1,6 +1,8 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
+import { formatSaleOrderQuantity } from "@/utils/saleOrderQuantityDisplay";
+
 const PDF_THEME = {
   pageMargin: 14,
   sectionGap: 8,
@@ -655,7 +657,12 @@ function buildItemColumns(resolvedConfigurations) {
           key: "qty",
           header: "Qty",
           value: (item) =>
-            `${formatCompactAmount(item?.billed_qty)} ${item?.unit || ""}`.trim(),
+            formatSaleOrderQuantity({
+              qty: item?.billed_qty,
+              unit: item?.unit,
+              alternateQty: item?.alternate_billed_qty,
+              alternateUnit: item?.alternate_unit,
+            }),
           style: { cellWidth: 11, halign: "center" },
         }
       : null,

@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import CancelVoucherDialog from "@/components/transactions/details/CancelVoucherDialog";
 import { Button } from "@/components/ui/button";
 import { generateSaleOrderPdf } from "@/utils/pdf/generateSaleOrderPdf";
+import { getSaleOrderQuantityParts } from "@/utils/saleOrderQuantityDisplay";
 
 /**
  * Formats backend date value into UI-friendly `DD Mon YYYY`.
@@ -98,6 +99,78 @@ function DetailRow({ label, value, strong = false }) {
       >
         {value}
       </p>
+    </div>
+  );
+}
+
+function QuantityText({ label, parts }) {
+  return (
+    <span className="inline-flex flex-col leading-4">
+      <span>
+        {label} {parts.main}
+      </span>
+      {parts.alternate ? (
+        <span className="pl-0 text-[9px] text-slate-400">
+          {parts.alternate}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function ProductItemCard({ item, taxType }) {
+  const billedQuantity = getSaleOrderQuantityParts({
+    qty: item?.billed_qty,
+    unit: item?.unit,
+    alternateQty: item?.alternate_billed_qty,
+    alternateUnit: item?.alternate_unit,
+  });
+  const actualQuantity = getSaleOrderQuantityParts({
+    qty: item?.actual_qty,
+    unit: item?.unit,
+    alternateQty: item?.alternate_actual_qty,
+    alternateUnit: item?.alternate_unit,
+  });
+
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[12px] font-bold text-slate-900">
+            {item.item_name}
+          </p>
+          <div className="mt-1 flex flex-wrap items-start gap-x-2 gap-y-1 text-[10px] text-slate-500">
+            <QuantityText label="Quantity" parts={billedQuantity} />
+            {/* <span className="text-slate-300" aria-hidden="true">
+              •
+            </span> */}
+            {/* <QuantityText label="Actual" parts={actualQuantity} /> */}
+          </div>
+          <p className="mt-1 text-[10px] text-slate-500">
+            Rate {formatAmount(item.rate)} • {taxType === "igst" ? "IGST" : "GST"} (
+            {Number(item.tax_rate || 0)}%)
+          </p>
+          {/* {(item.cess_rate || item.addl_cess_rate) && (
+            <p className="mt-1 text-[10px] text-slate-500">
+              {item.cess_rate ? `Cess (${Number(item.cess_rate)}%)` : ""}
+              {item.cess_rate && item.addl_cess_rate ? " • " : ""}
+              {item.addl_cess_rate
+                ? `Addl. Cess (${Number(item.addl_cess_rate)}%)`
+                : ""}
+            </p>
+          )} */}
+          {(item.hsn || item.description) && (
+            <p className="mt-1 text-[10px] text-slate-500">
+              {[item.hsn ? `HSN ${item.hsn}` : "", item.description]
+                .filter(Boolean)
+                .join(" • ")}
+            </p>
+          )}
+        </div>
+        <p className="text-[12px] font-bold text-slate-900">
+          {formatAmount(item.total_amount)}
+        </p>
+      </div>
     </div>
   );
 }
@@ -382,46 +455,11 @@ export default function SaleOrderDetailView({
         <SectionCard title={`Products (${items.length})`} icon={FileText}>
           <div className="space-y-2.5">
             {items.map((item) => (
-              <div
+              <ProductItemCard
                 key={item._id}
-                className="rounded-2xl border border-slate-200 bg-slate-50 p-3"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] font-bold text-slate-900">
-                      {item.item_name}
-                    </p>
-                    <p className="mt-1 text-[10px] text-slate-500">
-                      Billed {Number(item.billed_qty || 0)} {item.unit || ""} • Actual{" "}
-                      {Number(item.actual_qty || 0)}
-                    </p>
-                    <p className="mt-1 text-[10px] text-slate-500">
-                      Rate {formatAmount(item.rate)} •{" "}
-                      {saleOrder?.tax_type === "igst" ? "IGST" : "GST"} (
-                      {Number(item.tax_rate || 0)}%)
-                    </p>
-                    {(item.cess_rate || item.addl_cess_rate) && (
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {item.cess_rate ? `Cess (${Number(item.cess_rate)}%)` : ""}
-                        {item.cess_rate && item.addl_cess_rate ? " • " : ""}
-                        {item.addl_cess_rate
-                          ? `Addl. Cess (${Number(item.addl_cess_rate)}%)`
-                          : ""}
-                      </p>
-                    )}
-                    {(item.hsn || item.description) && (
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {[item.hsn ? `HSN ${item.hsn}` : "", item.description]
-                          .filter(Boolean)
-                          .join(" • ")}
-                      </p>
-                    )}
-                  </div>
-                  <p className="text-[12px] font-bold text-slate-900">
-                    {formatAmount(item.total_amount)}
-                  </p>
-                </div>
-              </div>
+                item={item}
+                taxType={saleOrder?.tax_type}
+              />
             ))}
           </div>
         </SectionCard>
