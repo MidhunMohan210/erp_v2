@@ -14,10 +14,15 @@ const ItemSchema = new Schema(
     item_name: { type: String, required: true },
     hsn: { type: String, default: null },
     unit: { type: String, default: null },
+    alternate_unit: { type: String, default: null },
+    base_denominator: { type: Number, default: null },
+    alt_conversion: { type: Number, default: null },
 
     // Quantity split allows operational quantity and billed quantity to differ
     actual_qty: { type: Number, required: true },
     billed_qty: { type: Number, required: true },
+    alternate_actual_qty: { type: Number, default: null },
+    alternate_billed_qty: { type: Number, default: null },
 
     // Tax/discount metadata captured per-line
     rate: { type: Number, required: true },

@@ -231,6 +231,13 @@ function mapSaleOrderItem(row = {}, taxType = "igst") {
     name: row?.item_name || "",
     hsn: row?.hsn || "",
     unit: row?.unit || "",
+    alternateUnit: row?.alternateUnit ?? row?.alternate_unit ?? null,
+    baseDenominator: row?.baseDenominator ?? row?.base_denominator ?? null,
+    altConversion: row?.altConversion ?? row?.alt_conversion ?? null,
+    alternateActualQty:
+      row?.alternateActualQty ?? row?.alternate_actual_qty ?? null,
+    alternateBilledQty:
+      row?.alternateBilledQty ?? row?.alternate_billed_qty ?? null,
     actualQty: Number(row?.actual_qty) || 0,
     billedQty: Number(row?.billed_qty) || 0,
     rate: Number(row?.rate) || 0,

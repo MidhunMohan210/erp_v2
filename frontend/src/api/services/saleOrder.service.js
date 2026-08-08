@@ -9,6 +9,20 @@ function normalizeOptionalVoucherPart(value) {
   return normalized ? normalized : undefined;
 }
 
+function normalizeNullableString(value) {
+  if (value == null) return null;
+
+  const normalized = String(value).trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeNullableNumber(value) {
+  if (value == null || String(value).trim() === "") return null;
+
+  const normalized = Number(value);
+  return Number.isFinite(normalized) ? normalized : null;
+}
+
 export function buildCreateSaleOrderPayload({
   cmp_id,
   taxType,
@@ -52,6 +66,21 @@ export function buildCreateSaleOrderPayload({
       name: item?.name ?? item?.product_name ?? "",
       hsn: item?.hsn ?? item?.hsn_code ?? "",
       unit: item?.unit || "",
+      alternate_unit: normalizeNullableString(
+        item?.alternateUnit ?? item?.alternate_unit
+      ),
+      base_denominator: normalizeNullableNumber(
+        item?.baseDenominator ?? item?.base_denominator
+      ),
+      alt_conversion: normalizeNullableNumber(
+        item?.altConversion ?? item?.alt_conversion
+      ),
+      alternate_actual_qty: normalizeNullableNumber(
+        item?.alternateActualQty ?? item?.alternate_actual_qty
+      ),
+      alternate_billed_qty: normalizeNullableNumber(
+        item?.alternateBilledQty ?? item?.alternate_billed_qty
+      ),
       rate: Number(item?.rate) || 0,
       billedQty: Number(item?.billedQty ?? item?.billed_qty) || 0,
       actualQty: Number(item?.actualQty ?? item?.actual_qty) || 0,

@@ -158,6 +158,16 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
   };
 }
 
+function buildSaleOrderItem(overrides = {}) {
+  return {
+    ...buildValidSaleOrderPayload(
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId()
+    ).items[0],
+    ...overrides,
+  };
+}
+
 async function createOwnedContext({
   userOverrides = {},
   companyOverrides = {},
@@ -540,6 +550,214 @@ describe("4. POST /api/sale-orders — Totals behaviour", () => {
   });
 });
 
+describe("4b. POST /api/sale-orders — Alternate unit persistence", () => {
+  it("saves a valid alternate unit snapshot without changing monetary fields", async () => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [
+        buildSaleOrderItem({
+          unit: "Box",
+          actualQty: 4,
+          billedQty: 4,
+          rate: 100,
+          basePrice: 400,
+          taxableAmount: 400,
+          alternate_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+          alternate_actual_qty: 48,
+          alternate_billed_qty: 48,
+        }),
+      ],
+    });
+
+    const saleOrder = await SaleOrder.findById(response.body.data.saleOrder._id).lean();
+    const item = saleOrder.items[0];
+
+    expect(response.status).toBe(201);
+    expect(item.unit).toBe("Box");
+    expect(item.alternate_unit).toBe("Piece");
+    expect(item.base_denominator).toBe(1);
+    expect(item.alt_conversion).toBe(12);
+    expect(item.alternate_actual_qty).toBe(48);
+    expect(item.alternate_billed_qty).toBe(48);
+    expect(item.base_price).toBe(400);
+    expect(saleOrder.totals.sub_total).toBe(400);
+  });
+
+  it("saves reverse and decimal conversions", async () => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [
+        buildSaleOrderItem({
+          unit: "Piece",
+          actualQty: 24,
+          billedQty: 24,
+          alternate_unit: "Box",
+          base_denominator: 12,
+          alt_conversion: 1,
+          alternate_actual_qty: 2,
+          alternate_billed_qty: 2,
+        }),
+        buildSaleOrderItem({
+          unit: "Kg",
+          actualQty: 5,
+          billedQty: 5,
+          alternate_unit: "Bag",
+          base_denominator: 2.5,
+          alt_conversion: 1,
+          alternate_actual_qty: 2,
+          alternate_billed_qty: 2,
+        }),
+      ],
+    });
+
+    const saleOrder = await SaleOrder.findById(response.body.data.saleOrder._id).lean();
+
+    expect(response.status).toBe(201);
+    expect(saleOrder.items[0].alternate_unit).toBe("Box");
+    expect(saleOrder.items[0].alternate_actual_qty).toBe(2);
+    expect(saleOrder.items[1].base_denominator).toBe(2.5);
+    expect(saleOrder.items[1].alternate_billed_qty).toBe(2);
+  });
+
+  it("saves explicit no-alt fields as null", async () => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [
+        buildSaleOrderItem({
+          alternate_unit: null,
+          base_denominator: null,
+          alt_conversion: null,
+          alternate_actual_qty: null,
+          alternate_billed_qty: null,
+        }),
+      ],
+    });
+
+    const saleOrder = await SaleOrder.findById(response.body.data.saleOrder._id).lean();
+    const item = saleOrder.items[0];
+
+    expect(response.status).toBe(201);
+    expect(item.alternate_unit).toBeNull();
+    expect(item.base_denominator).toBeNull();
+    expect(item.alt_conversion).toBeNull();
+    expect(item.alternate_actual_qty).toBeNull();
+    expect(item.alternate_billed_qty).toBeNull();
+  });
+
+  it("keeps actual and billed alternate quantities separate when actual/billed differ", async () => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [
+        buildSaleOrderItem({
+          actualQty: 10,
+          billedQty: 4,
+          rate: 100,
+          basePrice: 400,
+          taxableAmount: 400,
+          alternate_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+          alternate_actual_qty: 120,
+          alternate_billed_qty: 48,
+        }),
+      ],
+    });
+
+    const saleOrder = await SaleOrder.findById(response.body.data.saleOrder._id).lean();
+    const item = saleOrder.items[0];
+
+    expect(response.status).toBe(201);
+    expect(item.actual_qty).toBe(10);
+    expect(item.billed_qty).toBe(4);
+    expect(item.alternate_actual_qty).toBe(120);
+    expect(item.alternate_billed_qty).toBe(48);
+    expect(item.base_price).toBe(400);
+  });
+
+  it("logs alternate quantity mismatches but saves the client values", async () => {
+    const context = await createOwnedContext();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const response = await postSaleOrder(context, {
+      items: [
+        buildSaleOrderItem({
+          actualQty: 4,
+          billedQty: 4,
+          alternate_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+          alternate_actual_qty: 999,
+          alternate_billed_qty: 48,
+        }),
+      ],
+    });
+
+    const saleOrder = await SaleOrder.findById(response.body.data.saleOrder._id).lean();
+
+    expect(response.status).toBe(201);
+    expect(saleOrder.items[0].alternate_actual_qty).toBe(999);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "Sale order alternate quantity mismatch detected",
+      expect.objectContaining({
+        itemName: "Sample Product",
+        sent: expect.objectContaining({ alternateActualQty: 999 }),
+        expected: expect.objectContaining({ alternateActualQty: 48 }),
+      })
+    );
+  });
+
+  it.each([
+    [
+      "incomplete alternate quantities",
+      {
+        alternate_unit: "Piece",
+        base_denominator: 1,
+        alt_conversion: 12,
+        alternate_actual_qty: 12,
+      },
+    ],
+    [
+      "conversion without alternate unit",
+      {
+        alternate_unit: null,
+        base_denominator: 1,
+        alt_conversion: 12,
+        alternate_actual_qty: 12,
+        alternate_billed_qty: 12,
+      },
+    ],
+    [
+      "zero denominator",
+      {
+        alternate_unit: "Piece",
+        base_denominator: 0,
+        alt_conversion: 12,
+        alternate_actual_qty: 12,
+        alternate_billed_qty: 12,
+      },
+    ],
+    [
+      "negative alternate billed quantity",
+      {
+        alternate_unit: "Piece",
+        base_denominator: 1,
+        alt_conversion: 12,
+        alternate_actual_qty: 12,
+        alternate_billed_qty: -1,
+      },
+    ],
+  ])("rejects invalid alternate unit config: %s", async (_caseName, itemOverrides) => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [buildSaleOrderItem(itemOverrides)],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toContain("Invalid alternate unit configuration");
+  });
+});
+
 describe("5. GET /api/sale-orders/:saleOrderId", () => {
   it("Valid fetch → 200, returns correct saleOrderId", async () => {
     const context = await createOwnedContext();
@@ -642,6 +860,65 @@ describe("6. PUT /api/sale-orders/:saleOrderId — Update", () => {
     expect(saleOrder.totals.sub_total).toBe(300);
     expect(saleOrder.totals.total_tax_amount).toBe(54);
     expect(saleOrder.totals.final_amount).toBe(354);
+  });
+
+  it("Update open order preserves alternate unit snapshot fields", async () => {
+    const context = await createOwnedContext();
+    const createResponse = await postSaleOrder(context);
+    const saleOrderId = createResponse.body.data.saleOrder._id;
+
+    const updatePayload = buildValidSaleOrderPayload(context.partyId, context.seriesId, {
+      cmp_id: String(context.companyId),
+      cmpId: String(context.companyId),
+      party: {
+        _id: String(context.partyId),
+        partyName: context.party.partyName,
+        gstNo: context.party.gstNo,
+        billingAddress: context.party.billingAddress,
+        shippingAddress: context.party.shippingAddress,
+        mobileNumber: context.party.mobileNumber,
+        state: context.party.state,
+      },
+      items: [
+        buildSaleOrderItem({
+          name: "Updated Product",
+          unit: "Box",
+          actualQty: 8,
+          billedQty: 4,
+          rate: 75,
+          basePrice: 300,
+          taxableAmount: 300,
+          alternate_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+          alternate_actual_qty: 96,
+          alternate_billed_qty: 48,
+        }),
+      ],
+      totals: {
+        finalAmount: 1,
+      },
+    });
+
+    const response = await request(appInstance)
+      .put(`/api/sale-orders/${saleOrderId}`)
+      .set("Authorization", `Bearer ${context.token}`)
+      .send(updatePayload);
+
+    const saleOrder = await SaleOrder.findById(saleOrderId).lean();
+    const item = saleOrder.items[0];
+
+    expect(response.status).toBe(200);
+    expect(item.unit).toBe("Box");
+    expect(item.actual_qty).toBe(8);
+    expect(item.billed_qty).toBe(4);
+    expect(item.alternate_unit).toBe("Piece");
+    expect(item.base_denominator).toBe(1);
+    expect(item.alt_conversion).toBe(12);
+    expect(item.alternate_actual_qty).toBe(96);
+    expect(item.alternate_billed_qty).toBe(48);
+    expect(item.base_price).toBe(300);
+    expect(saleOrder.totals.sub_total).toBe(300);
   });
 
   it("Sending new party in update body → party_id and party_snapshot must NOT change (frozen after create)", async () => {

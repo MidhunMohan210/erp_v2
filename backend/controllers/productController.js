@@ -140,7 +140,7 @@ export const listProducts = async (req, res) => {
         { product_name: searchRegex },
         { product_code: searchRegex },
         { hsn_code: searchRegex },
-        { unit: searchRegex },
+        { base_unit: searchRegex },
       ];
     }
 

@@ -33,6 +33,27 @@ function formatPercent(value) {
   return `${(Number(value) || 0).toFixed(2)}%`;
 }
 
+function formatQuantity(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "0";
+
+  return new Intl.NumberFormat("en-IN", {
+    maximumFractionDigits: 6,
+  }).format(number);
+}
+
+function hasAlternateUnit(item) {
+  return Boolean(String(item?.alternateUnit || "").trim());
+}
+
+function formatAlternateHelper({ baseQty, baseUnit, alternateQty, alternateUnit }) {
+  if (!alternateUnit || alternateQty == null) return null;
+
+  return `${formatQuantity(baseQty)} ${baseUnit || ""} = ${formatQuantity(
+    alternateQty,
+  )} ${alternateUnit}`.trim();
+}
+
 /**
  * Builds a calculation draft from form inputs and existing item metadata.
  * Uses the shared `recalculateItem` engine so edit preview matches final totals.
@@ -51,6 +72,7 @@ function formatPercent(value) {
  */
 function buildDraft(item, form) {
   const discountType = form.discountType || "percentage";
+  const actualQty = Number(form.actualQty) || 0;
   const billedQty = Number(form.billedQty) || 0;
   const rate = Number(form.rate) || 0;
   const taxRate = Number(item?.taxRate) || 0;
@@ -75,6 +97,7 @@ function buildDraft(item, form) {
   return recalculateItem({
     ...item,
     rate,
+    actualQty,
     billedQty,
     taxRate,
     taxInclusive,
@@ -118,6 +141,7 @@ export default function ItemEditSheet({
     // Rebuild local form every time sheet opens with a new item.
     if (!open || !item) return;
 
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm({
       rate: item.rate ?? 0,
       taxInclusive: Boolean(item.taxInclusive),
@@ -137,6 +161,26 @@ export default function ItemEditSheet({
     return buildDraft(item, form);
   }, [form, item]);
 
+  const actualQtyHelper = useMemo(() => {
+    if (!hasAlternateUnit(summary)) return null;
+    return formatAlternateHelper({
+      baseQty: summary?.actualQty,
+      baseUnit: summary?.unit,
+      alternateQty: summary?.alternateActualQty,
+      alternateUnit: summary?.alternateUnit,
+    });
+  }, [summary]);
+
+  const billedQtyHelper = useMemo(() => {
+    if (!hasAlternateUnit(summary)) return null;
+    return formatAlternateHelper({
+      baseQty: summary?.billedQty,
+      baseUnit: summary?.unit,
+      alternateQty: summary?.alternateBilledQty,
+      alternateUnit: summary?.alternateUnit,
+    });
+  }, [summary]);
+
   /**
    * Generic local-form field setter.
    *
@@ -151,18 +195,26 @@ export default function ItemEditSheet({
     }));
   };
 
-  /**
-   * Keeps billed quantity in sync when actual quantity is changed.
-   * Billed quantity remains independently editable afterwards.
-   *
-   * @param {number|string} value
-   * @returns {void}
-   */
   const handleActualQtyChange = (value) => {
     setForm((current) => ({
       ...current,
       actualQty: value,
+    }));
+  };
+
+  /**
+   * Keeps actual quantity aligned whenever billed quantity changes.
+   * The user can still edit actual quantity afterwards; the next billed change
+   * becomes the new baseline again.
+   *
+   * @param {number|string} value
+   * @returns {void}
+   */
+  const handleBilledQtyChange = (value) => {
+    setForm((current) => ({
+      ...current,
       billedQty: value,
+      actualQty: value,
     }));
   };
 
@@ -275,6 +327,9 @@ export default function ItemEditSheet({
               value={form.actualQty}
               onChange={(event) => handleActualQtyChange(event.target.value)}
             />
+            {actualQtyHelper ? (
+              <p className="text-[11px] text-slate-500">{actualQtyHelper}</p>
+            ) : null}
           </div>
 
           <div className="space-y-1">
@@ -285,8 +340,11 @@ export default function ItemEditSheet({
               type="number"
               className="h-8 text-xs"
               value={form.billedQty}
-              onChange={(event) => handleChange("billedQty", event.target.value)}
+              onChange={(event) => handleBilledQtyChange(event.target.value)}
             />
+            {billedQtyHelper ? (
+              <p className="text-[11px] text-slate-500">{billedQtyHelper}</p>
+            ) : null}
           </div>
 
           <div className="space-y-1">
