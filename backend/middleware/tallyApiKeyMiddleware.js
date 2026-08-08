@@ -49,11 +49,6 @@ export async function validateTallyApiKey(req, res, next) {
     const tallyApiKey = extractTallyApiKey(req);
 
 
-    if(process.env.NODE_ENV === "development") {
-      console.log("req.headers:", req.headers);
-      console.log("cmpId, tallyApiKey:", cmpId, tallyApiKey);
-    }
-
     if (!cmpId || !tallyApiKey) {
       return res.status(401).json({
         status: false,
