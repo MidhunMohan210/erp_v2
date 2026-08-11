@@ -656,6 +656,48 @@ describe("POST /api/tally/products", () => {
     expectUnitFields(productInDb, unitFields);
   });
 
+  it("should treat Tally null strings as absent alternate unit fields", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product Unit Null String Admin",
+        mobileNumber: "9910010114",
+        email: "tally-product-unit-null-string@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "UNIT-NULL");
+
+    const res = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-UNIT-NULL-STRING",
+          ...dependencies,
+          base_unit: "Nos",
+          alt_unit: "null",
+          base_denominator: "null",
+          alt_conversion: "null",
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-UNIT-NULL-STRING",
+    }).lean();
+
+    expect(res.status).toBe(201);
+    expect(res.body.status).toBe("success");
+    expectUnitFields(productInDb, {
+      base_unit: "Nos",
+      alt_unit: null,
+      base_denominator: null,
+      alt_conversion: null,
+    });
+  });
+
   it("should clear alternate unit fields when an existing product loses alternate unit", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {

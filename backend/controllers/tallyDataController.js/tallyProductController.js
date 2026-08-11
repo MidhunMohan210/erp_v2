@@ -15,24 +15,37 @@ const isPositiveNumber = (value) => {
   return Number.isFinite(numericValue) && numericValue > 0;
 };
 
+const normalizeTallyNull = (value) => {
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && value.trim().toLowerCase() === "null")
+  ) {
+    return null;
+  }
+
+  return value;
+};
+
 const normalizeUnitConfig = (product) => {
   const normalizedBaseUnit =
     typeof product?.base_unit === "string" ? product.base_unit.trim() : "";
+  const rawAltUnit = normalizeTallyNull(product?.alt_unit);
+  const rawBaseDenominator = normalizeTallyNull(product?.base_denominator);
+  const rawAltConversion = normalizeTallyNull(product?.alt_conversion);
   const normalizedAltUnit =
-    typeof product?.alt_unit === "string" && product.alt_unit.trim()
-      ? product.alt_unit.trim()
+    typeof rawAltUnit === "string" && rawAltUnit.trim()
+      ? rawAltUnit.trim()
       : null;
   const hasBaseDenominator =
-    product?.base_denominator !== null &&
-    product?.base_denominator !== undefined;
+    rawBaseDenominator !== null && rawBaseDenominator !== undefined;
   const hasAltConversion =
-    product?.alt_conversion !== null &&
-    product?.alt_conversion !== undefined;
+    rawAltConversion !== null && rawAltConversion !== undefined;
 
   const hasValidBaseDenominator =
-    hasBaseDenominator && isPositiveNumber(product.base_denominator);
+    hasBaseDenominator && isPositiveNumber(rawBaseDenominator);
   const hasValidAltConversion =
-    hasAltConversion && isPositiveNumber(product.alt_conversion);
+    hasAltConversion && isPositiveNumber(rawAltConversion);
 
   if (!normalizedAltUnit && !hasBaseDenominator && !hasAltConversion) {
     return {
@@ -49,8 +62,8 @@ const normalizeUnitConfig = (product) => {
       isValid: true,
       base_unit: normalizedBaseUnit,
       alt_unit: normalizedAltUnit,
-      base_denominator: Number(product.base_denominator),
-      alt_conversion: Number(product.alt_conversion),
+      base_denominator: Number(rawBaseDenominator),
+      alt_conversion: Number(rawAltConversion),
     };
   }
 
