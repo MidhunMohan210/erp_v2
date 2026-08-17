@@ -65,7 +65,8 @@ export function buildCreateSaleOrderPayload({
       id: item?.id ?? item?._id,
       name: item?.name ?? item?.product_name ?? "",
       hsn: item?.hsn ?? item?.hsn_code ?? "",
-      unit: item?.unit || "",
+      base_unit: item?.baseUnit ?? item?.base_unit ?? "",
+      selected_unit: item?.selectedUnit ?? item?.selected_unit ?? "",
       alternate_unit: normalizeNullableString(
         item?.alternateUnit ?? item?.alternate_unit
       ),

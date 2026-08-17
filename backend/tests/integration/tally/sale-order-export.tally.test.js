@@ -61,7 +61,8 @@ function buildSaleOrderItem(overrides = {}) {
     item_id: new mongoose.Types.ObjectId(),
     item_name: "Export Item",
     hsn: "1001",
-    unit: "Nos",
+    base_unit: "Nos",
+    selected_unit: "Nos",
     actual_qty: 2,
     billed_qty: 2,
     rate: 1200,
@@ -125,12 +126,56 @@ async function fetchOnlyExportedSaleOrder(context, sno = 0) {
 }
 
 describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
+  it("exports alternate-selected items with canonical base quantities and rate", async () => {
+    const context = await setupTallyExportContext();
+    await createSaleOrderForTally(context, {
+      items: [
+        buildSaleOrderItem({
+          base_unit: "NOS",
+          selected_unit: "BOX",
+          actual_qty: 40,
+          billed_qty: 60,
+          rate: 45,
+          alternate_unit: "BOX",
+          base_denominator: 20,
+          alt_conversion: 1,
+          alternate_actual_qty: 2,
+          alternate_billed_qty: 3,
+          base_price: 2700,
+          taxable_amount: 2700,
+          total_amount: 3186,
+        }),
+      ],
+      totals: {
+        sub_total: 2700,
+        taxable_amount: 2700,
+        total_tax_amount: 486,
+        item_total: 3186,
+        amount_with_additional_charge: 3186,
+        final_amount: 3186,
+      },
+    });
+
+    const item = (await fetchOnlyExportedSaleOrder(context)).items[0];
+
+    expect(item).toMatchObject({
+      base_unit: "NOS",
+      selected_unit: "BOX",
+      actual_qty: 40,
+      billed_qty: 60,
+      rate: 45,
+      alternate_actual_qty: 2,
+      alternate_billed_qty: 3,
+    });
+  });
+
   it("exports saved alternate-unit SaleOrder item fields for Tally", async () => {
     const context = await setupTallyExportContext();
     await createSaleOrderForTally(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Box",
+          base_unit: "Box",
+          selected_unit: "Box",
           actual_qty: 2,
           billed_qty: 2,
           rate: 1200,
@@ -146,7 +191,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     const saleOrder = await fetchOnlyExportedSaleOrder(context);
     const item = saleOrder.items[0];
 
-    expect(item.unit).toBe("Box");
+    expect(item.base_unit).toBe("Box");
+    expect(item.selected_unit).toBe("Box");
     expect(item.actual_qty).toBe(2);
     expect(item.billed_qty).toBe(2);
     expect(item.rate).toBe(1200);
@@ -162,7 +208,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     await createSaleOrderForTally(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Box",
+          base_unit: "Box",
+          selected_unit: "Box",
           actual_qty: 2,
           billed_qty: 3,
           alternate_unit: "Piece",
@@ -188,7 +235,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     await createSaleOrderForTally(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Piece",
+          base_unit: "Piece",
+          selected_unit: "Piece",
           actual_qty: 24,
           billed_qty: 36,
           alternate_unit: "Box",
@@ -203,7 +251,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     const saleOrder = await fetchOnlyExportedSaleOrder(context);
     const item = saleOrder.items[0];
 
-    expect(item.unit).toBe("Piece");
+    expect(item.base_unit).toBe("Piece");
+    expect(item.selected_unit).toBe("Piece");
     expect(item.actual_qty).toBe(24);
     expect(item.billed_qty).toBe(36);
     expect(item.alternate_unit).toBe("Box");
@@ -218,7 +267,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     await createSaleOrderForTally(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Nos",
+          base_unit: "Nos",
+          selected_unit: "Nos",
           alternate_unit: null,
           base_denominator: null,
           alt_conversion: null,
@@ -231,7 +281,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     const saleOrder = await fetchOnlyExportedSaleOrder(context);
     const item = saleOrder.items[0];
 
-    expect(item.unit).toBe("Nos");
+    expect(item.base_unit).toBe("Nos");
+    expect(item.selected_unit).toBe("Nos");
     expect(item.alternate_unit).toBeNull();
     expect(item.base_denominator).toBeNull();
     expect(item.alt_conversion).toBeNull();
@@ -239,7 +290,7 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     expect(item.alternate_billed_qty).toBeNull();
   });
 
-  it("continues exporting old SaleOrders that do not have alternate-unit fields", async () => {
+  it("exports saved SaleOrders without alternate-unit fields", async () => {
     const context = await setupTallyExportContext();
 
     await SaleOrder.collection.insertOne({
@@ -263,7 +314,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
           _id: new mongoose.Types.ObjectId(),
           item_id: new mongoose.Types.ObjectId(),
           item_name: "Old Item",
-          unit: "Nos",
+          base_unit: "Nos",
+          selected_unit: "Nos",
           actual_qty: 5,
           billed_qty: 5,
           rate: 100,
@@ -284,7 +336,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     const saleOrder = await fetchOnlyExportedSaleOrder(context);
     const item = saleOrder.items[0];
 
-    expect(item.unit).toBe("Nos");
+    expect(item.base_unit).toBe("Nos");
+    expect(item.selected_unit).toBe("Nos");
     expect(item.actual_qty).toBe(5);
     expect(item.billed_qty).toBe(5);
     expect(item.rate).toBe(100);
@@ -313,7 +366,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
         buildSaleOrderItem({
           item_id: product._id,
           item_name: product.product_name,
-          unit: "Box",
+          base_unit: "Box",
+          selected_unit: "Box",
           actual_qty: 2,
           billed_qty: 2,
           alternate_unit: "Piece",
@@ -347,7 +401,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     await createSaleOrderForTally(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Box",
+          base_unit: "Box",
+          selected_unit: "Box",
           actual_qty: 2,
           billed_qty: 2,
           rate: 1200,
@@ -381,7 +436,8 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
     expect(item).toMatchObject({
       item_name: "Export Item",
       hsn: "1001",
-      unit: "Box",
+      base_unit: "Box",
+      selected_unit: "Box",
       actual_qty: 2,
       billed_qty: 2,
       rate: 1200,

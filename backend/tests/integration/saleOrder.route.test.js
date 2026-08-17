@@ -109,7 +109,8 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
         id: new mongoose.Types.ObjectId().toString(),
         name: "Sample Product",
         hsn: "1001",
-        unit: "Nos",
+        baseUnit: "Nos",
+        selectedUnit: "Nos",
         actualQty: qty,
         billedQty: qty,
         rate,
@@ -519,7 +520,8 @@ describe("4. POST /api/sale-orders — Totals behaviour", () => {
           id: new mongoose.Types.ObjectId().toString(),
           name: "Repriced Product",
           hsn: "1001",
-          unit: "Nos",
+          baseUnit: "Nos",
+          selectedUnit: "Nos",
           actualQty: 3,
           billedQty: 3,
           rate: 50,
@@ -556,7 +558,8 @@ describe("4b. POST /api/sale-orders — Alternate unit persistence", () => {
     const response = await postSaleOrder(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Box",
+          baseUnit: "Box",
+          selectedUnit: "Box",
           actualQty: 4,
           billedQty: 4,
           rate: 100,
@@ -575,7 +578,9 @@ describe("4b. POST /api/sale-orders — Alternate unit persistence", () => {
     const item = saleOrder.items[0];
 
     expect(response.status).toBe(201);
-    expect(item.unit).toBe("Box");
+    expect(item.base_unit).toBe("Box");
+    expect(item.selected_unit).toBe("Box");
+    expect(item).not.toHaveProperty("unit");
     expect(item.alternate_unit).toBe("Piece");
     expect(item.base_denominator).toBe(1);
     expect(item.alt_conversion).toBe(12);
@@ -585,12 +590,50 @@ describe("4b. POST /api/sale-orders — Alternate unit persistence", () => {
     expect(saleOrder.totals.sub_total).toBe(400);
   });
 
+  it("permits either configured unit as selected_unit", async () => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [
+        buildSaleOrderItem({
+          baseUnit: "Box",
+          selectedUnit: "Piece",
+          alternate_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
+          alternate_actual_qty: 24,
+          alternate_billed_qty: 24,
+        }),
+      ],
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.data.saleOrder.items[0]).toMatchObject({
+      base_unit: "Box",
+      selected_unit: "Piece",
+    });
+  });
+
+  it.each([
+    ["a non-configured unit", { selectedUnit: "Carton" }],
+    ["an alternate unit without alternate configuration", { selectedUnit: "Piece" }],
+    ["a blank base unit", { baseUnit: " " }],
+  ])("rejects %s", async (_caseName, itemOverrides) => {
+    const context = await createOwnedContext();
+    const response = await postSaleOrder(context, {
+      items: [buildSaleOrderItem(itemOverrides)],
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message).toContain("Invalid sale order item");
+  });
+
   it("saves reverse and decimal conversions", async () => {
     const context = await createOwnedContext();
     const response = await postSaleOrder(context, {
       items: [
         buildSaleOrderItem({
-          unit: "Piece",
+          baseUnit: "Piece",
+          selectedUnit: "Piece",
           actualQty: 24,
           billedQty: 24,
           alternate_unit: "Box",
@@ -600,7 +643,8 @@ describe("4b. POST /api/sale-orders — Alternate unit persistence", () => {
           alternate_billed_qty: 2,
         }),
         buildSaleOrderItem({
-          unit: "Kg",
+          baseUnit: "Kg",
+          selectedUnit: "Kg",
           actualQty: 5,
           billedQty: 5,
           alternate_unit: "Bag",
@@ -824,7 +868,8 @@ describe("6. PUT /api/sale-orders/:saleOrderId — Update", () => {
           id: new mongoose.Types.ObjectId().toString(),
           name: "Updated Product",
           hsn: "1001",
-          unit: "Nos",
+          baseUnit: "Nos",
+          selectedUnit: "Nos",
           actualQty: 4,
           billedQty: 4,
           rate: 75,
@@ -882,7 +927,8 @@ describe("6. PUT /api/sale-orders/:saleOrderId — Update", () => {
       items: [
         buildSaleOrderItem({
           name: "Updated Product",
-          unit: "Box",
+          baseUnit: "Box",
+          selectedUnit: "Box",
           actualQty: 8,
           billedQty: 4,
           rate: 75,
@@ -909,7 +955,8 @@ describe("6. PUT /api/sale-orders/:saleOrderId — Update", () => {
     const item = saleOrder.items[0];
 
     expect(response.status).toBe(200);
-    expect(item.unit).toBe("Box");
+    expect(item.base_unit).toBe("Box");
+    expect(item.selected_unit).toBe("Box");
     expect(item.actual_qty).toBe(8);
     expect(item.billed_qty).toBe(4);
     expect(item.alternate_unit).toBe("Piece");

@@ -659,7 +659,7 @@ function buildItemColumns(resolvedConfigurations) {
           value: (item) =>
             formatSaleOrderQuantity({
               qty: item?.billed_qty,
-              unit: item?.unit,
+              baseUnit: item?.base_unit,
               alternateQty: item?.alternate_billed_qty,
               alternateUnit: item?.alternate_unit,
             }),

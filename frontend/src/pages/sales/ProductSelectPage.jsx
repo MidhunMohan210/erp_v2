@@ -41,6 +41,10 @@ import {
   setPriceLevelObject,
   updateItem,
 } from "@/store/slices/transactionSlice";
+import {
+  changeProductListQuantity,
+  getProductListUnitView,
+} from "@/utils/saleOrderProductListUnit";
 
 const PAGE_SIZE = 20;
 const PRODUCT_FILTERS_STORAGE_KEY = "sale-order-product-filters";
@@ -194,7 +198,8 @@ function getProductBaseUnit(product) {
 }
 
 function getAlternateUnitSnapshot(product) {
-  const alternateUnit = product?.alt_unit ?? product?.alternateUnit ?? null;
+  const alternateUnit =
+    product?.alt_unit ?? product?.alternate_unit ?? product?.alternateUnit ?? null;
   const baseDenominator = product?.base_denominator ?? product?.baseDenominator ?? null;
   const altConversion = product?.alt_conversion ?? product?.altConversion ?? null;
 
@@ -222,7 +227,8 @@ function getAlternateUnitSnapshot(product) {
  *   _id: string|undefined,
  *   product_name: string,
  *   hsn: string,
- *   unit: string,
+ *   baseUnit: string,
+ *   selectedUnit: string,
  *   cgst: number,
  *   sgst: number,
  *   igst: number,
@@ -242,7 +248,9 @@ function buildProductDetail(product) {
     product_name: detail?.product_name || detail?.name || "Untitled Product",
     hsn: detail?.hsn || detail?.hsn_code || "",
     base_unit: getProductBaseUnit(detail),
-    unit: getProductBaseUnit(detail),
+    baseUnit: getProductBaseUnit(detail),
+    selectedUnit:
+      detail?.selectedUnit ?? detail?.selected_unit ?? getProductBaseUnit(detail),
     ...getAlternateUnitSnapshot(detail),
     cgst: Number(detail?.cgst) || 0,
     sgst: Number(detail?.sgst) || 0,
@@ -282,10 +290,6 @@ function buildCalcItemFromStaged(stagedItem) {
   if (!stagedItem) return null;
   return {
     rate: Number(stagedItem.rate) || 0,
-    actualQty:
-      Number(stagedItem.actualQty != null ? stagedItem.actualQty : stagedItem.quantity) || 0,
-    billedQty:
-      Number(stagedItem.billedQty != null ? stagedItem.billedQty : stagedItem.quantity) || 0,
     taxRate: Number(stagedItem.productDetail?.taxRate ?? stagedItem.taxRate ?? 0) || 0,
     cgst: Number(stagedItem.productDetail?.cgst ?? stagedItem?.cgst ?? 0) || 0,
     sgst: Number(stagedItem.productDetail?.sgst ?? stagedItem?.sgst ?? 0) || 0,
@@ -304,6 +308,16 @@ function buildCalcItemFromStaged(stagedItem) {
     discountType: stagedItem.discountType || "percentage",
     discountPercentage: Number(stagedItem.discountPercentage) || 0,
     discountAmount: Number(stagedItem.discountAmount) || 0,
+    selectedUnit:
+      stagedItem?.selectedUnit ?? stagedItem?.productDetail?.baseUnit ?? "",
+    actualQty:
+      Number(stagedItem.actualQty != null ? stagedItem.actualQty : stagedItem.quantity) ||
+      0,
+    billedQty:
+      Number(stagedItem.billedQty != null ? stagedItem.billedQty : stagedItem.quantity) ||
+      0,
+    alternateActualQty: stagedItem?.alternateActualQty ?? null,
+    alternateBilledQty: stagedItem?.alternateBilledQty ?? null,
     alternateUnit: stagedItem?.alternateUnit ?? stagedItem.productDetail?.alternateUnit ?? null,
     baseDenominator:
       stagedItem?.baseDenominator ?? stagedItem.productDetail?.baseDenominator ?? null,
@@ -353,7 +367,8 @@ function createStagedItemFromTransactionItem(item) {
     _id: item?.id,
     product_name: item?.name,
     hsn: item?.hsn,
-    base_unit: item?.unit,
+    base_unit: item?.baseUnit,
+    selectedUnit: item?.selectedUnit,
     alternateUnit: item?.alternateUnit ?? null,
     baseDenominator: item?.baseDenominator ?? null,
     altConversion: item?.altConversion ?? null,
@@ -369,6 +384,7 @@ function createStagedItemFromTransactionItem(item) {
     quantity: billedQty,
     originalQuantity: billedQty,
     productDetail: detail,
+    selectedUnit: item?.selectedUnit ?? detail?.selectedUnit ?? "",
     rate: Number(item?.rate) || 0,
     taxType: item?.taxType || "igst",
     initialPriceSource: item?.initialPriceSource || "manual",
@@ -412,7 +428,8 @@ function buildEditableItem(productId, stagedItem) {
     id: productId,
     name: detail?.product_name || "Untitled Product",
     hsn: detail?.hsn || "",
-    unit: detail?.unit || "",
+    baseUnit: detail?.baseUnit || "",
+    selectedUnit: stagedItem?.selectedUnit ?? detail?.baseUnit ?? "",
     alternateUnit: stagedItem?.alternateUnit ?? detail?.alternateUnit ?? null,
     baseDenominator: stagedItem?.baseDenominator ?? detail?.baseDenominator ?? null,
     altConversion: stagedItem?.altConversion ?? detail?.altConversion ?? null,
@@ -727,6 +744,8 @@ function FilterSheet({
  *   stagedItem?: object,
  *   loading: boolean,
  *   priceLevel: string,
+ *   selectedUnit: string,
+ *   onSelectedUnitChange: (product: object, unit: string) => void,
  *   onAdd: (product: object) => void,
  *   onEdit: (product: object) => void,
  *   onIncrement: (product: object) => void,
@@ -734,13 +753,33 @@ function FilterSheet({
  * }} props
  * @returns {JSX.Element}
  */
-function ProductRow({ product, stagedItem, loading, priceLevel, onAdd, onEdit, onIncrement, onDecrement }) {
-  const quantity = Number(stagedItem?.quantity) || 0;
+function ProductRow({
+  product,
+  stagedItem,
+  loading,
+  priceLevel,
+  selectedUnit,
+  onSelectedUnitChange,
+  onAdd,
+  onEdit,
+  onIncrement,
+  onDecrement,
+}) {
   const baseUnit = getProductBaseUnit(product);
-  const displayRate =
-    (stagedItem?.rate > 0 ? stagedItem.rate : null) ??
-    getPriceLevelRate(buildProductDetail(product), priceLevel) ??
-    0;
+  const unitSnapshot = getAlternateUnitSnapshot(product);
+  const hasAlternateUnit = Boolean(unitSnapshot.alternateUnit);
+  const rowItem = {
+    ...buildProductDetail(product),
+    ...(stagedItem || {}),
+    ...unitSnapshot,
+    rate:
+      stagedItem?.rate ??
+      getPriceLevelRate(buildProductDetail(product), priceLevel) ??
+      0,
+  };
+  const unitView = getProductListUnitView(rowItem, selectedUnit);
+  const quantity = unitView.quantity;
+  const displayRate = unitView.displayRate;
 
   let totalAmount = null;
   if (stagedItem && quantity > 0) {
@@ -778,7 +817,7 @@ function ProductRow({ product, stagedItem, loading, priceLevel, onAdd, onEdit, o
               type="button"
               className="flex h-7 w-7 items-center justify-center rounded border border-rose-200 bg-rose-50 text-sm text-rose-500 hover:bg-rose-100 hover:border-rose-300 disabled:opacity-40"
               disabled={loading || quantity <= 0}
-              onClick={() => onDecrement(product)}
+              onClick={() => onDecrement(product, unitView.selectedUnit)}
             >
               −
             </button>
@@ -789,14 +828,33 @@ function ProductRow({ product, stagedItem, loading, priceLevel, onAdd, onEdit, o
               type="button"
               className="flex h-7 w-7 items-center justify-center rounded border border-emerald-200 bg-emerald-50 text-sm text-emerald-600 hover:bg-emerald-100 hover:border-emerald-300 disabled:opacity-40"
               disabled={loading}
-              onClick={() => (quantity > 0 ? onIncrement(product) : onAdd(product))}
+              onClick={() =>
+                quantity > 0
+                  ? onIncrement(product, unitView.selectedUnit)
+                  : onAdd(product, unitView.selectedUnit)
+              }
             >
               +
             </button>
-            {baseUnit ? (
-              <span className="ml-1 text-xs font-medium text-slate-500">
-                {baseUnit}
-              </span>
+            {hasAlternateUnit ? (
+              <div className="ml-1 flex overflow-hidden rounded border border-slate-200 text-[10px] font-medium">
+                {[baseUnit, unitSnapshot.alternateUnit].map((unit) => (
+                  <button
+                    key={unit}
+                    type="button"
+                    className={`px-1.5 py-0.5 ${
+                      unitView.selectedUnit === unit
+                        ? "bg-emerald-600 text-white"
+                        : "bg-white text-slate-500 hover:bg-slate-50"
+                    }`}
+                    onClick={() => onSelectedUnitChange(product, unit)}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+            ) : baseUnit ? (
+              <span className="ml-1 text-xs font-medium text-slate-500">{baseUnit}</span>
             ) : null}
           </div>
 
@@ -868,6 +926,7 @@ export default function ProductSelectPage() {
   const [subcategoryId, setSubcategoryId] = useState(() => storedFilters?.subcategoryId || "");
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState(false);
   const [stagedItems, setStagedItems] = useState({});
+  const [productListUnits, setProductListUnits] = useState({});
   const [loadingProductIds, setLoadingProductIds] = useState({});
   const [editingProductId, setEditingProductId] = useState(null);
   const [pendingPriceLevelChange, setPendingPriceLevelChange] = useState(null);
@@ -1126,7 +1185,7 @@ export default function ProductSelectPage() {
   // ---------------------------------------------------------------------------
 
   /**
-   * Ensures a product has detail-level pricing metadata (unit + priceLevels etc).
+   * Ensures a product has detail-level pricing metadata (base unit + priceLevels etc).
    * Uses staged/cache data when sufficient; otherwise fetches by id.
    *
    * @param {object} product - Product/list/detail object.
@@ -1137,7 +1196,7 @@ export default function ProductSelectPage() {
     const productId = getProductId(product) || stagedItem?.productDetail?._id;
     const existingDetail = stagedItem?.productDetail;
     if (
-      existingDetail?.unit &&
+      existingDetail?.baseUnit &&
       Array.isArray(existingDetail?.priceLevels) &&
       existingDetail.priceLevels.length > 0
     ) {
@@ -1179,21 +1238,24 @@ export default function ProductSelectPage() {
    * @param {object} product
    * @returns {Promise<void>}
    */
-  const handleAddOrIncrement = async (product) => {
+  const handleAddOrIncrement = async (product, selectedUnitOverride) => {
     const productId = getProductId(product);
     if (!productId) return;
+    const selectedUnit =
+      selectedUnitOverride ||
+      productListUnits[productId] ||
+      stagedItemsRef.current[productId]?.selectedUnit ||
+      getProductBaseUnit(product);
 
     const existingItem = stagedItemsRef.current[productId];
     if (existingItem) {
-      // Fast path: item already staged, only bump quantity.
-      const nextQty = (Number(existingItem?.quantity) || 0) + 1;
+      const changes = changeProductListQuantity(existingItem, selectedUnit, 1);
       setStagedItems((cur) => ({
         ...cur,
         [productId]: recalculateStagedItem({
           ...cur[productId],
-          quantity: nextQty,
-          billedQty: nextQty,
-          actualQty: nextQty,
+          ...changes,
+          quantity: changes.billedQty,
         }),
       }));
       return;
@@ -1211,18 +1273,27 @@ export default function ProductSelectPage() {
       });
       setStagedItems((cur) => {
         const alternateSnapshot = getAlternateUnitSnapshot(productDetail);
+        const newItem = {
+          baseUnit: productDetail.baseUnit,
+          selectedUnit,
+          ...alternateSnapshot,
+          actualQty: 0,
+          billedQty: 0,
+          alternateActualQty: 0,
+          alternateBilledQty: 0,
+        };
+        const changes = changeProductListQuantity(newItem, selectedUnit, 1);
         return {
           ...cur,
           [productId]: recalculateStagedItem({
-            quantity: 1,
+            quantity: changes.billedQty,
             originalQuantity: 0,
             productDetail,
             rate,
             taxType: taxType || "igst",
             initialPriceSource: source,
             taxInclusive: false,
-            actualQty: 1,
-            billedQty: 1,
+            ...changes,
             ...alternateSnapshot,
             discountType: "percentage",
             discountPercentage: 0,
@@ -1250,21 +1321,25 @@ export default function ProductSelectPage() {
    * @param {object} product
    * @returns {void}
    */
-  const handleDecrement = (product) => {
+  const handleDecrement = (product, selectedUnitOverride) => {
     const productId = getProductId(product);
     if (!productId || !stagedItemsRef.current[productId]) return;
+    const selectedUnit =
+      selectedUnitOverride ||
+      productListUnits[productId] ||
+      stagedItemsRef.current[productId]?.selectedUnit ||
+      getProductBaseUnit(product);
     setStagedItems((cur) => {
       const existing = cur[productId];
-      const nextQty = (Number(existing?.quantity) || 0) - 1;
-      if (nextQty <= 0) {
+      const changes = changeProductListQuantity(existing, selectedUnit, -1);
+      if (changes.billedQty <= 0 && changes.actualQty <= 0) {
         if ((Number(existing?.originalQuantity) || 0) > 0) {
           return {
             ...cur,
             [productId]: recalculateStagedItem({
               ...existing,
+              ...changes,
               quantity: 0,
-              billedQty: 0,
-              actualQty: 0,
             }),
           };
         }
@@ -1276,13 +1351,32 @@ export default function ProductSelectPage() {
         ...cur,
         [productId]: recalculateStagedItem({
           ...existing,
-          quantity: nextQty,
-          billedQty: nextQty,
-          actualQty: nextQty,
+          ...changes,
+          quantity: changes.billedQty,
         }),
       };
     });
   };
+
+  const handleProductListUnitChange = useCallback((product, selectedUnit) => {
+    const productId = getProductId(product);
+    if (!productId) return;
+    setProductListUnits((current) => ({ ...current, [productId]: selectedUnit }));
+    // Keep an already staged item and its edit sheet in sync with the list
+    // choice, without recalculating quantities, rate, or totals.
+    setStagedItems((current) => {
+      const existing = current[productId];
+      if (!existing) return current;
+
+      return {
+        ...current,
+        [productId]: {
+          ...existing,
+          selectedUnit,
+        },
+      };
+    });
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Edit sheet
@@ -1307,6 +1401,7 @@ export default function ProductSelectPage() {
           ...cur[productId],
           productDetail,
           ...getAlternateUnitSnapshot(productDetail),
+          selectedUnit: cur[productId]?.selectedUnit ?? productDetail?.baseUnit ?? "",
         }),
       }));
       setEditingProductId(productId);
@@ -1323,11 +1418,20 @@ export default function ProductSelectPage() {
    */
   const handleStagedSave = (changes) => {
     if (!editingProductId) return;
+    if (changes?.selectedUnit) {
+      setProductListUnits((current) => ({
+        ...current,
+        [editingProductId]: changes.selectedUnit,
+      }));
+    }
     setStagedItems((cur) => {
       const existing = cur[editingProductId];
       if (!existing) return cur;
       const nextBilledQty = Number(changes?.billedQty) || 0;
-      const nextActualQty = Number(changes?.actualQty) || nextBilledQty;
+      const parsedActualQty = Number(changes?.actualQty);
+      const nextActualQty = Number.isFinite(parsedActualQty)
+        ? parsedActualQty
+        : nextBilledQty;
       return {
         ...cur,
         [editingProductId]: recalculateStagedItem({
@@ -1399,12 +1503,15 @@ export default function ProductSelectPage() {
       const originalQuantity = Number(staged?.originalQuantity) || 0;
       const baseChanges = {
         rate: Number(staged?.rate) || 0,
+        selectedUnit: staged?.selectedUnit ?? detail?.baseUnit ?? "",
         taxInclusive: Boolean(staged?.taxInclusive),
         discountType: staged?.discountType || "percentage",
         discountPercentage: Number(staged?.discountPercentage) || 0,
         discountAmount: Number(staged?.discountAmount) || 0,
         description: staged?.description || "",
         warrantyCardId: staged?.warrantyCardId || null,
+        alternateActualQty: staged?.alternateActualQty ?? null,
+        alternateBilledQty: staged?.alternateBilledQty ?? null,
       };
 
       if (originalQuantity > 0) {
@@ -1424,6 +1531,7 @@ export default function ProductSelectPage() {
               alternateUnit: staged?.alternateUnit ?? null,
               baseDenominator: staged?.baseDenominator ?? null,
               altConversion: staged?.altConversion ?? null,
+              selectedUnit: staged?.selectedUnit ?? detail?.baseUnit ?? "",
             },
           }),
         );
@@ -1441,7 +1549,8 @@ export default function ProductSelectPage() {
         id: productId,
         name: detail?.product_name || "Untitled Product",
         hsn: detail?.hsn || "",
-        unit: detail?.unit || "",
+        baseUnit: detail?.baseUnit || "",
+        selectedUnit: staged?.selectedUnit ?? detail?.baseUnit ?? "",
         alternateUnit: staged?.alternateUnit ?? detail?.alternateUnit ?? null,
         baseDenominator: staged?.baseDenominator ?? detail?.baseDenominator ?? null,
         altConversion: staged?.altConversion ?? detail?.altConversion ?? null,
@@ -1456,8 +1565,10 @@ export default function ProductSelectPage() {
         addl_cess: Number(detail?.addl_cess ?? detail?.addlCess) || 0,
         taxType: staged?.taxType || taxType || "igst",
         initialPriceSource: staged?.initialPriceSource || "manual",
-        actualQty: quantity,
-        billedQty: quantity,
+        actualQty: Number(staged?.actualQty ?? quantity) || 0,
+        billedQty: Number(staged?.billedQty ?? quantity) || 0,
+        alternateActualQty: staged?.alternateActualQty ?? null,
+        alternateBilledQty: staged?.alternateBilledQty ?? null,
         taxInclusive: Boolean(staged?.taxInclusive),
         discountType: staged?.discountType || "percentage",
         discountPercentage: Number(staged?.discountPercentage) || 0,
@@ -1641,6 +1752,12 @@ export default function ProductSelectPage() {
                         stagedItem={stagedItems[productId]}
                         loading={Boolean(loadingProductIds[productId])}
                         priceLevel={appliedPriceLevel || ""}
+                        selectedUnit={
+                          productListUnits[productId] ||
+                          stagedItems[productId]?.selectedUnit ||
+                          getProductBaseUnit(product)
+                        }
+                        onSelectedUnitChange={handleProductListUnitChange}
                         onAdd={handleAddOrIncrement}
                         onEdit={openEditSheet}
                         onIncrement={handleAddOrIncrement}

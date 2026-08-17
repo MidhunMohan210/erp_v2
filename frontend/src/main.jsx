@@ -36,9 +36,9 @@ ReactDOM.createRoot(document.getElementById("root")).render(
             />
 
             <App />
-            <ReactQueryDevtools initialIsOpen={false} 
-            // position="bottom-right"
-             />
+            {/* <ReactQueryDevtools initialIsOpen={false} 
+            position="bottom-right"
+             /> */}
           </BrowserRouter>
         </DeleteConfirmProvider>
       </QueryClientProvider>

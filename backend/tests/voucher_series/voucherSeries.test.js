@@ -76,7 +76,8 @@ async function createDirectSaleOrderUsingSeries(series, overrides = {}) {
       {
         item_id: new mongoose.Types.ObjectId(),
         item_name: "Guard Item",
-        unit: "pcs",
+        base_unit: "pcs",
+        selected_unit: "pcs",
         actual_qty: 1,
         billed_qty: 1,
         rate: 100,

@@ -13,11 +13,11 @@ export function formatQuantity(value) {
 
 export function getSaleOrderQuantityParts({
   qty,
-  unit,
+  baseUnit,
   alternateQty,
   alternateUnit,
 } = {}) {
-  const main = `${formatQuantity(qty)} ${unit || ""}`.trim();
+  const main = `${formatQuantity(qty)} ${baseUnit || ""}`.trim();
   const hasAlternate =
     alternateUnit != null &&
     String(alternateUnit).trim() !== "" &&

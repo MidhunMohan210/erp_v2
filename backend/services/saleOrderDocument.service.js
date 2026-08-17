@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 import { calculateSaleOrderTotals } from "./calculation.service.js";
 import { getInitialTransactionStatus } from "./transactionState.service.js";
+import { convertBaseQtyToAlternate } from "../utils/unitConversion.js";
 
 const ALTERNATE_QTY_TOLERANCE = 0.000001;
 
@@ -24,6 +25,16 @@ function isBlank(value) {
 
 function hasNumericInput(value) {
   return value != null && String(value).trim() !== "";
+}
+
+function normalizeRequiredUnit(value, { fieldName, itemName }) {
+  if (isBlank(value)) {
+    throw createValidationError(
+      `Invalid sale order item "${itemName || "Unknown item"}": ${fieldName} is required`
+    );
+  }
+
+  return String(value).trim();
 }
 
 function normalizeRequiredNumber(value, { fieldName, min, itemName }) {
@@ -103,6 +114,31 @@ function normalizeAlternateUnitFields(row = {}) {
       itemName,
     }),
   };
+}
+
+function normalizeSaleOrderUnits(row = {}, alternateFields) {
+  const itemName = row?.name || row?.product_name || row?.item_name || "";
+  const baseUnit = normalizeRequiredUnit(
+    firstDefined(row?.baseUnit, row?.base_unit),
+    { fieldName: "base_unit", itemName }
+  );
+  const selectedUnit = normalizeRequiredUnit(
+    firstDefined(row?.selectedUnit, row?.selected_unit),
+    { fieldName: "selected_unit", itemName }
+  );
+  const validSelectedUnits = [baseUnit];
+
+  if (alternateFields.alternate_unit) {
+    validSelectedUnits.push(alternateFields.alternate_unit);
+  }
+
+  if (!validSelectedUnits.includes(selectedUnit)) {
+    throw createValidationError(
+      `Invalid sale order item "${itemName || "Unknown item"}": selected_unit must equal base_unit or alternate_unit`
+    );
+  }
+
+  return { base_unit: baseUnit, selected_unit: selectedUnit };
 }
 
 // Normalize totals from incoming request into a single internal shape.
@@ -260,63 +296,67 @@ function normalizeTaxType(body = {}) {
 // Convert incoming item rows into schema-compliant order item subdocuments.
 // `preserveIds` is used in update flow so existing line-item `_id` values survive edits.
 function mapSaleOrderItems(items = [], { preserveIds = false } = {}) {
-  return items.map((row) => ({
-    _id:
-      preserveIds && row?._id
-        ? row._id
-        : new mongoose.Types.ObjectId(),
-    item_id: row?.id || row?._id,
-    item_name: row?.name || row?.product_name || "",
-    hsn: row?.hsn || row?.hsn_code || null,
-    unit: row?.unit || null,
-    ...normalizeAlternateUnitFields(row),
-    actual_qty: Number(firstDefined(row?.actualQty, row?.actual_qty)) || 0,
-    billed_qty: Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0,
-    rate: Number(row?.rate) || 0,
-    tax_rate: Number(firstDefined(row?.taxRate, row?.tax_rate)) || 0,
-    cess_rate:
-      Number(
-        firstDefined(
-          row?.cessRate,
-          row?.cess_rate,
-          row?.cess,
-          row?.cess_percentage
-        )
-      ) || 0,
-    addl_cess_rate:
-      Number(
-        firstDefined(
-          row?.addlCessRate,
-          row?.addl_cess_rate,
-          row?.addl_cess,
-          row?.addlCess,
-          row?.addl_cess_percentage
-        )
-      ) || 0,
-    tax_inclusive: Boolean(firstDefined(row?.taxInclusive, row?.tax_inclusive)),
-    discount_type: row?.discountType || row?.discount_type || "amount",
-    discount_percentage:
-      Number(firstDefined(row?.discountPercentage, row?.discount_percentage)) || 0,
-    discount_amount:
-      Number(firstDefined(row?.discountAmount, row?.discount_amount)) || 0,
-    base_price: Number(firstDefined(row?.basePrice, row?.base_price)) || 0,
-    taxable_amount:
-      Number(firstDefined(row?.taxableAmount, row?.taxable_amount)) || 0,
-    igst_amount: Number(firstDefined(row?.igstAmount, row?.igst_amount)) || 0,
-    cgst_amount: Number(firstDefined(row?.cgstAmount, row?.cgst_amount)) || 0,
-    sgst_amount: Number(firstDefined(row?.sgstAmount, row?.sgst_amount)) || 0,
-    tax_amount: Number(firstDefined(row?.taxAmount, row?.tax_amount)) || 0,
-    cess_amount: Number(firstDefined(row?.cessAmount, row?.cess_amount)) || 0,
-    addl_cess_amount:
-      Number(firstDefined(row?.addlCessAmount, row?.addl_cess_amount)) || 0,
-    total_amount:
-      Number(firstDefined(row?.totalAmount, row?.total_amount, row?.total)) || 0,
-    price_level_id: row?.priceLevel || row?.price_level_id || null,
-    initial_price_source:
-      row?.initialPriceSource || row?.initial_price_source || null,
-    description: row?.description || null,
-    warranty_card_id: row?.warrantyCardId || row?.warranty_card_id || null,
-  }));
+  return items.map((row) => {
+    const alternateFields = normalizeAlternateUnitFields(row);
+
+    return {
+      _id:
+        preserveIds && row?._id
+          ? row._id
+          : new mongoose.Types.ObjectId(),
+      item_id: row?.id || row?._id,
+      item_name: row?.name || row?.product_name || "",
+      hsn: row?.hsn || row?.hsn_code || null,
+      ...normalizeSaleOrderUnits(row, alternateFields),
+      ...alternateFields,
+      actual_qty: Number(firstDefined(row?.actualQty, row?.actual_qty)) || 0,
+      billed_qty: Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0,
+      rate: Number(row?.rate) || 0,
+      tax_rate: Number(firstDefined(row?.taxRate, row?.tax_rate)) || 0,
+      cess_rate:
+        Number(
+          firstDefined(
+            row?.cessRate,
+            row?.cess_rate,
+            row?.cess,
+            row?.cess_percentage
+          )
+        ) || 0,
+      addl_cess_rate:
+        Number(
+          firstDefined(
+            row?.addlCessRate,
+            row?.addl_cess_rate,
+            row?.addl_cess,
+            row?.addlCess,
+            row?.addl_cess_percentage
+          )
+        ) || 0,
+      tax_inclusive: Boolean(firstDefined(row?.taxInclusive, row?.tax_inclusive)),
+      discount_type: row?.discountType || row?.discount_type || "amount",
+      discount_percentage:
+        Number(firstDefined(row?.discountPercentage, row?.discount_percentage)) || 0,
+      discount_amount:
+        Number(firstDefined(row?.discountAmount, row?.discount_amount)) || 0,
+      base_price: Number(firstDefined(row?.basePrice, row?.base_price)) || 0,
+      taxable_amount:
+        Number(firstDefined(row?.taxableAmount, row?.taxable_amount)) || 0,
+      igst_amount: Number(firstDefined(row?.igstAmount, row?.igst_amount)) || 0,
+      cgst_amount: Number(firstDefined(row?.cgstAmount, row?.cgst_amount)) || 0,
+      sgst_amount: Number(firstDefined(row?.sgstAmount, row?.sgst_amount)) || 0,
+      tax_amount: Number(firstDefined(row?.taxAmount, row?.tax_amount)) || 0,
+      cess_amount: Number(firstDefined(row?.cessAmount, row?.cess_amount)) || 0,
+      addl_cess_amount:
+        Number(firstDefined(row?.addlCessAmount, row?.addl_cess_amount)) || 0,
+      total_amount:
+        Number(firstDefined(row?.totalAmount, row?.total_amount, row?.total)) || 0,
+      price_level_id: row?.priceLevel || row?.price_level_id || null,
+      initial_price_source:
+        row?.initialPriceSource || row?.initial_price_source || null,
+      description: row?.description || null,
+      warranty_card_id: row?.warrantyCardId || row?.warranty_card_id || null,
+    };
+  });
 }
 
 // Normalize additional charges and fix known legacy typo:
@@ -476,10 +516,16 @@ function logSaleOrderAlternateQuantityMismatches(body = {}) {
 
     const actualQty = Number(firstDefined(row?.actualQty, row?.actual_qty)) || 0;
     const billedQty = Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0;
-    const conversionFactor =
-      alternateFields.alt_conversion / alternateFields.base_denominator;
-    const expectedAlternateActualQty = actualQty * conversionFactor;
-    const expectedAlternateBilledQty = billedQty * conversionFactor;
+    const expectedAlternateActualQty = convertBaseQtyToAlternate(
+      actualQty,
+      alternateFields.base_denominator,
+      alternateFields.alt_conversion
+    );
+    const expectedAlternateBilledQty = convertBaseQtyToAlternate(
+      billedQty,
+      alternateFields.base_denominator,
+      alternateFields.alt_conversion
+    );
     const actualDifference = Math.abs(
       alternateFields.alternate_actual_qty - expectedAlternateActualQty
     );
@@ -497,7 +543,8 @@ function logSaleOrderAlternateQuantityMismatches(body = {}) {
     console.warn("Sale order alternate quantity mismatch detected", {
       itemId: row?.id || row?._id || row?.item_id || null,
       itemName: row?.name || row?.product_name || row?.item_name || null,
-      unit: row?.unit || null,
+      baseUnit: firstDefined(row?.baseUnit, row?.base_unit) || null,
+      selectedUnit: firstDefined(row?.selectedUnit, row?.selected_unit) || null,
       alternateUnit: alternateFields.alternate_unit,
       actualQty,
       billedQty,

@@ -1,15 +1,14 @@
+import {
+  convertAlternateQtyToBase,
+  convertBaseQtyToAlternate,
+} from "./unitConversion";
+
 function toNumber(value) {
   return Number(value) || 0;
 }
 
 function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
-}
-
-function roundQuantity(value) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) return 0;
-  return Math.round((number + Number.EPSILON) * 1_000_000) / 1_000_000;
 }
 
 function hasAlternateUnitConfig(item) {
@@ -26,11 +25,20 @@ function hasAlternateUnitConfig(item) {
   );
 }
 
-function calculateAlternateQty(baseQty, item) {
+function isAlternateUnitSelected(item) {
+  return (
+    hasAlternateUnitConfig(item) &&
+    item?.selectedUnit === item?.alternateUnit
+  );
+}
+
+export function calculateAlternateQty(baseQty, item) {
   if (!hasAlternateUnitConfig(item)) return null;
 
-  return roundQuantity(
-    toNumber(baseQty) * (Number(item?.altConversion) / Number(item?.baseDenominator)),
+  return convertBaseQtyToAlternate(
+    baseQty,
+    item?.baseDenominator,
+    item?.altConversion,
   );
 }
 
@@ -156,8 +164,28 @@ export function calculateAdditionalChargeTotals(
 export function calculateItemAmounts(item, taxType = "igst") {
   // This is the core per-row pricing engine used across create/edit flows.
   // All UI totals are derived from this function, not manual arithmetic in components.
-  const actualQty = toNumber(item?.actualQty ?? item?.actual_qty);
-  const billedQty = toNumber(item?.billedQty ?? item?.billed_qty ?? item?.quantity);
+  const alternateUnitSelected = isAlternateUnitSelected(item);
+  const enteredAlternateActualQty = item?.alternateActualQty;
+  const enteredAlternateBilledQty = item?.alternateBilledQty;
+  const convertedActualQty = alternateUnitSelected
+    ? convertAlternateQtyToBase(
+        enteredAlternateActualQty,
+        item?.baseDenominator,
+        item?.altConversion,
+      )
+    : null;
+  const convertedBilledQty = alternateUnitSelected
+    ? convertAlternateQtyToBase(
+        enteredAlternateBilledQty,
+        item?.baseDenominator,
+        item?.altConversion,
+      )
+    : null;
+  const actualQty =
+    convertedActualQty ?? toNumber(item?.actualQty ?? item?.actual_qty);
+  const billedQty =
+    convertedBilledQty ??
+    toNumber(item?.billedQty ?? item?.billed_qty ?? item?.quantity);
   const rate = toNumber(item?.rate);
   const discountType = item?.discountType || "percentage";
   const providedDiscountPercentage = toNumber(
@@ -235,8 +263,12 @@ export function calculateItemAmounts(item, taxType = "igst") {
     cessAmount: roundMoney(cessAmount),
     addlCessAmount: roundMoney(addlCessAmount),
     totalAmount: roundMoney(totalAmount),
-    alternateActualQty: calculateAlternateQty(actualQty, item),
-    alternateBilledQty: calculateAlternateQty(billedQty, item),
+    alternateActualQty: alternateUnitSelected
+      ? enteredAlternateActualQty
+      : calculateAlternateQty(actualQty, item),
+    alternateBilledQty: alternateUnitSelected
+      ? enteredAlternateBilledQty
+      : calculateAlternateQty(billedQty, item),
   };
 }
 

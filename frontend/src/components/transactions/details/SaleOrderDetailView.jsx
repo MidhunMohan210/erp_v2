@@ -121,17 +121,10 @@ function QuantityText({ label, parts }) {
 function ProductItemCard({ item, taxType }) {
   const billedQuantity = getSaleOrderQuantityParts({
     qty: item?.billed_qty,
-    unit: item?.unit,
+    baseUnit: item?.base_unit,
     alternateQty: item?.alternate_billed_qty,
     alternateUnit: item?.alternate_unit,
   });
-  const actualQuantity = getSaleOrderQuantityParts({
-    qty: item?.actual_qty,
-    unit: item?.unit,
-    alternateQty: item?.alternate_actual_qty,
-    alternateUnit: item?.alternate_unit,
-  });
-
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
       <div className="flex items-start justify-between gap-3">

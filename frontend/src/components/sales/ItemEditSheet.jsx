@@ -12,6 +12,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { recalculateItem } from "@/store/slices/transactionSlice";
+import {
+  initializeSaleOrderUnitDraft,
+  normalizeSaleOrderUnitDraft,
+  switchSaleOrderUnitDraft,
+} from "@/utils/saleOrderUnitDraft";
 
 /**
  * Money formatter for summary panel.
@@ -43,7 +48,13 @@ function formatQuantity(value) {
 }
 
 function hasAlternateUnit(item) {
-  return Boolean(String(item?.alternateUnit || "").trim());
+  return (
+    Boolean(String(item?.alternateUnit || "").trim()) &&
+    Number.isFinite(Number(item?.baseDenominator)) &&
+    Number(item?.baseDenominator) > 0 &&
+    Number.isFinite(Number(item?.altConversion)) &&
+    Number(item?.altConversion) > 0
+  );
 }
 
 function formatAlternateHelper({ baseQty, baseUnit, alternateQty, alternateUnit }) {
@@ -71,10 +82,11 @@ function formatAlternateHelper({ baseQty, baseUnit, alternateQty, alternateUnit 
  * @returns {object} Recalculated item summary object.
  */
 function buildDraft(item, form) {
+  const normalizedUnitDraft = normalizeSaleOrderUnitDraft(form, item);
   const discountType = form.discountType || "percentage";
-  const actualQty = Number(form.actualQty) || 0;
-  const billedQty = Number(form.billedQty) || 0;
-  const rate = Number(form.rate) || 0;
+  const actualQty = normalizedUnitDraft.baseActualQty ?? 0;
+  const billedQty = normalizedUnitDraft.baseBilledQty ?? 0;
+  const rate = normalizedUnitDraft.baseRate ?? 0;
   const taxRate = Number(item?.taxRate) || 0;
   const taxInclusive = Boolean(form.taxInclusive);
   const lineTotal = rate * billedQty;
@@ -96,9 +108,12 @@ function buildDraft(item, form) {
 
   return recalculateItem({
     ...item,
+    selectedUnit: normalizedUnitDraft.selectedUnit,
     rate,
     actualQty,
     billedQty,
+    alternateActualQty: normalizedUnitDraft.alternateActualQty,
+    alternateBilledQty: normalizedUnitDraft.alternateBilledQty,
     taxRate,
     taxInclusive,
     discountType,
@@ -128,6 +143,7 @@ export default function ItemEditSheet({
 }) {
   const [form, setForm] = useState({
     rate: "",
+    selectedUnit: "",
     taxInclusive: false,
     actualQty: "",
     billedQty: "",
@@ -141,12 +157,11 @@ export default function ItemEditSheet({
     // Rebuild local form every time sheet opens with a new item.
     if (!open || !item) return;
 
+    const unitDraft = initializeSaleOrderUnitDraft(item);
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setForm({
-      rate: item.rate ?? 0,
+      ...unitDraft,
       taxInclusive: Boolean(item.taxInclusive),
-      actualQty: item.actualQty ?? 0,
-      billedQty: item.billedQty ?? 0,
       discountType: item.discountType || "percentage",
       discountValue:
         (item.discountType || "percentage") === "amount"
@@ -165,7 +180,7 @@ export default function ItemEditSheet({
     if (!hasAlternateUnit(summary)) return null;
     return formatAlternateHelper({
       baseQty: summary?.actualQty,
-      baseUnit: summary?.unit,
+      baseUnit: summary?.baseUnit,
       alternateQty: summary?.alternateActualQty,
       alternateUnit: summary?.alternateUnit,
     });
@@ -175,7 +190,7 @@ export default function ItemEditSheet({
     if (!hasAlternateUnit(summary)) return null;
     return formatAlternateHelper({
       baseQty: summary?.billedQty,
-      baseUnit: summary?.unit,
+      baseUnit: summary?.baseUnit,
       alternateQty: summary?.alternateBilledQty,
       alternateUnit: summary?.alternateUnit,
     });
@@ -200,6 +215,11 @@ export default function ItemEditSheet({
       ...current,
       actualQty: value,
     }));
+  };
+
+  const handleSelectedUnitChange = (selectedUnit) => {
+    if (!item) return;
+    setForm((current) => switchSaleOrderUnitDraft(current, selectedUnit, item));
   };
 
   /**
@@ -227,11 +247,16 @@ export default function ItemEditSheet({
     if (!item || !onSave) return;
     const summary = buildDraft(item, form);
 
+    const normalizedUnitDraft = normalizeSaleOrderUnitDraft(form, item);
+
     onSave({
-      rate: Number(form.rate) || 0,
+      selectedUnit: normalizedUnitDraft.selectedUnit || item?.baseUnit || "",
+      rate: Number(summary?.rate) || 0,
       taxInclusive: Boolean(form.taxInclusive),
-      actualQty: Number(form.actualQty) || 0,
-      billedQty: Number(form.billedQty) || 0,
+      actualQty: Number(summary?.actualQty) || 0,
+      billedQty: Number(summary?.billedQty) || 0,
+      alternateActualQty: normalizedUnitDraft.alternateActualQty,
+      alternateBilledQty: normalizedUnitDraft.alternateBilledQty,
       discountType: form.discountType || "percentage",
       discountPercentage: Number(summary?.discountPercentage) || 0,
       discountAmount: Number(summary?.discountAmount) || 0,
@@ -281,8 +306,39 @@ export default function ItemEditSheet({
         </SheetHeader>
 
         <div className="grid gap-3 text-xs md:grid-cols-2">
+          {hasAlternateUnit(item) ? (
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-[11px] font-medium text-slate-500">Unit</label>
+              <div className="flex overflow-hidden rounded-lg border border-slate-200 bg-white">
+                {[item?.baseUnit, item?.alternateUnit].map((unit) => (
+                  <button
+                    key={unit}
+                    type="button"
+                    className={`h-8 flex-1 px-3 text-xs font-medium transition ${
+                      form.selectedUnit === unit
+                        ? "bg-emerald-600 text-white"
+                        : "text-slate-600 hover:bg-slate-50"
+                    }`}
+                    onClick={() => handleSelectedUnitChange(unit)}
+                  >
+                    {unit}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : item?.baseUnit ? (
+            <div className="space-y-1 md:col-span-2">
+              <label className="text-[11px] font-medium text-slate-500">Unit</label>
+              <div className="flex h-8 items-center rounded-lg border border-slate-200 bg-slate-50 px-3 text-xs text-slate-700">
+                {item.baseUnit}
+              </div>
+            </div>
+          ) : null}
+
           <div className="space-y-1">
-            <label className="text-[11px] font-medium text-slate-500">Rate</label>
+            <label className="text-[11px] font-medium text-slate-500">
+              Rate{form.selectedUnit ? ` / ${form.selectedUnit}` : ""}
+            </label>
             <Input
               type="number"
               className="h-8 text-xs"
@@ -319,7 +375,7 @@ export default function ItemEditSheet({
 
           <div className="space-y-1">
             <label className="text-[11px] font-medium text-slate-500">
-              Actual Qty
+              Actual Qty{form.selectedUnit ? ` (${form.selectedUnit})` : ""}
             </label>
             <Input
               type="number"
@@ -334,7 +390,7 @@ export default function ItemEditSheet({
 
           <div className="space-y-1">
             <label className="text-[11px] font-medium text-slate-500">
-              Billed Qty
+              Billed Qty{form.selectedUnit ? ` (${form.selectedUnit})` : ""}
             </label>
             <Input
               type="number"
