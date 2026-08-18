@@ -18,13 +18,6 @@ import ItemEditSheet from "@/components/sales/ItemEditSheet";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Sheet,
-  SheetContent,
-  SheetFooter,
-  SheetHeader,
-  SheetTitle,
-} from "@/components/ui/sheet";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import {
   useBrandsQuery,
@@ -43,8 +36,9 @@ import {
 } from "@/store/slices/transactionSlice";
 import {
   changeProductListQuantity,
-  getProductListUnitView,
 } from "@/utils/saleOrderProductListUnit";
+import ExtractedProductRow from "./ProductSelectPage/components/ProductRow";
+import ExtractedProductFilterSheet from "./ProductSelectPage/components/ProductFilterSheet";
 
 const PAGE_SIZE = 20;
 const PRODUCT_FILTERS_STORAGE_KEY = "sale-order-product-filters";
@@ -124,55 +118,9 @@ function getProductId(product) {
   return product?._id || product?.id || product?.product_master_id;
 }
 
-/**
- * Extracts id from option rows used by Brand/Category/Subcategory dropdowns.
- *
- * @param {object} option - Master option row with variable field names.
- * @returns {string|undefined}
- */
-function getMasterOptionId(option) {
-  return (
-    option?.value ||
-    option?.id ||
-    option?._id ||
-    option?.brand_id ||
-    option?.category_id ||
-    option?.subcategory_id
-  );
-}
 
-/**
- * Extracts display label for dropdown options.
- *
- * @param {object} option - Master option row with variable label keys.
- * @returns {string} User-facing label.
- */
-function getMasterOptionLabel(option) {
-  return (
-    option?.label ||
-    option?.brand ||
-    option?.category ||
-    option?.subcategory ||
-    option?.name ||
-    "Unnamed"
-  );
-}
 
-/**
- * Resolves which category a subcategory belongs to.
- *
- * @param {object} subcategory
- * @returns {string} Category id or empty string when unknown.
- */
-function getSubcategoryCategoryId(subcategory) {
-  return (
-    subcategory?.categoryId ||
-    subcategory?.category_id ||
-    subcategory?.category?._id ||
-    subcategory?.category?.id ||
-    ""
-  );
-}
+
 
 /**
  * Resolves total tax rate for a product.
@@ -202,6 +150,9 @@ function getAlternateUnitSnapshot(product) {
     product?.alt_unit ?? product?.alternate_unit ?? product?.alternateUnit ?? null;
   const baseDenominator = product?.base_denominator ?? product?.baseDenominator ?? null;
   const altConversion = product?.alt_conversion ?? product?.altConversion ?? null;
+
+
+  /// if any of the alternate unit fields are missing, return nulls for all
 
   if (!alternateUnit || baseDenominator == null || altConversion == null) {
     return {
@@ -517,374 +468,6 @@ async function resolveInitialRate({ partyId, productId, productDetail, priceLeve
   return { source: "manual", rate: 0 };
 }
 
-// ---------------------------------------------------------------------------
-// FilterDropdown
-// ---------------------------------------------------------------------------
-
-/**
- * Generic dropdown used by filter sheet.
- *
- * @param {{
- *   label: string,
- *   value: string,
- *   onChange: (next: string) => void,
- *   options: Array<object>,
- *   placeholder: string,
- *   disabled?: boolean
- * }} props
- * @returns {JSX.Element}
- */
-function FilterDropdown({ label, value, onChange, options, placeholder, disabled = false }) {
-  return (
-    <div className="space-y-2">
-      <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-        {label}
-      </label>
-      <div className="relative">
-        <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          disabled={disabled}
-          className="h-12 w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-        >
-          <option value="">{placeholder}</option>
-          {options.map((option) => {
-            const v = getMasterOptionId(option);
-            return (
-              <option key={v} value={v}>
-                {getMasterOptionLabel(option)}
-              </option>
-            );
-          })}
-        </select>
-        <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// FilterSheet
-// ---------------------------------------------------------------------------
-
-/**
- * Right-side filter sheet used to choose product filters before applying.
- * Keeps local draft state so user can cancel without mutating applied filters.
- *
- * @param {{
- *   open: boolean,
- *   onOpenChange: (open: boolean) => void,
- *   appliedPriceLevel: string,
- *   appliedBrandId: string,
- *   appliedCategoryId: string,
- *   appliedSubcategoryId: string,
- *   priceLevels: Array<object>,
- *   brands: Array<object>,
- *   categories: Array<object>,
- *   subcategories: Array<object>,
- *   onApply: (filters: {
- *     priceLevel: string,
- *     brandId: string,
- *     categoryId: string,
- *     subcategoryId: string,
- *   }) => void
- * }} props
- * @returns {JSX.Element}
- */
-function FilterSheet({
-  open,
-  onOpenChange,
-  appliedPriceLevel,
-  appliedBrandId,
-  appliedCategoryId,
-  appliedSubcategoryId,
-  priceLevels,
-  brands,
-  categories,
-  subcategories,
-  onApply,
-}) {
-  const [draftPriceLevel, setDraftPriceLevel] = useState(appliedPriceLevel || "");
-  const [draftBrandId, setDraftBrandId] = useState(appliedBrandId || "");
-  const [draftCategoryId, setDraftCategoryId] = useState(appliedCategoryId || "");
-  const [draftSubcategoryId, setDraftSubcategoryId] = useState(appliedSubcategoryId || "");
-
-  // Reset drafts to the current applied values every time the sheet opens.
-  useEffect(() => {
-    if (!open) return;
-    setDraftPriceLevel(appliedPriceLevel || "");
-    setDraftBrandId(appliedBrandId || "");
-    setDraftCategoryId(appliedCategoryId || "");
-    setDraftSubcategoryId(appliedSubcategoryId || "");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open]);
-
-  const visibleSubcategories = useMemo(() => {
-    if (!draftCategoryId) return [];
-    return subcategories.filter(
-      (s) => getSubcategoryCategoryId(s) === draftCategoryId,
-    );
-  }, [draftCategoryId, subcategories]);
-
-  const effectiveDraftSubcategoryId = visibleSubcategories.some(
-    (s) => getMasterOptionId(s)?.toString() === draftSubcategoryId?.toString(),
-  )
-    ? draftSubcategoryId
-    : "";
-
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent
-        side="right"
-        className="flex h-full w-full max-w-full flex-col border-l bg-white p-0 sm:max-w-md"
-      >
-        <SheetHeader className="border-b border-slate-100 px-4 py-4">
-          <SheetTitle className="text-sm">Filters</SheetTitle>
-        </SheetHeader>
-
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-5 px-4 py-4">
-            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-sm font-semibold text-slate-900">Filter products</p>
-              <p className="mt-1 text-xs text-slate-500">
-                Use the dropdowns below to narrow the product list.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">
-                Price Level
-              </label>
-              <div className="relative">
-                <select
-                  value={draftPriceLevel}
-                  onChange={(e) => setDraftPriceLevel(e.target.value)}
-                  className="h-12 w-full appearance-none rounded-2xl border border-slate-200 bg-white px-4 pr-10 text-sm text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
-                >
-                  <option value="">Default (no price level)</option>
-                  {priceLevels.map((pl) => (
-                    <option key={pl?._id} value={pl?._id}>
-                      {pl?.pricelevel || "Unnamed"}
-                    </option>
-                  ))}
-                </select>
-                <ChevronDown className="pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              </div>
-            </div>
-
-            <FilterDropdown
-              label="Brand"
-              value={draftBrandId}
-              onChange={setDraftBrandId}
-              options={brands}
-              placeholder="All brands"
-            />
-            <FilterDropdown
-              label="Category"
-              value={draftCategoryId}
-              onChange={(v) => { setDraftCategoryId(v); setDraftSubcategoryId(""); }}
-              options={categories}
-              placeholder="All categories"
-            />
-            <FilterDropdown
-              label="Subcategory"
-              value={effectiveDraftSubcategoryId}
-              onChange={setDraftSubcategoryId}
-              options={visibleSubcategories}
-              placeholder={draftCategoryId ? "All subcategories" : "Select category first"}
-              disabled={!draftCategoryId}
-            />
-          </div>
-        </ScrollArea>
-
-        <SheetFooter className="border-t border-slate-100 px-4 py-4">
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-10"
-            onClick={() => {
-              setDraftPriceLevel("");
-              setDraftBrandId("");
-              setDraftCategoryId("");
-              setDraftSubcategoryId("");
-            }}
-          >
-            Reset
-          </Button>
-          <Button
-            type="button"
-            className="min-h-10"
-            onClick={() => {
-              onApply({
-                priceLevel: draftPriceLevel || "",
-                brandId: draftBrandId || "",
-                categoryId: draftCategoryId || "",
-                subcategoryId: effectiveDraftSubcategoryId || "",
-              });
-              onOpenChange(false);
-            }}
-          >
-            Apply
-          </Button>
-        </SheetFooter>
-      </SheetContent>
-    </Sheet>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// ProductRow
-// ---------------------------------------------------------------------------
-
-/**
- * One product tile in list view with quantity controls and quick edit.
- *
- * @param {{
- *   product: object,
- *   stagedItem?: object,
- *   loading: boolean,
- *   priceLevel: string,
- *   selectedUnit: string,
- *   onSelectedUnitChange: (product: object, unit: string) => void,
- *   onAdd: (product: object) => void,
- *   onEdit: (product: object) => void,
- *   onIncrement: (product: object) => void,
- *   onDecrement: (product: object) => void
- * }} props
- * @returns {JSX.Element}
- */
-function ProductRow({
-  product,
-  stagedItem,
-  loading,
-  priceLevel,
-  selectedUnit,
-  onSelectedUnitChange,
-  onAdd,
-  onEdit,
-  onIncrement,
-  onDecrement,
-}) {
-  const baseUnit = getProductBaseUnit(product);
-  const unitSnapshot = getAlternateUnitSnapshot(product);
-  const hasAlternateUnit = Boolean(unitSnapshot.alternateUnit);
-  const rowItem = {
-    ...buildProductDetail(product),
-    ...(stagedItem || {}),
-    ...unitSnapshot,
-    rate:
-      stagedItem?.rate ??
-      getPriceLevelRate(buildProductDetail(product), priceLevel) ??
-      0,
-  };
-  const unitView = getProductListUnitView(rowItem, selectedUnit);
-  const quantity = unitView.quantity;
-  const displayRate = unitView.displayRate;
-
-  let totalAmount = null;
-  if (stagedItem && quantity > 0) {
-    const calcItem = buildCalcItemFromStaged(stagedItem);
-    if (calcItem) {
-      const result = recalculateItem({ ...calcItem });
-      totalAmount = result.totalAmount || 0;
-    }
-  }
-
-  const subtitle = [
-    product?.brand?.brand || product?.brandName || product?.brand,
-    product?.category?.category || product?.categoryName || product?.category,
-    product?.sub_category?.subcategory || product?.subcategoryName || product?.subcategory,
-  ]
-    .filter(Boolean)
-    .join(", ");
-
-  return (
-    <div className="border-b border-slate-200 bg-white py-3">
-      <div className="flex items-stretch gap-3">
-        <div className="flex w-16 shrink-0 items-center justify-center rounded-sm bg-indigo-50 px-3">
-          <Package className="h-5 w-5 text-indigo-400" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-900">
-            {product?.product_name || "Untitled Product"}
-          </p>
-          {subtitle && (
-            <p className="mt-0.5 truncate text-xs text-slate-500">{subtitle}</p>
-          )}
-
-          <div className="mt-2 flex items-center gap-1.5">
-            <button
-              type="button"
-              className="flex h-7 w-7 items-center justify-center rounded border border-rose-200 bg-rose-50 text-sm text-rose-500 hover:bg-rose-100 hover:border-rose-300 disabled:opacity-40"
-              disabled={loading || quantity <= 0}
-              onClick={() => onDecrement(product, unitView.selectedUnit)}
-            >
-              −
-            </button>
-            <span className="min-w-[1.75rem] text-center text-xs font-semibold text-slate-900">
-              {quantity}
-            </span>
-            <button
-              type="button"
-              className="flex h-7 w-7 items-center justify-center rounded border border-emerald-200 bg-emerald-50 text-sm text-emerald-600 hover:bg-emerald-100 hover:border-emerald-300 disabled:opacity-40"
-              disabled={loading}
-              onClick={() =>
-                quantity > 0
-                  ? onIncrement(product, unitView.selectedUnit)
-                  : onAdd(product, unitView.selectedUnit)
-              }
-            >
-              +
-            </button>
-            {hasAlternateUnit ? (
-              <div className="ml-1 flex overflow-hidden rounded border border-slate-200 text-[10px] font-medium">
-                {[baseUnit, unitSnapshot.alternateUnit].map((unit) => (
-                  <button
-                    key={unit}
-                    type="button"
-                    className={`px-1.5 py-0.5 ${
-                      unitView.selectedUnit === unit
-                        ? "bg-emerald-600 text-white"
-                        : "bg-white text-slate-500 hover:bg-slate-50"
-                    }`}
-                    onClick={() => onSelectedUnitChange(product, unit)}
-                  >
-                    {unit}
-                  </button>
-                ))}
-              </div>
-            ) : baseUnit ? (
-              <span className="ml-1 text-xs font-medium text-slate-500">{baseUnit}</span>
-            ) : null}
-          </div>
-
-          <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <p className="text-sm font-semibold text-slate-900">
-                {(Number(displayRate) || 0).toFixed(2)}
-              </p>
-              {totalAmount != null && (
-                <p className="text-[11px] text-slate-600">Total: ₹{totalAmount.toFixed(2)}</p>
-              )}
-              <p className="text-[11px] text-slate-500">
-                {quantity > 0 ? stagedItem?.initialPriceSource || "manual" : "Tap + to add"}
-              </p>
-            </div>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-100 disabled:opacity-40"
-              disabled={loading || quantity <= 0}
-              onClick={() => onEdit(product)}
-            >
-              <Pencil className="h-3 w-3" />
-              Edit item
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // ProductSelectPage
@@ -1746,7 +1329,7 @@ export default function ProductSelectPage() {
                   products.map((product) => {
                     const productId = getProductId(product);
                     return (
-                      <ProductRow
+                      <ExtractedProductRow
                         key={productId}
                         product={product}
                         stagedItem={stagedItems[productId]}
@@ -1780,7 +1363,7 @@ export default function ProductSelectPage() {
       </div>
 
       {/* No key prop — FilterSheet resets its draft state via useEffect on open */}
-      <FilterSheet
+      <ExtractedProductFilterSheet
         open={isFilterSheetOpen}
         onOpenChange={setIsFilterSheetOpen}
         appliedPriceLevel={appliedPriceLevel}

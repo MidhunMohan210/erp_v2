@@ -164,6 +164,9 @@ export function calculateAdditionalChargeTotals(
 export function calculateItemAmounts(item, taxType = "igst") {
   // This is the core per-row pricing engine used across create/edit flows.
   // All UI totals are derived from this function, not manual arithmetic in components.
+  //This answers ,For this one product row, after unit conversion, discount, GST, cess, and extra cess, what are all the final amounts?
+
+  // If the user selected an alternate unit, it converts that alternate quantity back into the base unit first
   const alternateUnitSelected = isAlternateUnitSelected(item);
   const enteredAlternateActualQty = item?.alternateActualQty;
   const enteredAlternateBilledQty = item?.alternateBilledQty;
