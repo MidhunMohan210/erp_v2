@@ -401,6 +401,48 @@ describe("POST /api/sale-orders — Business logic", () => {
       status: "open",
     });
   });
+
+  it("accepts legacy mobile item unit fields and returns legacy unit aliases", async () => {
+    const res = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: new mongoose.Types.ObjectId().toString(),
+          name: "Legacy Box",
+          unit: "Box",
+          alt_unit: "Piece",
+          unit_conversion: 1,
+          alt_unit_conversion: 12,
+          actualQty: 2,
+          billedQty: 2,
+          rate: 100,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 236,
+        },
+      ],
+    });
+
+    const item = res.body.data.saleOrder.items[0];
+    const saleOrder = await SaleOrder.findById(res.body.data.saleOrder._id).lean();
+
+    expect(res.status).toBe(201);
+    expect(item).toMatchObject({
+      base_unit: "Box",
+      selected_unit: "Box",
+      alternate_unit: "Piece",
+      unit: "Box",
+      alt_unit: "Piece",
+      unit_conversion: 1,
+      alt_unit_conversion: 12,
+      alternate_actual_qty: 24,
+      alternate_billed_qty: 24,
+    });
+    expect(saleOrder.items[0]).not.toHaveProperty("unit");
+    expect(saleOrder.items[0]).not.toHaveProperty("alt_unit");
+    expect(saleOrder.items[0]).not.toHaveProperty("unit_conversion");
+    expect(saleOrder.items[0]).not.toHaveProperty("alt_unit_conversion");
+  });
 });
 
 describe("POST /api/sale-orders — DB side effects (assert after valid create)", () => {
@@ -534,6 +576,12 @@ describe("GET /api/sale-orders/:saleOrderId", () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.data.saleOrder._id).toBe(createRes.body.data.saleOrder._id);
+    expect(res.body.data.saleOrder.items[0]).toMatchObject({
+      unit: "pcs",
+      alt_unit: null,
+      unit_conversion: null,
+      alt_unit_conversion: null,
+    });
   });
 
   it("Wrong company saleOrderId → 404", async () => {

@@ -50,17 +50,40 @@ function normalizeRequiredNumber(value, { fieldName, min, itemName }) {
 }
 
 function readAlternateUnitFields(row = {}) {
+  const hasLegacyAlternateAliases =
+    row?.alt_unit !== undefined ||
+    row?.unit_conversion !== undefined ||
+    row?.alt_unit_conversion !== undefined;
+  const legacyBaseDenominator = firstDefined(
+    row?.baseDenominator,
+    row?.base_denominator,
+    row?.unit_conversion
+  );
+  const legacyAltConversion = firstDefined(
+    row?.altConversion,
+    row?.alt_conversion,
+    row?.alt_unit_conversion
+  );
+  const actualQty = firstDefined(row?.actualQty, row?.actual_qty);
+  const billedQty = firstDefined(row?.billedQty, row?.billed_qty);
+
   return {
-    alternateUnit: firstDefined(row?.alternateUnit, row?.alternate_unit),
-    baseDenominator: firstDefined(row?.baseDenominator, row?.base_denominator),
-    altConversion: firstDefined(row?.altConversion, row?.alt_conversion),
+    alternateUnit: firstDefined(row?.alternateUnit, row?.alternate_unit, row?.alt_unit),
+    baseDenominator: legacyBaseDenominator,
+    altConversion: legacyAltConversion,
     alternateActualQty: firstDefined(
       row?.alternateActualQty,
-      row?.alternate_actual_qty
+      row?.alternate_actual_qty,
+      hasLegacyAlternateAliases
+        ? convertBaseQtyToAlternate(actualQty, legacyBaseDenominator, legacyAltConversion)
+        : undefined
     ),
     alternateBilledQty: firstDefined(
       row?.alternateBilledQty,
-      row?.alternate_billed_qty
+      row?.alternate_billed_qty,
+      hasLegacyAlternateAliases
+        ? convertBaseQtyToAlternate(billedQty, legacyBaseDenominator, legacyAltConversion)
+        : undefined
     ),
   };
 }
@@ -119,11 +142,11 @@ function normalizeAlternateUnitFields(row = {}) {
 function normalizeSaleOrderUnits(row = {}, alternateFields) {
   const itemName = row?.name || row?.product_name || row?.item_name || "";
   const baseUnit = normalizeRequiredUnit(
-    firstDefined(row?.baseUnit, row?.base_unit),
+    firstDefined(row?.baseUnit, row?.base_unit, row?.unit),
     { fieldName: "base_unit", itemName }
   );
   const selectedUnit = normalizeRequiredUnit(
-    firstDefined(row?.selectedUnit, row?.selected_unit),
+    firstDefined(row?.selectedUnit, row?.selected_unit, row?.unit, baseUnit),
     { fieldName: "selected_unit", itemName }
   );
   const validSelectedUnits = [baseUnit];
@@ -452,6 +475,27 @@ function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
 }
 
+function withLegacySaleOrderItemUnitFields(item = {}) {
+  const selectedUnit = item.selected_unit || item.base_unit || null;
+
+  return {
+    ...item,
+    unit: item.unit || selectedUnit,
+    alt_unit: item.alt_unit ?? item.alternate_unit ?? null,
+    unit_conversion: item.unit_conversion ?? item.base_denominator ?? null,
+    alt_unit_conversion: item.alt_unit_conversion ?? item.alt_conversion ?? null,
+  };
+}
+
+export function addLegacySaleOrderUnitFields(saleOrder = null) {
+  if (!saleOrder) return saleOrder;
+
+  return {
+    ...saleOrder,
+    items: (saleOrder.items || []).map(withLegacySaleOrderItemUnitFields),
+  };
+}
+
 // Canonical totals builder used by both create and update flows.
 // We recalculate on server side from items/charges to avoid trusting client math.
 export function buildSaleOrderTotals(body = {}) {
@@ -683,6 +727,7 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
 }
 
 export default {
+  addLegacySaleOrderUnitFields,
   applySaleOrderUpdate,
   buildSaleOrderPayload,
   buildSaleOrderTotals,

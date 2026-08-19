@@ -19,6 +19,7 @@ import {
   buildVoucherTimelineUpdatePayload,
 } from "./voucherTimelinePayload.service.js";
 import {
+  addLegacySaleOrderUnitFields,
   applySaleOrderUpdate,
   buildSaleOrderPayload,
   logSaleOrderTotalsMismatch,
@@ -93,7 +94,7 @@ export async function createSaleOrder(data = {}, req) {
       await createVoucherTimelineEntry(buildVoucherTimelinePayload(created), session);
     });
 
-    return createdSaleOrder;
+    return addLegacySaleOrderUnitFields(createdSaleOrder);
   } finally {
     // Always release session even when transaction throws.
     await session.endSession();
@@ -109,7 +110,9 @@ export async function getSaleOrderById(id, { cmp_id } = {}, req) {
     filter.cmp_id = cmp_id;
   }
 
-  return SaleOrder.findOne(filter).lean();
+  const saleOrder = await SaleOrder.findOne(filter).lean();
+
+  return addLegacySaleOrderUnitFields(saleOrder);
 }
 
 // Update flow summary:
@@ -177,7 +180,7 @@ export async function updateSaleOrder(id, data = {}, req) {
       );
     });
 
-    return updatedSaleOrder;
+    return addLegacySaleOrderUnitFields(updatedSaleOrder);
   } finally {
     await session.endSession();
   }
@@ -229,7 +232,7 @@ export async function cancelSaleOrder(id, data = {}, req) {
       );
     });
 
-    return cancelledSaleOrder;
+    return addLegacySaleOrderUnitFields(cancelledSaleOrder);
   } finally {
     await session.endSession();
   }
