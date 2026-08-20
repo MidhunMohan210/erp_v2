@@ -3,6 +3,9 @@ import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import app from "../../app.js";
+import PriceLevel from "../../Model/PriceLevel.js";
+import Product from "../../Model/ProductSchema.js";
+import { Brand, Category, Subcategory } from "../../Model/ProductSubDetails.js";
 import SaleOrder from "../../Model/SaleOrder.js";
 import TransactionCounter from "../../Model/TransactionCounter.js";
 import User from "../../Model/UserSchema.js";
@@ -190,15 +193,23 @@ async function bootstrapBaseContext() {
     companyOverrides: BASE_COMPANY,
   });
 
+  if (!context.companyId || !context.company) {
+    throw new Error(
+      `Failed to bootstrap Sale Order test company: ${context.companyRes?.status} ${
+        context.companyRes?.body?.message || "missing company response"
+      }`
+    );
+  }
+
   const accountGroup = await createAccountGroup({
-    cmp_id: context.company._id,
+    cmp_id: context.companyId,
     Primary_user_id: context.user._id,
     accountGroup: "Sundry Debtors",
     accountGroup_id: "AG-SO-BASE",
   });
 
   const party = await createTestParty({
-    cmp_id: context.company._id,
+    cmp_id: context.companyId,
     Primary_user_id: context.user._id,
     accountGroup: accountGroup._id,
     created_by: context.user._id,
@@ -239,6 +250,73 @@ async function createSaleOrderForTest(overrides = {}) {
 
   expect(res.status).toBe(201);
   return res;
+}
+
+async function createProductMasters(label = "Apple", overrides = {}) {
+  const suffix = `${label}-${new mongoose.Types.ObjectId().toString().slice(-6)}`;
+
+  const brand = await Brand.create({
+    brand: `${label} Brand`,
+    brand_id: `BR-${suffix}`,
+    cmp_id: overrides.cmp_id || baseContext.companyId,
+    Primary_user_id: overrides.Primary_user_id || baseContext.userId,
+  });
+
+  const category = await Category.create({
+    category: `${label} Category`,
+    category_id: `CAT-${suffix}`,
+    cmp_id: overrides.cmp_id || baseContext.companyId,
+    Primary_user_id: overrides.Primary_user_id || baseContext.userId,
+  });
+
+  const subcategory = await Subcategory.create({
+    subcategory: `${label} Subcategory`,
+    subcategory_id: `SUB-${suffix}`,
+    category: category._id,
+    cmp_id: overrides.cmp_id || baseContext.companyId,
+    Primary_user_id: overrides.Primary_user_id || baseContext.userId,
+  });
+
+  const wholesale = await PriceLevel.create({
+    pricelevel: `${label} Wholesale`,
+    pricelevel_id: `PL-W-${suffix}`,
+    cmp_id: overrides.cmp_id || baseContext.companyId,
+    Primary_user_id: overrides.Primary_user_id || baseContext.userId,
+  });
+
+  const retail = await PriceLevel.create({
+    pricelevel: `${label} Retail`,
+    pricelevel_id: `PL-R-${suffix}`,
+    cmp_id: overrides.cmp_id || baseContext.companyId,
+    Primary_user_id: overrides.Primary_user_id || baseContext.userId,
+  });
+
+  const product = await Product.create({
+    product_name: overrides.product_name || `${label} Original`,
+    cmp_id: overrides.cmp_id || baseContext.companyId,
+    Primary_user_id: overrides.Primary_user_id || baseContext.userId,
+    product_master_id: overrides.product_master_id || `PROD-${suffix}`,
+    brand: overrides.brand ?? brand._id,
+    category: overrides.category ?? category._id,
+    sub_category: overrides.sub_category ?? subcategory._id,
+    base_unit: "pcs",
+    priceLevels: overrides.priceLevels || [
+      {
+        priceLevel: wholesale._id,
+        priceRate: 100,
+        priceDisc: 0,
+      },
+    ],
+  });
+
+  return {
+    brand,
+    category,
+    subcategory,
+    wholesale,
+    retail,
+    product,
+  };
 }
 
 function getSaleOrderRequest(saleOrderId, companyId = baseContext.companyId, token = baseContext.token) {
@@ -581,6 +659,389 @@ describe("GET /api/sale-orders/:saleOrderId", () => {
       alt_unit: null,
       unit_conversion: null,
       alt_unit_conversion: null,
+    });
+  });
+
+  it("enriches item_name and latest priceLevels without replacing saved rate", async () => {
+    const masters = await createProductMasters("Apple");
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(masters.product._id),
+          name: "Old Apple",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 5,
+          billedQty: 5,
+          rate: 100,
+          taxRate: 18,
+          discountAmount: 10,
+          totalAmount: 580,
+          priceLevel: String(masters.wholesale._id),
+          initialPriceSource: "saved-price-level",
+        },
+      ],
+    });
+
+    await Product.findByIdAndUpdate(masters.product._id, {
+      $set: {
+        product_name: "Apple Premium",
+        priceLevels: [
+          {
+            priceLevel: masters.wholesale._id,
+            priceRate: 200,
+            priceDisc: 0,
+          },
+          {
+            priceLevel: masters.retail._id,
+            priceRate: 150,
+            priceDisc: 0,
+          },
+        ],
+      },
+    });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    const item = res.body.data.saleOrder.items[0];
+    expect(item.item_name).toBe("Apple Premium");
+    expect(item.rate).toBe(100);
+    expect(item.priceLevels).toEqual([
+      expect.objectContaining({
+        priceLevel: String(masters.wholesale._id),
+        priceRate: 200,
+        priceDisc: 0,
+      }),
+      expect.objectContaining({
+        priceLevel: String(masters.retail._id),
+        priceRate: 150,
+        priceDisc: 0,
+      }),
+    ]);
+  });
+
+  it("returns latest brand, category, and sub_category from Product master", async () => {
+    const masters = await createProductMasters("Categorized");
+    const latestBrand = await Brand.create({
+      brand: "Latest Brand",
+      brand_id: "BR-LATEST-SO",
+      cmp_id: baseContext.companyId,
+      Primary_user_id: baseContext.userId,
+    });
+    const latestCategory = await Category.create({
+      category: "Latest Category",
+      category_id: "CAT-LATEST-SO",
+      cmp_id: baseContext.companyId,
+      Primary_user_id: baseContext.userId,
+    });
+    const latestSubcategory = await Subcategory.create({
+      subcategory: "Latest Subcategory",
+      subcategory_id: "SUB-LATEST-SO",
+      category: latestCategory._id,
+      cmp_id: baseContext.companyId,
+      Primary_user_id: baseContext.userId,
+    });
+
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(masters.product._id),
+          name: "Categorized Old",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 1,
+          billedQty: 1,
+          rate: 100,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 118,
+        },
+      ],
+    });
+
+    await Product.findByIdAndUpdate(masters.product._id, {
+      $set: {
+        brand: latestBrand._id,
+        category: latestCategory._id,
+        sub_category: latestSubcategory._id,
+      },
+    });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.saleOrder.items[0].brand).toMatchObject({
+      _id: String(latestBrand._id),
+      brand: "Latest Brand",
+      brand_id: "BR-LATEST-SO",
+    });
+    expect(res.body.data.saleOrder.items[0].category).toMatchObject({
+      _id: String(latestCategory._id),
+      category: "Latest Category",
+      category_id: "CAT-LATEST-SO",
+    });
+    expect(res.body.data.saleOrder.items[0].sub_category).toMatchObject({
+      _id: String(latestSubcategory._id),
+      subcategory: "Latest Subcategory",
+      subcategory_id: "SUB-LATEST-SO",
+    });
+  });
+
+  it("keeps saved item data and returns empty priceLevels when Product is missing", async () => {
+    const masters = await createProductMasters("Deleted");
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(masters.product._id),
+          name: "Deleted Saved Name",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 3,
+          billedQty: 3,
+          rate: 75,
+          taxRate: 18,
+          discountAmount: 5,
+          totalAmount: 260.5,
+        },
+      ],
+    });
+
+    await Product.deleteOne({ _id: masters.product._id });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.saleOrder.items[0]).toMatchObject({
+      item_name: "Deleted Saved Name",
+      actual_qty: 3,
+      billed_qty: 3,
+      rate: 75,
+      discount_amount: 5,
+      priceLevels: [],
+    });
+  });
+
+  it("matches latest Product metadata to the correct item_id for multiple products", async () => {
+    const apple = await createProductMasters("Multi Apple");
+    const banana = await createProductMasters("Multi Banana");
+    await Product.findByIdAndUpdate(apple.product._id, {
+      $set: {
+        product_name: "Apple Latest",
+        priceLevels: [{ priceLevel: apple.wholesale._id, priceRate: 210, priceDisc: 1 }],
+      },
+    });
+    await Product.findByIdAndUpdate(banana.product._id, {
+      $set: {
+        product_name: "Banana Latest",
+        priceLevels: [{ priceLevel: banana.wholesale._id, priceRate: 310, priceDisc: 2 }],
+      },
+    });
+
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(apple.product._id),
+          name: "Apple Saved",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 1,
+          billedQty: 1,
+          rate: 10,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 11.8,
+        },
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(banana.product._id),
+          name: "Banana Saved",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 1,
+          billedQty: 1,
+          rate: 20,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 23.6,
+        },
+      ],
+    });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.saleOrder.items).toHaveLength(2);
+    expect(res.body.data.saleOrder.items[0]).toMatchObject({
+      item_id: String(apple.product._id),
+      item_name: "Apple Latest",
+      rate: 10,
+    });
+    expect(res.body.data.saleOrder.items[0].priceLevels[0].priceRate).toBe(210);
+    expect(res.body.data.saleOrder.items[1]).toMatchObject({
+      item_id: String(banana.product._id),
+      item_name: "Banana Latest",
+      rate: 20,
+    });
+    expect(res.body.data.saleOrder.items[1].priceLevels[0].priceRate).toBe(310);
+  });
+
+  it("enriches duplicate Product item rows independently without changing item_id", async () => {
+    const masters = await createProductMasters("Duplicate");
+    await Product.findByIdAndUpdate(masters.product._id, {
+      $set: {
+        product_name: "Duplicate Latest",
+        priceLevels: [{ priceLevel: masters.wholesale._id, priceRate: 410, priceDisc: 0 }],
+      },
+    });
+
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(masters.product._id),
+          name: "Duplicate Saved 1",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 1,
+          billedQty: 1,
+          rate: 11,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 12.98,
+        },
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(masters.product._id),
+          name: "Duplicate Saved 2",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 2,
+          billedQty: 2,
+          rate: 12,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 28.32,
+        },
+      ],
+    });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.saleOrder.items).toEqual([
+      expect.objectContaining({
+        item_id: String(masters.product._id),
+        item_name: "Duplicate Latest",
+        rate: 11,
+        actual_qty: 1,
+      }),
+      expect.objectContaining({
+        item_id: String(masters.product._id),
+        item_name: "Duplicate Latest",
+        rate: 12,
+        actual_qty: 2,
+      }),
+    ]);
+    expect(res.body.data.saleOrder.items[0].priceLevels[0].priceRate).toBe(410);
+    expect(res.body.data.saleOrder.items[1].priceLevels[0].priceRate).toBe(410);
+  });
+
+  it("does not enrich from a Product outside the Sale Order company", async () => {
+    const otherCompany = await createOwnedCompany(baseContext.token, "Fetch Scope Company");
+    const foreignProduct = await Product.create({
+      product_name: "Foreign Product Latest",
+      cmp_id: otherCompany.companyId,
+      Primary_user_id: baseContext.userId,
+      product_master_id: "PROD-FOREIGN-SO",
+      base_unit: "pcs",
+      priceLevels: [{ priceRate: 999, priceDisc: 0 }],
+    });
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(foreignProduct._id),
+          name: "Scoped Saved Name",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 1,
+          billedQty: 1,
+          rate: 55,
+          taxRate: 18,
+          discountAmount: 0,
+          totalAmount: 64.9,
+        },
+      ],
+    });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.saleOrder.items[0]).toMatchObject({
+      item_id: String(foreignProduct._id),
+      item_name: "Scoped Saved Name",
+      rate: 55,
+      priceLevels: [],
+    });
+  });
+
+  it("does not alter saved transaction fields while enriching latest Product metadata", async () => {
+    const masters = await createProductMasters("Snapshot");
+    const createRes = await createSaleOrderForTest({
+      items: [
+        {
+          _id: new mongoose.Types.ObjectId().toString(),
+          id: String(masters.product._id),
+          name: "Snapshot Saved",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 7,
+          billedQty: 6,
+          rate: 100,
+          taxRate: 18,
+          cessRate: 2,
+          discountAmount: 10,
+          taxableAmount: 590,
+          taxAmount: 106.2,
+          totalAmount: 708,
+          priceLevel: String(masters.wholesale._id),
+          initialPriceSource: "saved-source",
+        },
+      ],
+    });
+
+    await Product.findByIdAndUpdate(masters.product._id, {
+      $set: {
+        product_name: "Snapshot Latest",
+        priceLevels: [{ priceLevel: masters.wholesale._id, priceRate: 200, priceDisc: 5 }],
+      },
+    });
+
+    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
+
+    expect(res.status).toBe(200);
+    expect(res.body.data.saleOrder.items[0]).toMatchObject({
+      item_name: "Snapshot Latest",
+      rate: 100,
+      actual_qty: 7,
+      billed_qty: 6,
+      tax_rate: 18,
+      cess_rate: 2,
+      discount_amount: 10,
+      taxable_amount: 590,
+      tax_amount: 106.2,
+      total_amount: 708,
+      price_level_id: String(masters.wholesale._id),
+      initial_price_source: "saved-source",
+    });
+    expect(res.body.data.saleOrder.items[0].priceLevels[0]).toMatchObject({
+      priceRate: 200,
+      priceDisc: 5,
     });
   });
 

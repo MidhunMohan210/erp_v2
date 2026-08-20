@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 import Party from "../Model/partySchema.js";
+import Product from "../Model/ProductSchema.js";
 import SaleOrder from "../Model/SaleOrder.js";
 import { applyTransactionCreatorScope } from "../utils/authScope.js";
 import {
@@ -32,6 +33,74 @@ function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+const SALE_ORDER_PRODUCT_ENRICHMENT_POPULATE = [
+  { path: "brand", select: "brand brand_id" },
+  { path: "category", select: "category category_id" },
+  { path: "sub_category", select: "subcategory subcategory_id" },
+];
+
+function normalizeProductId(value) {
+  if (!value || !mongoose.Types.ObjectId.isValid(value)) return null;
+  return String(value);
+}
+
+async function enrichSaleOrderItemsWithLatestProducts(saleOrder = null) {
+  if (!saleOrder) return saleOrder;
+
+  const productIds = [
+    ...new Set(
+      (saleOrder.items || [])
+        .map((item) => normalizeProductId(item?.item_id))
+        .filter(Boolean)
+    ),
+  ];
+
+  if (productIds.length === 0) {
+    return {
+      ...saleOrder,
+      items: (saleOrder.items || []).map((item) => ({
+        ...item,
+        priceLevels: [],
+      })),
+    };
+  }
+
+  const products = await Product.find({
+    _id: { $in: productIds },
+    cmp_id: saleOrder.cmp_id,
+  })
+    .select("_id product_name brand category sub_category priceLevels")
+    .populate(SALE_ORDER_PRODUCT_ENRICHMENT_POPULATE)
+    .lean();
+
+  const productById = new Map(
+    products.map((product) => [String(product._id), product])
+  );
+
+  return {
+    ...saleOrder,
+    items: (saleOrder.items || []).map((item) => {
+      const product = productById.get(String(item?.item_id));
+
+      if (!product) {
+        return {
+          ...item,
+          priceLevels: [],
+        };
+      }
+
+      return {
+        ...item,
+        item_name: product.product_name,
+        brand: product.brand ?? null,
+        category: product.category ?? null,
+        sub_category: product.sub_category ?? null,
+        priceLevels: product.priceLevels ?? [],
+      };
+    }),
+  };
 }
 
 // Create flow summary:
@@ -111,8 +180,9 @@ export async function getSaleOrderById(id, { cmp_id } = {}, req) {
   }
 
   const saleOrder = await SaleOrder.findOne(filter).lean();
+  const enrichedSaleOrder = await enrichSaleOrderItemsWithLatestProducts(saleOrder);
 
-  return addLegacySaleOrderUnitFields(saleOrder);
+  return addLegacySaleOrderUnitFields(enrichedSaleOrder);
 }
 
 // Update flow summary:
