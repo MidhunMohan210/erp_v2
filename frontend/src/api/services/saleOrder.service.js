@@ -65,16 +65,22 @@ export function buildCreateSaleOrderPayload({
       id: item?.id ?? item?._id,
       name: item?.name ?? item?.product_name ?? "",
       hsn: item?.hsn ?? item?.hsn_code ?? "",
-      base_unit: item?.baseUnit ?? item?.base_unit ?? "",
-      selected_unit: item?.selectedUnit ?? item?.selected_unit ?? "",
+      base_unit: item?.baseUnit || item?.base_unit || item?.unit || "",
+      selected_unit:
+        item?.selectedUnit ||
+        item?.selected_unit ||
+        item?.unit ||
+        item?.baseUnit ||
+        item?.base_unit ||
+        "",
       alternate_unit: normalizeNullableString(
-        item?.alternateUnit ?? item?.alternate_unit
+        item?.alternateUnit ?? item?.alternate_unit ?? item?.alt_unit
       ),
       base_denominator: normalizeNullableNumber(
-        item?.baseDenominator ?? item?.base_denominator
+        item?.baseDenominator ?? item?.base_denominator ?? item?.unit_conversion
       ),
       alt_conversion: normalizeNullableNumber(
-        item?.altConversion ?? item?.alt_conversion
+        item?.altConversion ?? item?.alt_conversion ?? item?.alt_unit_conversion
       ),
       alternate_actual_qty: normalizeNullableNumber(
         item?.alternateActualQty ?? item?.alternate_actual_qty
@@ -113,6 +119,9 @@ export function buildCreateSaleOrderPayload({
       addlCessAmount:
         Number(item?.addlCessAmount ?? item?.addl_cess_amount) || 0,
       totalAmount: Number(item?.totalAmount ?? item?.total_amount) || 0,
+      price_level_id: item?.priceLevel ?? item?.price_level_id ?? null,
+      initial_price_source:
+        item?.initialPriceSource ?? item?.initial_price_source ?? null,
       taxInclusive: Boolean(item?.taxInclusive ?? item?.tax_inclusive),
       description: item?.description || "",
     })),

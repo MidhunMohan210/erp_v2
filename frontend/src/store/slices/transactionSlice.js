@@ -230,11 +230,19 @@ function mapSaleOrderItem(row = {}, taxType = "igst") {
     id: row?.item_id || null,
     name: row?.item_name || "",
     hsn: row?.hsn || "",
-    baseUnit: row?.baseUnit ?? row?.base_unit ?? "",
-    selectedUnit: row?.selectedUnit ?? row?.selected_unit ?? "",
-    alternateUnit: row?.alternateUnit ?? row?.alternate_unit ?? null,
-    baseDenominator: row?.baseDenominator ?? row?.base_denominator ?? null,
-    altConversion: row?.altConversion ?? row?.alt_conversion ?? null,
+    baseUnit: row?.baseUnit || row?.base_unit || row?.unit || "",
+    selectedUnit:
+      row?.selectedUnit ||
+      row?.selected_unit ||
+      row?.unit ||
+      row?.baseUnit ||
+      row?.base_unit ||
+      "",
+    alternateUnit: row?.alternateUnit ?? row?.alternate_unit ?? row?.alt_unit ?? null,
+    baseDenominator:
+      row?.baseDenominator ?? row?.base_denominator ?? row?.unit_conversion ?? null,
+    altConversion:
+      row?.altConversion ?? row?.alt_conversion ?? row?.alt_unit_conversion ?? null,
     alternateActualQty:
       row?.alternateActualQty ?? row?.alternate_actual_qty ?? null,
     alternateBilledQty:
@@ -249,9 +257,10 @@ function mapSaleOrderItem(row = {}, taxType = "igst") {
     cess: Number(row?.cess_rate) || 0,
     addl_cess: Number(row?.addl_cess_rate) || 0,
     taxType,
-    priceLevel: row?.price_level_id || null,
+    priceLevel: row?.price_level_id || row?.priceLevel || null,
     priceLevels: Array.isArray(row?.priceLevels) ? row.priceLevels : [],
-    initialPriceSource: "saved",
+    initialPriceSource:
+      row?.initial_price_source ?? row?.initialPriceSource ?? "saved",
     taxInclusive: Boolean(row?.tax_inclusive),
     discountType: row?.discount_type || "amount",
     discountPercentage: Number(row?.discount_percentage) || 0,
@@ -444,8 +453,13 @@ const transactionSlice = createSlice({
           )
         : [];
       state.despatchDetails = mapSaleOrderDespatchDetails(doc?.despatch_details);
-      state.priceLevel = null;
-      state.priceLevelObject = null;
+      state.priceLevel = doc?.price_level_id || null;
+      state.priceLevelObject = doc?.price_level_id
+        ? {
+            _id: doc.price_level_id,
+            name: doc?.price_level_name || "",
+          }
+        : null;
       state.selectedSeries = {
         _id: doc?.series_id || null,
         seriesName: doc?.series_name || "",
