@@ -431,9 +431,10 @@ export const addProducts = async (req, res) => {
         }
       }
 
-      // 7.e Build enhanced product document
-      const enhancedProduct = {
-        ...product,
+      // 7.e Build product document/update payload
+      const { GodownList: _ignoredGodownList, ...productMasterPayload } = product;
+      const productMasterFields = {
+        ...productMasterPayload,
         cmp_id: cmpObjectId,
         Primary_user_id: primaryUserObjectId,
         base_unit: unitConfig.base_unit,
@@ -444,6 +445,10 @@ export const addProducts = async (req, res) => {
         category: categoryObjectId,
         sub_category: subcategoryObjectId,
         priceLevels: resolvedPriceLevels.length ? resolvedPriceLevels : [],
+      };
+
+      const insertProduct = {
+        ...productMasterFields,
         GodownList: [
           {
             godown: defaultGodown._id,
@@ -463,7 +468,7 @@ export const addProducts = async (req, res) => {
               _id: existingProduct._id,
             },
             update: {
-              $set: enhancedProduct,
+              $set: productMasterFields,
             },
             upsert: false,
           },
@@ -471,7 +476,7 @@ export const addProducts = async (req, res) => {
       } else {
         ops.push({
           insertOne: {
-            document: enhancedProduct,
+            document: insertProduct,
           },
         });
       }

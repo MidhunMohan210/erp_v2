@@ -36,7 +36,7 @@ const priceLevelSchema = new Schema(
       trim: true,
     },
   },
-  { _id: false }
+  { _id: true }
 );
 
 const godownCreatedBySchema = new Schema(
@@ -85,7 +85,7 @@ const godownItemSchema = new Schema(
     },
     created_by: godownCreatedBySchema,
   },
-  { _id: false }
+  { _id: true }
 );
 
 const productSchema = new Schema(

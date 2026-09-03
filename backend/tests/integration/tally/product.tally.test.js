@@ -481,11 +481,124 @@ describe("POST /api/tally/products", () => {
     );
     expect(productInDb.priceLevels[0].priceRate).toBe(120);
     expect(productInDb.GodownList).toHaveLength(1);
+    expect(productInDb.GodownList[0]._id).toBeDefined();
+    expect(mongoose.Types.ObjectId.isValid(productInDb.GodownList[0]._id)).toBe(
+      true,
+    );
     expect(String(productInDb.GodownList[0].godown)).toBe(
       String(defaultGodown._id),
     );
     expect(productInDb.GodownList[0].batch).toBe("Primary Batch");
     expect(productInDb.GodownList[0].balance_stock).toBe(0);
+
+    const rawProductInDb = await Product.collection.findOne({
+      _id: productInDb._id,
+    });
+    expect(rawProductInDb.GodownList[0]._id).toBeDefined();
+    expect(
+      mongoose.Types.ObjectId.isValid(rawProductInDb.GodownList[0]._id),
+    ).toBe(true);
+  });
+
+  it("should return GodownList row _id in product list and detail JSON", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Tally Product API Godown Row Admin",
+        mobileNumber: "9910010121",
+        email: "tally-product-api-godown-row-admin@example.com",
+      },
+    });
+    const dependencies = await createTallyProductDependencies(context, "API-ROW-ID");
+
+    const importRes = await postTallyProducts({
+      cmpId: context.company._id,
+      data: [
+        buildTallyProductItem({
+          Primary_user_id: context.user._id.toString(),
+          cmp_id: context.company._id.toString(),
+          product_master_id: "PRD-TALLY-API-ROW-ID",
+          product_name: "API Row ID Product",
+          ...dependencies,
+        }),
+      ],
+    });
+
+    const productInDb = await Product.findOne({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-TALLY-API-ROW-ID",
+    }).lean();
+    const expectedRowId = String(productInDb.GodownList[0]._id);
+
+    const listRes = await request(app)
+      .get("/api/product")
+      .set("Authorization", `Bearer ${context.token}`)
+      .query({ cmp_id: String(context.company._id), search: "API Row ID" });
+    const detailRes = await request(app)
+      .get(`/api/product/${productInDb._id}`)
+      .set("Authorization", `Bearer ${context.token}`)
+      .query({ cmp_id: String(context.company._id) });
+
+    expect(importRes.status).toBe(201);
+    expect(listRes.status).toBe(200);
+    expect(detailRes.status).toBe(200);
+    expect(String(listRes.body.items[0].GodownList[0]._id)).toBe(expectedRowId);
+    expect(String(detailRes.body.GodownList[0]._id)).toBe(expectedRowId);
+    expect(mongoose.Types.ObjectId.isValid(detailRes.body.GodownList[0]._id)).toBe(
+      true,
+    );
+  });
+
+  it("should create different subdocument _ids for multiple new GodownList rows", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Product Multi Godown Row Admin",
+        mobileNumber: "9910010122",
+        email: "product-multi-godown-row-admin@example.com",
+      },
+    });
+    const firstGodown = await createDefaultGodown({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      godown_id: "GDN-MULTI-ROW-001",
+    });
+    const secondGodown = await Godown.create({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      godown: "Second Multi Row Godown",
+      godown_id: "GDN-MULTI-ROW-002",
+      defaultGodown: false,
+      source: "web",
+      lastUpdatedBySource: "test-suite",
+    });
+
+    const product = await Product.create({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-MULTI-ROW-ID",
+      product_name: "Multi Row ID Product",
+      base_unit: "Nos",
+      GodownList: [
+        {
+          godown: firstGodown._id,
+          batch: "Batch One",
+          balance_stock: 1,
+        },
+        {
+          godown: secondGodown._id,
+          batch: "Batch Two",
+          balance_stock: 2,
+        },
+      ],
+    });
+
+    const rowIds = product.GodownList.map((row) => String(row._id));
+    expect(product.GodownList).toHaveLength(2);
+    expect(rowIds[0]).not.toBe(rowIds[1]);
+    expect(rowIds.every((id) => mongoose.Types.ObjectId.isValid(id))).toBe(true);
+
+    const rawProductInDb = await Product.collection.findOne({ _id: product._id });
+    expect(rawProductInDb.GodownList.map((row) => String(row._id))).toEqual(rowIds);
   });
 
   it("should save product alternate unit fields from Tally", async () => {
@@ -946,7 +1059,7 @@ describe("POST /api/tally/products", () => {
     ]);
   });
 
-  it("should update existing product when same product_master_id is imported again", async () => {
+  it("should update existing product master fields without modifying GodownList", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Product Admin Six",
@@ -959,7 +1072,16 @@ describe("POST /api/tally/products", () => {
       cmp_id: context.company._id,
       Primary_user_id: context.user._id,
     });
-    await createBrand({
+    const secondGodown = await Godown.create({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      godown: "Secondary Godown",
+      godown_id: "GDN-TALLY-UPDATE-002",
+      defaultGodown: false,
+      source: "web",
+      lastUpdatedBySource: "test-suite",
+    });
+    const brand = await createBrand({
       cmp_id: context.company._id,
       Primary_user_id: context.user._id,
       brand_id: "BR-TALLY-UPDATE-001",
@@ -969,13 +1091,13 @@ describe("POST /api/tally/products", () => {
       Primary_user_id: context.user._id,
       category_id: "CAT-TALLY-UPDATE-001",
     });
-    await createSubcategory({
+    const subcategory = await createSubcategory({
       cmp_id: context.company._id,
       Primary_user_id: context.user._id,
       category: category._id,
       subcategory_id: "SUBCAT-TALLY-UPDATE-001",
     });
-    await createPriceLevel({
+    const priceLevel = await createPriceLevel({
       cmp_id: context.company._id,
       Primary_user_id: context.user._id,
       pricelevel_id: "PL-TALLY-UPDATE-001",
@@ -986,36 +1108,62 @@ describe("POST /api/tally/products", () => {
       pricelevel_id: "PL-TALLY-UPDATE-002",
       pricelevel: "Wholesale",
     });
+    const rowOneId = new mongoose.Types.ObjectId();
+    const rowTwoId = new mongoose.Types.ObjectId();
+    const originalGodownList = [
+      {
+        _id: rowOneId,
+        godown: defaultGodown._id,
+        batch: "Batch A",
+        balance_stock: 25,
+        supplierName: "Supplier One",
+        mrp: 110,
+        newBatch: false,
+      },
+      {
+        _id: rowTwoId,
+        godown: secondGodown._id,
+        batch: "Batch B",
+        balance_stock: 7.5,
+        supplierName: "Supplier Two",
+        mrp: 210,
+        newBatch: true,
+        created_by: {
+          voucherType: "Opening Stock",
+          voucherNumber: "OS-1",
+          voucher_id: "VCH-1",
+        },
+      },
+    ];
 
-    const firstRes = await postTallyProducts({
-      cmpId: context.company._id,
-      data: [
-        buildTallyProductItem({
-          Primary_user_id: context.user._id.toString(),
-          cmp_id: context.company._id.toString(),
-          product_master_id: "PRD-TALLY-UPDATE-001",
-          product_name: "Original Product",
-          brand: "BR-TALLY-UPDATE-001",
-          category: "CAT-TALLY-UPDATE-001",
-          sub_category: "SUBCAT-TALLY-UPDATE-001",
-          priceLevels: [
-            {
-              priceLevel: "PL-TALLY-UPDATE-001",
-              priceRate: 120,
-              priceDisc: 0,
-              applicabledt: "2026-06-01",
-            },
-          ],
-        }),
-      ],
-    });
-
-    expect(firstRes.status).toBe(201);
-
-    const existingProduct = await Product.findOne({
-      cmp_id: context.company._id,
+    const insertResult = await Product.collection.insertOne({
+      cmp_id: context.companyId,
       Primary_user_id: context.user._id,
       product_master_id: "PRD-TALLY-UPDATE-001",
+      product_name: "Original Product",
+      product_code: "ORIGINAL-CODE",
+      base_unit: "Nos",
+      brand: brand._id,
+      category: category._id,
+      sub_category: subcategory._id,
+      priceLevels: [
+        {
+          priceLevel: priceLevel._id,
+          priceRate: 120,
+          priceDisc: 0,
+          applicabledt: "2026-06-01",
+        },
+      ],
+      saleable_stock: 99,
+      GodownList: originalGodownList,
+      batchEnabled: true,
+      gdnEnabled: true,
+      createdAt: new Date("2026-06-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-06-01T00:00:00.000Z"),
+    });
+
+    const rawExistingProduct = await Product.collection.findOne({
+      _id: insertResult.insertedId,
     });
 
     const res = await postTallyProducts({
@@ -1029,6 +1177,11 @@ describe("POST /api/tally/products", () => {
           brand: "BR-TALLY-UPDATE-001",
           category: "CAT-TALLY-UPDATE-001",
           sub_category: "SUBCAT-TALLY-UPDATE-001",
+          product_code: "UPDATED-CODE",
+          base_unit: "Box",
+          alt_unit: "Piece",
+          base_denominator: 1,
+          alt_conversion: 12,
           priceLevels: [
             {
               priceLevel: "PL-TALLY-UPDATE-002",
@@ -1046,6 +1199,9 @@ describe("POST /api/tally/products", () => {
       Primary_user_id: context.user._id,
       product_master_id: "PRD-TALLY-UPDATE-001",
     });
+    const rawUpdatedProduct = await Product.collection.findOne({
+      _id: insertResult.insertedId,
+    });
 
     expect(res.status).toBe(201);
     expect(res.body.status).toBe("success");
@@ -1058,15 +1214,79 @@ describe("POST /api/tally/products", () => {
       skippedCount: 0,
     });
     expect(updatedProduct).not.toBeNull();
-    expect(String(updatedProduct._id)).toBe(String(existingProduct._id));
+    expect(String(updatedProduct._id)).toBe(String(insertResult.insertedId));
     expect(updatedProduct.product_name).toBe("Updated Product");
+    expect(updatedProduct.product_code).toBe("UPDATED-CODE");
+    expectUnitFields(updatedProduct, {
+      base_unit: "Box",
+      alt_unit: "Piece",
+      base_denominator: 1,
+      alt_conversion: 12,
+    });
     expect(updatedProduct.priceLevels).toHaveLength(1);
     expect(updatedProduct.priceLevels[0].priceRate).toBe(145);
     expect(updatedProduct.priceLevels[0].priceDisc).toBe(5);
-    expect(updatedProduct.GodownList).toHaveLength(1);
-    expect(String(updatedProduct.GodownList[0].godown)).toBe(
-      String(defaultGodown._id),
-    );
+    expect(rawExistingProduct.GodownList).toEqual(originalGodownList);
+    expect(rawUpdatedProduct.GodownList).toEqual(originalGodownList);
+    expect(rawUpdatedProduct.GodownList).toHaveLength(2);
+    expect(rawUpdatedProduct.GodownList.map((row) => row.batch)).toEqual([
+      "Batch A",
+      "Batch B",
+    ]);
+    expect(rawUpdatedProduct.GodownList.map((row) => row.balance_stock)).toEqual([
+      25,
+      7.5,
+    ]);
+    expect(String(rawUpdatedProduct.GodownList[0]._id)).toBe(String(rowOneId));
+    expect(String(rawUpdatedProduct.GodownList[1]._id)).toBe(String(rowTwoId));
+  });
+
+  it("should not persist _ids into legacy raw GodownList rows just by reading them", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: {
+        userName: "Legacy Godown Row Read Admin",
+        mobileNumber: "9910010123",
+        email: "legacy-godown-row-read-admin@example.com",
+      },
+    });
+    const defaultGodown = await createDefaultGodown({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      godown_id: "GDN-LEGACY-ROW-001",
+    });
+
+    const insertResult = await Product.collection.insertOne({
+      cmp_id: context.companyId,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-LEGACY-ROW-NO-ID",
+      product_name: "Legacy Row No ID Product",
+      base_unit: "Nos",
+      GodownList: [
+        {
+          godown: defaultGodown._id,
+          batch: "Legacy Batch",
+          balance_stock: 13,
+        },
+      ],
+      createdAt: new Date("2026-06-01T00:00:00.000Z"),
+      updatedAt: new Date("2026-06-01T00:00:00.000Z"),
+    });
+
+    const rawBeforeRead = await Product.collection.findOne({
+      _id: insertResult.insertedId,
+    });
+    expect(rawBeforeRead.GodownList[0]).not.toHaveProperty("_id");
+
+    const hydratedProduct = await Product.findOne({
+      _id: insertResult.insertedId,
+    });
+    expect(hydratedProduct).not.toBeNull();
+
+    const rawAfterRead = await Product.collection.findOne({
+      _id: insertResult.insertedId,
+    });
+    expect(rawAfterRead.GodownList[0]).not.toHaveProperty("_id");
+    expect(rawAfterRead.GodownList[0]).toEqual(rawBeforeRead.GodownList[0]);
   });
 
   it("should skip duplicate products in the same request and return partial_success", async () => {

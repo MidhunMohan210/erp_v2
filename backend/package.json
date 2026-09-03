@@ -6,6 +6,7 @@
   "scripts": {
     "start": "nodemon server.js",
     "backfill:voucher-timeline": "node utils/backfillVoucherTimeline.js",
+    "backfill:product-godown-list-ids": "node utils/backfillProductGodownListIds.js",
     "test": "cross-env NODE_ENV=test vitest run",
     "test:watch": "cross-env NODE_ENV=test vitest",
     "test:coverage": "cross-env NODE_ENV=test vitest run --coverage"
