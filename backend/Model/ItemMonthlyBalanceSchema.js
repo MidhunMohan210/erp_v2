@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const { Schema, model, models } = mongoose;
 
-const PartyMonthlyBalanceSchema = new Schema(
+const ItemMonthlyBalanceSchema = new Schema(
   {
     cmp_id: {
       type: Schema.Types.ObjectId,
@@ -10,9 +10,9 @@ const PartyMonthlyBalanceSchema = new Schema(
       required: true,
     },
 
-    party_id: {
+    item_id: {
       type: Schema.Types.ObjectId,
-      ref: "Party",
+      ref: "Product",
       required: true,
     },
 
@@ -22,22 +22,22 @@ const PartyMonthlyBalanceSchema = new Schema(
       trim: true,
     },
 
-    total_debit: {
+    total_inward_qty: {
       type: Number,
       default: 0,
     },
 
-    total_credit: {
+    total_outward_qty: {
       type: Number,
       default: 0,
     },
 
-    accepted_debit: {
+    accepted_inward_qty: {
       type: Number,
       default: 0,
     },
 
-    accepted_credit: {
+    accepted_outward_qty: {
       type: Number,
       default: 0,
     },
@@ -56,10 +56,10 @@ const PartyMonthlyBalanceSchema = new Schema(
   },
 );
 
-PartyMonthlyBalanceSchema.index(
+ItemMonthlyBalanceSchema.index(
   {
     cmp_id: 1,
-    party_id: 1,
+    item_id: 1,
     month_key: 1,
   },
   {
@@ -67,8 +67,13 @@ PartyMonthlyBalanceSchema.index(
   },
 );
 
-const PartyMonthlyBalance =
-  models.PartyMonthlyBalance ||
-  model("PartyMonthlyBalance", PartyMonthlyBalanceSchema);
+ItemMonthlyBalanceSchema.index({
+  cmp_id: 1,
+  month_key: 1,
+});
 
-export default PartyMonthlyBalance;
+const ItemMonthlyBalance =
+  models.ItemMonthlyBalance ||
+  model("ItemMonthlyBalance", ItemMonthlyBalanceSchema);
+
+export default ItemMonthlyBalance;
