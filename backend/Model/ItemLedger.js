@@ -27,10 +27,6 @@ const ItemLedgerSchema = new Schema(
       required: true,
     },
 
-    batch_id: {
-      type: String,
-      default: null,
-    },
 
     batch: {
       type: String,

@@ -173,7 +173,7 @@ const godownSchema = new Schema(
       index: true,
     },
 
-    defaultGodown: { type: Boolean, required: true, default: false },
+
 
     source: {
       type: String,

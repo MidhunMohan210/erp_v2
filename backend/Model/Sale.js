@@ -35,7 +35,7 @@ const SaleItemSchema = new Schema(
     godown_name: { type: String, required: true, trim: true },
     godown_stock_row_id: { type: Schema.Types.ObjectId, required: true },
 
-    batch_id: { type: String, default: null, trim: true },
+    // batch_id: { type: String, default: null, trim: true },
     batch: { type: String, default: null, trim: true },
     mfgdt: { type: Date, default: null, set: convertToUTCMidnight },
     expdt: { type: Date, default: null, set: convertToUTCMidnight },

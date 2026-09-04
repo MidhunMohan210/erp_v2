@@ -6,10 +6,6 @@ import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
 
 /**
  * Tally Godown sync controller.
- *
- * Special business rule:
- * - Company must always have one active default godown.
- * - Incoming payload is normalized so this invariant is preserved.
  */
 
 /**
@@ -17,9 +13,7 @@ import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
  *
  * Rules:
  * - Upsert by (godown_id, Primary_user_id, cmp_id).
- * - Only ONE default godown (defaultGodown = true) per company.
- *   - If DB already has a default godown, any new ones in this batch are forced to false.
- *   - If DB has no default, the first godown in this batch with defaultGodown = true stays default.
+ * - Tally godown import does not create, require, or manage a default godown.
  */
 
 export const addGodowns = async (req, res) => {
@@ -43,24 +37,6 @@ export const addGodowns = async (req, res) => {
     }
 
     getApiLogs(cmp_id, "Godowns");
-
-    // 1) Check if DB already has a default godown for this company
-    const existingDefaultGodown = await Godown.findOne({
-      cmp_id,
-      defaultGodown: true,
-    }).lean();
-
-    // 2) Check if the incoming batch has at least one default=true
-    const hasDefaultInBatch = data.some((item) => item.defaultGodown === "true");
-
-    // Case A: DB has NO default, and batch also has NO default → reject
-    if (!existingDefaultGodown && !hasDefaultInBatch) {
-      return res.status(400).json({
-        status: "failure",
-        message:
-          "At least one godown must be set as default for this company. Provide one item with defaultGodown = true.",
-      });
-    }
 
     const uniqueGodowns = new Map();
     const skippedItems = [];
@@ -122,47 +98,9 @@ export const addGodowns = async (req, res) => {
           cmpObjectId = new mongoose.Types.ObjectId(rawCmpId);
         }
 
-        // Decide defaultGodown based on rules
-
-        let defaultGodownFlag = !!item.defaultGodown;
-
-        if (existingDefaultGodown) {
-          // Case B: DB already has a default
-          // - Do NOT allow changing that existing default to false.
-          // - Do NOT allow any new default in this batch.
-
-          // Is this row referring to the existing default godown?
-          const isExistingDefault =
-            existingDefaultGodown.godown_id === rawGodownId &&
-            String(existingDefaultGodown.cmp_id) === String(cmp_id) &&
-            String(existingDefaultGodown.Primary_user_id) ===
-              String(Primary_user_id);
-
-          if (isExistingDefault) {
-            // Force keep it as default, even if incoming defaultGodown is false
-            defaultGodownFlag = true;
-          } else {
-            // Any other row must not be default
-            defaultGodownFlag = false;
-          }
-        } else {
-          // Case C: No default in DB (we already know batch has at least one default)
-          // Accept incoming defaultGodown flags as-is:
-          // - You may have multiple default=true in batch, but that's ok for now;
-          //   the unique index does not care, and business rule only says
-          //   "at least one" default. If you want "exactly one", we could also
-          //   restrict to first true here.
-          // If you want only first default, uncomment below:
-          //   (But you didn't explicitly say only one in batch, only "company must have default")
-          // Example to only keep the first default in batch:
-          // if (defaultGodownFlag && defaultAlreadyChosenInBatch) defaultGodownFlag = false;
-          // else if (defaultGodownFlag) defaultAlreadyChosenInBatch = true;
-        }
-
         // Only mutable fields in $set (no cmp_id / Primary_user_id)
         const updatableFields = {
           godown: item.godown,
-          defaultGodown: defaultGodownFlag,
           source: "tally",
           lastUpdatedBySource: tally_user_name || "tally-sync",
           tallyUserName: tally_user_name || null,

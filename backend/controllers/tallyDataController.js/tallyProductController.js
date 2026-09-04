@@ -6,7 +6,6 @@ import {
   Brand,
   Category,
   Subcategory,
-  Godown,
 } from "../../Model/ProductSubDetails.js";
 import PriceLevel from "../../Model/PriceLevel.js";
 
@@ -80,11 +79,10 @@ const normalizeUnitConfig = (product) => {
  * Responsibilities:
  * - Validates incoming product rows from Tally.
  * - Resolves brand/category/subcategory/price-level references.
- * - Ensures default godown exists before product write.
  * - Upserts product master rows in bulk for high-volume imports.
  */
 
-// @desc Save products from Tally (base data only, with default godown)
+// @desc Save products from Tally (master data only)
 // @route POST /api/tally/giveTransaction
 export const addProducts = async (req, res) => {
   try {
@@ -206,38 +204,7 @@ export const addProducts = async (req, res) => {
 
     getApiLogs(cmpObjectId, "Product Data(base)");
 
-    // 3) Ensure default godown exists
-    const defaultGodown = await Godown.findOne({
-      cmp_id: cmpObjectId,
-      defaultGodown: true,
-    });
-
-    if (!defaultGodown) {
-      const godownErrorReason = "Processing error: Default godown not found";
-      for (const vp of validProducts) {
-        const { product, itemIndex } = vp;
-        results.skipped.push({
-          item: itemIndex,
-          reason: godownErrorReason,
-          data: {
-            product_master_id: product.product_master_id,
-            product_name: product.product_name,
-          },
-        });
-      }
-
-      const responsePayload = buildBulkResponse({
-        entityName: "Products",
-        totalReceived: productsToSave.length,
-        insertedCount: 0,
-        updatedCount: 0,
-        skippedItems: results.skipped,
-      });
-
-      return res.status(400).json(responsePayload);
-    }
-
-    // 4) Collect unique reference ids from valid products only
+    // 3) Collect unique reference ids from valid products only
     const brandIds = new Set();
     const categoryIds = new Set();
     const subcategoryIds = new Set();
@@ -257,7 +224,7 @@ export const addProducts = async (req, res) => {
         productMasterIds.push(product.product_master_id);
     }
 
-    // 5) Fetch reference data in one go, scoped by single cmp_id + Primary_user_id
+    // 4) Fetch reference data in one go, scoped by single cmp_id + Primary_user_id
     const [
       brandDocs,
       categoryDocs,
@@ -292,7 +259,7 @@ export const addProducts = async (req, res) => {
       }),
     ]);
 
-    // 6) Build maps for fast lookup (keyed just by id, since cmp/user fixed)
+    // 5) Build maps for fast lookup (keyed just by id, since cmp/user fixed)
     const brandMap = new Map();
     for (const b of brandDocs) {
       brandMap.set(b.brand_id, b._id);
@@ -327,7 +294,7 @@ export const addProducts = async (req, res) => {
  
     
 
-    // 7) Build operations array, skipping when brand/category/subcategory/priceLevel not found
+    // 6) Build operations array, skipping when brand/category/subcategory/priceLevel not found
     const ops = [];
     const legacyUnitCleanupIds = [];
     const BATCH_SIZE = 200;
@@ -335,7 +302,7 @@ export const addProducts = async (req, res) => {
     for (const vp of validProducts) {
       const { product, itemIndex, unitConfig } = vp;
 
-      // 7.a Resolve brand (optional, but if provided must exist)
+      // 6.a Resolve brand (optional, but if provided must exist)
       let brandObjectId = null;
       if (product.brand) {
         brandObjectId = brandMap.get(product.brand) || null;
@@ -354,7 +321,7 @@ export const addProducts = async (req, res) => {
         }
       }
 
-      // 7.b Resolve category (optional, but if provided must exist)
+      // 6.b Resolve category (optional, but if provided must exist)
       let categoryObjectId = null;
       if (product.category) {
         categoryObjectId = categoryMap.get(product.category) || null;
@@ -373,7 +340,7 @@ export const addProducts = async (req, res) => {
         }
       }
 
-      // 7.c Resolve subcategory (optional, but if provided must exist)
+      // 6.c Resolve subcategory (optional, but if provided must exist)
       let subcategoryObjectId = null;
       if (product.sub_category) {
         subcategoryObjectId =
@@ -393,7 +360,7 @@ export const addProducts = async (req, res) => {
         }
       }
 
-      // 7.d Resolve priceLevels (each priceLevel.id must exist if provided)
+      // 6.d Resolve priceLevels (each priceLevel.id must exist if provided)
       let resolvedPriceLevels = [];
       if (Array.isArray(product.priceLevels) && product.priceLevels.length > 0) {
         let priceLevelResolutionFailed = false;
@@ -431,7 +398,7 @@ export const addProducts = async (req, res) => {
         }
       }
 
-      // 7.e Build product document/update payload
+      // 6.e Build product document/update payload
       const { GodownList: _ignoredGodownList, ...productMasterPayload } = product;
       const productMasterFields = {
         ...productMasterPayload,
@@ -449,13 +416,7 @@ export const addProducts = async (req, res) => {
 
       const insertProduct = {
         ...productMasterFields,
-        GodownList: [
-          {
-            godown: defaultGodown._id,
-            batch: "Primary Batch",
-            balance_stock: 0,
-          },
-        ],
+        GodownList: [],
       };
 
       const existingProduct = existingProductMap[product.product_master_id];
@@ -482,7 +443,7 @@ export const addProducts = async (req, res) => {
       }
     }
 
-    // 8) Execute in batches
+    // 7) Execute in batches
     let insertedCount = 0;
     let updatedCount = 0;
 
@@ -520,7 +481,7 @@ export const addProducts = async (req, res) => {
       );
     }
 
-    // 9) Build final response via buildBulkResponse
+    // 8) Build final response via buildBulkResponse
     const responsePayload = buildBulkResponse({
       entityName: "Products",
       totalReceived: productsToSave.length,

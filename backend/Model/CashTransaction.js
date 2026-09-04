@@ -18,7 +18,7 @@ const SettlementDetailSchema = new Schema(
 );
 
 // Shared cash-transaction schema used by Receipt model (and potentially Payment model).
-const CashTransactionSchema = new Schema(
+const   CashTransactionSchema = new Schema(
   {
     cmp_id: { type: Schema.Types.ObjectId, ref: "Company", required: true },
     voucher_type: {
