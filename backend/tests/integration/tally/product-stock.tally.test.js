@@ -96,6 +96,52 @@ const buildStockRow = ({
 });
 
 describe("POST /api/tally/product-stock", () => {
+  it("preserves an unmatched placeholder while replacing stale real rows", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Placeholder Stock One", mobileNumber: "9800010091", email: "placeholder-stock-one@example.com" },
+    });
+    const main = await createGodown({ cmp_id: context.company._id, Primary_user_id: context.user._id, godown_id: "GDN-MAIN", godown: "Main" });
+    const showroom = await createGodown({ cmp_id: context.company._id, Primary_user_id: context.user._id, godown_id: "GDN-SHOWROOM", godown: "Showroom" });
+    const placeholderId = new mongoose.Types.ObjectId();
+    await createProduct({ cmp_id: context.company._id, Primary_user_id: context.user._id, GodownList: [
+      { _id: placeholderId, godown: main._id, batch: "Primary Batch", balance_stock: 0, is_placeholder: true },
+      { godown: showroom._id, batch: "STALE", balance_stock: 4 },
+    ] });
+    const rows = [
+      buildStockRow({ context, godown_id: "GDN-MAIN", batch: "B1", balance_stock: 30 }),
+      buildStockRow({ context, godown_id: "GDN-SHOWROOM", batch: "Primary Batch", balance_stock: 20 }),
+    ];
+    for (let i = 0; i < 2; i++) {
+      expect((await postTallyProductStock({ cmpId: context.company._id, data: rows })).status).toBe(200);
+    }
+    const product = await Product.findOne({ product_master_id: "PRD-STOCK-001" }).lean();
+    expect(product.GodownList).toHaveLength(3);
+    expect(product.GodownList.some((row) => row.batch === "STALE")).toBe(false);
+    expect(product.GodownList.filter((row) => String(row._id) === String(placeholderId))).toHaveLength(1);
+    expect(product.GodownList.find((row) => String(row._id) === String(placeholderId))).toMatchObject({ batch: "Primary Batch", balance_stock: 0, is_placeholder: true });
+    expect(product.GodownList.find((row) => row.batch === "B1")).toMatchObject({ balance_stock: 30, is_placeholder: false });
+    expect(String(product.GodownList.find((row) => String(row.godown) === String(showroom._id)).godown)).toBe(String(showroom._id));
+  });
+
+  it("converts a negative placeholder using the authoritative balance and keeps its id", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Placeholder Stock Two", mobileNumber: "9800010092", email: "placeholder-stock-two@example.com" },
+    });
+    const main = await createGodown({ cmp_id: context.company._id, Primary_user_id: context.user._id, godown_id: "GDN-MAIN", godown: "Main" });
+    const rowId = new mongoose.Types.ObjectId();
+    await createProduct({ cmp_id: context.company._id, Primary_user_id: context.user._id, GodownList: [
+      { _id: rowId, godown: main._id, batch: "Primary Batch", balance_stock: -5, is_placeholder: true },
+    ] });
+    const res = await postTallyProductStock({ cmpId: context.company._id, data: [
+      buildStockRow({ context, godown_id: "GDN-MAIN", batch: " Primary Batch ", balance_stock: 20 }),
+    ] });
+    expect(res.status).toBe(200);
+    const product = await Product.findOne({ product_master_id: "PRD-STOCK-001" }).lean();
+    expect(product.GodownList).toHaveLength(1);
+    expect(String(product.GodownList[0]._id)).toBe(String(rowId));
+    expect(product.GodownList[0]).toMatchObject({ batch: "Primary Batch", balance_stock: 20, is_placeholder: false });
+  });
+
   it("reconciles Tally stock snapshots while preserving matching row ids", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {

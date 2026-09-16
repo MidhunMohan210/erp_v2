@@ -340,7 +340,7 @@ describe("POST /api/tally/products", () => {
     expect(productCount).toBe(0);
   });
 
-  it("should create a product without requiring a default godown", async () => {
+  it("rejects a new product without a default godown", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Product Admin Four",
@@ -370,21 +370,9 @@ describe("POST /api/tally/products", () => {
       product_master_id: "PRD-NO-GODOWN-001",
     });
 
-    expect(res.status).toBe(201);
-    expect(res.body.status).toBe("success");
-    expect(res.body.message).toBe("Products processing completed");
-    expect(res.body.summary).toEqual({
-      totalReceived: 1,
-      insertedCount: 1,
-      updatedCount: 0,
-      successCount: 1,
-      skippedCount: 0,
-    });
-    expect(res.body.skippedReasons).toBeUndefined();
-    expect(res.body.skippedItems).toBeUndefined();
-    expect(productCount).toBe(1);
-    const product = await Product.findOne({ product_master_id: "PRD-NO-GODOWN-001" }).lean();
-    expect(product.GodownList).toEqual([]);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("A default godown is required before importing new products.");
+    expect(productCount).toBe(0);
   });
 
   it("should create product successfully when dependencies resolve", async () => {
@@ -474,10 +462,12 @@ describe("POST /api/tally/products", () => {
       String(priceLevel._id),
     );
     expect(productInDb.priceLevels[0].priceRate).toBe(120);
-    expect(productInDb.GodownList).toEqual([]);
+    expect(productInDb.GodownList).toHaveLength(1);
+    expect(String(productInDb.GodownList[0].godown)).toBe(String(defaultGodown._id));
+    expect(productInDb.GodownList[0]).toMatchObject({ batch: "Primary Batch", balance_stock: 0, is_placeholder: true });
   });
 
-  it("should return an empty GodownList when a product has no initial stock row", async () => {
+  it("returns the initial placeholder through product APIs", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Product API Godown Row Admin",
@@ -518,9 +508,10 @@ describe("POST /api/tally/products", () => {
     expect(importRes.status).toBe(201);
     expect(listRes.status).toBe(200);
     expect(detailRes.status).toBe(200);
-    expect(productInDb.GodownList).toEqual([]);
-    expect(listRes.body.items[0].GodownList).toEqual([]);
-    expect(detailRes.body.GodownList).toEqual([]);
+    expect(productInDb.GodownList).toHaveLength(1);
+    expect(productInDb.GodownList[0]).toMatchObject({ batch: "Primary Batch", balance_stock: 0, is_placeholder: true });
+    expect(listRes.body.items[0].GodownList).toHaveLength(1);
+    expect(detailRes.body.GodownList).toHaveLength(1);
   });
 
   it("enriches stock rows safely and filters only the sale product list before pagination", async () => {

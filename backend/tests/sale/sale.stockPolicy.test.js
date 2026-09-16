@@ -88,6 +88,19 @@ function requestContext(context) {
 }
 
 describe("Sale stock policy", () => {
+  it("sells from a zero-stock placeholder using its stock row id", async () => {
+    const setup = await setupStockPolicyContext(0);
+    await Product.updateOne({ _id: setup.product._id, "GodownList._id": setup.rowId }, { $set: { "GodownList.$.is_placeholder": true } });
+    const sale = await createSale(
+      saleRequest({ ...setup, requestId: "placeholder-negative-sale", actualQty: 5, billedQty: 5 }),
+      requestContext(setup.context),
+    );
+    const saved = await Product.findById(setup.product._id).lean();
+    expect(saved.GodownList[0]).toMatchObject({ balance_stock: -5, is_placeholder: true });
+    expect(String(saved.GodownList[0]._id)).toBe(String(setup.rowId));
+    expect(String(sale.items[0].godown_stock_row_id)).toBe(String(setup.rowId));
+  });
+
   it("atomically groups actual quantities and permits the resulting balance to be negative", async () => {
     const setup = await setupStockPolicyContext(8);
     const first = saleRequest({ ...setup, requestId: "stock-policy-grouped", actualQty: 5, billedQty: 1 });

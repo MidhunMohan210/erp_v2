@@ -172,9 +172,7 @@ const godownSchema = new Schema(
       required: true,
       index: true,
     },
-
-
-
+    defaultGodown: { type: Boolean, default: false },
     source: {
       type: String,
       enum: ["tally", "web"],
@@ -196,6 +194,10 @@ const godownSchema = new Schema(
 godownSchema.index(
   { godown_id: 1, Primary_user_id: 1, cmp_id: 1 },
   { name: "godown_lookup_idx", unique: true, background: true }
+);
+godownSchema.index(
+  { Primary_user_id: 1, cmp_id: 1 },
+  { name: "one_default_godown_per_company", unique: true, partialFilterExpression: { defaultGodown: true } }
 );
 
 export const Brand = mongoose.model("Brand", brandSchema);

@@ -58,6 +58,7 @@ const godownItemSchema = new Schema(
       type: Number,
       default: 0,
     },
+    is_placeholder: { type: Boolean, default: false },
     batch: {
       type: String,
       trim: true,

@@ -71,6 +71,33 @@ const createGodown = async ({
 };
 
 describe("POST /api/tally/godowns", () => {
+  it("rejects multiple initial defaults without writing any godowns", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Tally Multiple Defaults", mobileNumber: "9700010091", email: "tally-multiple-defaults@example.com" },
+    });
+    const identity = { Primary_user_id: String(context.user._id), cmp_id: String(context.company._id) };
+    const res = await postTallyGodowns({
+      cmpId: context.company._id,
+      data: [
+        buildTallyGodownItem({ ...identity, godown_id: "GDN-MULTI-1", defaultGodown: true }),
+        buildTallyGodownItem({ ...identity, godown_id: "GDN-MULTI-2", defaultGodown: true }),
+      ],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Only one default godown is allowed.");
+    expect(await Godown.countDocuments({ ...identity, defaultGodown: true })).toBe(0);
+  });
+
+  it("enforces one default per company and user at the database level", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Tally Default Index", mobileNumber: "9700010092", email: "tally-default-index@example.com" },
+    });
+    const identity = { cmp_id: context.company._id, Primary_user_id: context.user._id };
+    await createGodown({ ...identity, godown_id: "GDN-INDEX-1", defaultGodown: true });
+    await expect(createGodown({ ...identity, godown_id: "GDN-INDEX-2", defaultGodown: true })).rejects.toMatchObject({ code: 11000 });
+    expect(await Godown.countDocuments({ ...identity, defaultGodown: true })).toBe(1);
+  });
+
   it("should return unauthorized when tally headers are missing", async () => {
     const res = await request(app).post("/api/tally/godowns").send({
       data: [buildTallyGodownItem()],
@@ -179,7 +206,7 @@ describe("POST /api/tally/godowns", () => {
     expect(godownInDb.godown_id).toBe("GDN-TALLY-001");
     expect(String(godownInDb.cmp_id)).toBe(String(context.company._id));
     expect(String(godownInDb.Primary_user_id)).toBe(String(context.user._id));
-    expect(godownInDb.defaultGodown).toBeUndefined();
+    expect(godownInDb.defaultGodown).toBe(true);
     expect(godownInDb.source).toBe("tally");
     expect(godownInDb.lastUpdatedBySource).toBe("Bridge User");
     expect(godownInDb.tallyUserName).toBe("Bridge User");
@@ -249,7 +276,7 @@ describe("POST /api/tally/godowns", () => {
     expect(updatedGodown).not.toBeNull();
     expect(String(updatedGodown._id)).toBe(String(existingGodown._id));
     expect(updatedGodown.godown).toBe("Updated Name");
-    expect(updatedGodown.defaultGodown).toBeUndefined();
+    expect(updatedGodown.defaultGodown).toBe(true);
     expect(updatedGodown.source).toBe("tally");
     expect(updatedGodown.lastUpdatedBySource).toBe("Second Sync User");
     expect(updatedGodown.tallyUserName).toBe("Second Sync User");
@@ -274,7 +301,7 @@ describe("POST /api/tally/godowns", () => {
 
     const res = await postTallyGodowns({
       cmpId: context.company._id,
-      data: [duplicateItem, { ...duplicateItem }],
+      data: [duplicateItem, { ...duplicateItem, defaultGodown: false }],
     });
 
     const godowns = await Godown.find({
@@ -310,7 +337,7 @@ describe("POST /api/tally/godowns", () => {
     expect(godowns).toHaveLength(1);
   });
 
-  it("should import godowns without requiring a default godown", async () => {
+  it("rejects an initial import without a default godown", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Godown Admin Six",
@@ -338,12 +365,12 @@ describe("POST /api/tally/godowns", () => {
       godown_id: "GDN-TALLY-NO-DEFAULT-001",
     });
 
-    expect(res.status).toBe(200);
-    expect(res.body.summary).toMatchObject({ insertedCount: 1, successCount: 1 });
-    expect(godownCount).toBe(1);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("A default godown is required for the initial godown import.");
+    expect(godownCount).toBe(0);
   });
 
-  it("should not manage default flags during godown imports", async () => {
+  it("keeps the existing default when a later import requests a new one", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Godown Admin Seven",
@@ -396,9 +423,10 @@ describe("POST /api/tally/godowns", () => {
       skippedCount: 0,
     });
     expect(existingDefaultGodown).not.toBeNull();
-    expect(existingDefaultGodown.defaultGodown).toBeUndefined();
+    expect(existingDefaultGodown.defaultGodown).toBe(true);
     expect(importedGodown).not.toBeNull();
-    expect(importedGodown.defaultGodown).toBeUndefined();
+    expect(importedGodown.defaultGodown).toBe(false);
+    expect(await Godown.countDocuments({ cmp_id: context.company._id, Primary_user_id: context.user._id, defaultGodown: true })).toBe(1);
   });
 
   it("should skip godown when required fields are missing", async () => {
@@ -431,23 +459,7 @@ describe("POST /api/tally/godowns", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.status).toBe("failure");
-    expect(res.body.message).toBe("Godowns processing completed");
-    expect(res.body.summary).toEqual({
-      totalReceived: 1,
-      insertedCount: 0,
-      updatedCount: 0,
-      successCount: 0,
-      skippedCount: 1,
-    });
-    expect(res.body.skippedReasons).toEqual({
-      missingRequiredFields: 1,
-      duplicateInRequest: 0,
-      processingErrors: 0,
-    });
-    expect(res.body.skippedItems).toHaveLength(1);
-    expect(res.body.skippedItems[0].reason).toContain(
-      "Missing required fields",
-    );
+    expect(res.body.message).toBe("The initial default godown must have valid company, user, godown_id, and godown fields.");
     expect(godownCount).toBe(0);
   });
 });

@@ -6,6 +6,7 @@ import {
   Brand,
   Category,
   Subcategory,
+  Godown,
 } from "../../Model/ProductSubDetails.js";
 import PriceLevel from "../../Model/PriceLevel.js";
 
@@ -285,6 +286,23 @@ export const addProducts = async (req, res) => {
       existingProductMap[p.product_master_id] = p;
     });
 
+    const hasNewProducts = validProducts.some(
+      ({ product }) => !existingProductMap[product.product_master_id],
+    );
+    const defaultGodown = hasNewProducts
+      ? await Godown.findOne({
+          cmp_id: cmpObjectId,
+          Primary_user_id: primaryUserObjectId,
+          defaultGodown: true,
+        }).lean()
+      : null;
+    if (hasNewProducts && !defaultGodown) {
+      return res.status(400).json({
+        status: "failure",
+        message: "A default godown is required before importing new products.",
+      });
+    }
+
 
     // console.log("brandMap",brandMap);
     // console.log("categoryMap",categoryMap);
@@ -416,7 +434,12 @@ export const addProducts = async (req, res) => {
 
       const insertProduct = {
         ...productMasterFields,
-        GodownList: [],
+        GodownList: [{
+          godown: defaultGodown?._id,
+          batch: "Primary Batch",
+          balance_stock: 0,
+          is_placeholder: true,
+        }],
       };
 
       const existingProduct = existingProductMap[product.product_master_id];

@@ -35,6 +35,7 @@ const buildStockRowPayload = ({ row, godownObjectId, existingRow }) => {
     godown: godownObjectId,
     batch: normalizeBatch(row.batch),
     balance_stock: Number(row.balance_stock),
+    is_placeholder: false,
   };
 
   for (const field of STOCK_DETAIL_FIELDS) {
@@ -277,6 +278,18 @@ export const importProductStockFromTally = async (req, res) => {
 
         return buildStockRowPayload({ row, godownObjectId, existingRow });
       });
+      const incomingKeys = new Set(
+        resolvedRows.map(({ row, godownObjectId }) =>
+          makeStockRowKey({ godown: godownObjectId, batch: row.batch }),
+        ),
+      );
+      for (const existingRow of product.GodownList || []) {
+        const key = makeStockRowKey(existingRow);
+        if (existingRow.is_placeholder === true && !incomingKeys.has(key)) {
+          reconciledGodownList.push(existingRow.toObject ? existingRow.toObject() : existingRow);
+          incomingKeys.add(key);
+        }
+      }
 
       ops.push({
         updateOne: {

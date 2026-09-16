@@ -13,7 +13,7 @@ import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
  *
  * Rules:
  * - Upsert by (godown_id, Primary_user_id, cmp_id).
- * - Tally godown import does not create, require, or manage a default godown.
+ * - The first import requires one default; later imports preserve it.
  */
 
 export const addGodowns = async (req, res) => {
@@ -37,6 +37,35 @@ export const addGodowns = async (req, res) => {
     }
 
     getApiLogs(cmp_id, "Godowns");
+
+    const existingDefault = await Godown.findOne({
+      Primary_user_id,
+      cmp_id,
+      defaultGodown: true,
+    }).lean();
+    const wantsDefault = (value) => value === true || value === "true";
+    if (!existingDefault) {
+      const defaultCount = data.filter((item) => wantsDefault(item?.defaultGodown)).length;
+      if (defaultCount !== 1) {
+        return res.status(400).json({
+          status: "failure",
+          message: defaultCount === 0
+            ? "A default godown is required for the initial godown import."
+            : "Only one default godown is allowed.",
+        });
+      }
+      const initialDefault = data.find((item) => wantsDefault(item?.defaultGodown));
+      if (
+        !initialDefault?.godown || !initialDefault?.godown_id ||
+        String(initialDefault.Primary_user_id) !== String(Primary_user_id) ||
+        String(initialDefault.cmp_id) !== String(cmp_id)
+      ) {
+        return res.status(400).json({
+          status: "failure",
+          message: "The initial default godown must have valid company, user, godown_id, and godown fields.",
+        });
+      }
+    }
 
     const uniqueGodowns = new Map();
     const skippedItems = [];
@@ -86,6 +115,10 @@ export const addGodowns = async (req, res) => {
         });
         continue;
       }
+      if (String(rawPrimaryUserId) !== String(Primary_user_id) || String(rawCmpId) !== String(cmp_id)) {
+        skippedItems.push({ item: itemIndex, reason: "Company or user does not match first item", data: { godown_id: rawGodownId } });
+        continue;
+      }
 
       try {
         let primaryUserObjectId = rawPrimaryUserId;
@@ -101,6 +134,9 @@ export const addGodowns = async (req, res) => {
         // Only mutable fields in $set (no cmp_id / Primary_user_id)
         const updatableFields = {
           godown: item.godown,
+          defaultGodown: existingDefault
+            ? String(existingDefault.godown_id) === String(rawGodownId)
+            : wantsDefault(item.defaultGodown),
           source: "tally",
           lastUpdatedBySource: tally_user_name || "tally-sync",
           tallyUserName: tally_user_name || null,
