@@ -286,20 +286,23 @@ export const addProducts = async (req, res) => {
       existingProductMap[p.product_master_id] = p;
     });
 
-    const hasNewProducts = validProducts.some(
-      ({ product }) => !existingProductMap[product.product_master_id],
+    const needsPlaceholder = validProducts.some(
+      ({ product }) => {
+        const existing = existingProductMap[product.product_master_id];
+        return !existing || !Array.isArray(existing.GodownList) || existing.GodownList.length === 0;
+      },
     );
-    const defaultGodown = hasNewProducts
+    const defaultGodown = needsPlaceholder
       ? await Godown.findOne({
           cmp_id: cmpObjectId,
           Primary_user_id: primaryUserObjectId,
           defaultGodown: true,
         }).lean()
       : null;
-    if (hasNewProducts && !defaultGodown) {
+    if (needsPlaceholder && !defaultGodown) {
       return res.status(400).json({
         status: "failure",
-        message: "A default godown is required before importing new products.",
+        message: "A default godown is required before initializing product stock.",
       });
     }
 
@@ -314,6 +317,7 @@ export const addProducts = async (req, res) => {
 
     // 6) Build operations array, skipping when brand/category/subcategory/priceLevel not found
     const ops = [];
+    const emptyListOps = [];
     const legacyUnitCleanupIds = [];
     const BATCH_SIZE = 200;
 
@@ -446,6 +450,17 @@ export const addProducts = async (req, res) => {
 
       if (existingProduct) {
         legacyUnitCleanupIds.push(existingProduct._id);
+        if (!Array.isArray(existingProduct.GodownList) || existingProduct.GodownList.length === 0) {
+          emptyListOps.push({
+            updateOne: {
+              filter: {
+                _id: existingProduct._id,
+                $or: [{ GodownList: { $exists: false } }, { GodownList: { $size: 0 } }],
+              },
+              update: { $set: { GodownList: insertProduct.GodownList } },
+            },
+          });
+        }
         ops.push({
           updateOne: {
             filter: {
@@ -489,6 +504,10 @@ export const addProducts = async (req, res) => {
           data: {},
         });
       }
+    }
+
+    for (let i = 0; i < emptyListOps.length; i += BATCH_SIZE) {
+      await productModel.bulkWrite(emptyListOps.slice(i, i + BATCH_SIZE), { ordered: false });
     }
 
     if (legacyUnitCleanupIds.length > 0) {

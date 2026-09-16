@@ -371,8 +371,104 @@ describe("POST /api/tally/products", () => {
     });
 
     expect(res.status).toBe(400);
-    expect(res.body.message).toBe("A default godown is required before importing new products.");
+    expect(res.body.message).toBe("A default godown is required before initializing product stock.");
     expect(productCount).toBe(0);
+  });
+
+  it("initializes an existing empty GodownList once across repeated pushes", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Empty Stock Product Admin", mobileNumber: "9910010191", email: "empty-stock-product@example.com" },
+    });
+    const defaultGodown = await createDefaultGodown({ cmp_id: context.company._id, Primary_user_id: context.user._id });
+    const product = await Product.create({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      product_master_id: "PRD-EMPTY-REIMPORT",
+      product_name: "Empty Stock Product",
+      base_unit: "Nos",
+      GodownList: [],
+    });
+    const payload = buildTallyProductItem({
+      Primary_user_id: String(context.user._id),
+      cmp_id: String(context.company._id),
+      product_master_id: "PRD-EMPTY-REIMPORT",
+      product_name: "Updated Empty Stock Product",
+      brand: null, category: null, sub_category: null, priceLevels: [],
+    });
+    let firstRowId;
+    for (let i = 0; i < 3; i++) {
+      expect((await postTallyProducts({ cmpId: context.company._id, data: [payload] })).status).toBe(201);
+      const rows = (await Product.findById(product._id).lean()).GodownList;
+      expect(rows).toHaveLength(1);
+      if (i === 0) firstRowId = String(rows[0]._id);
+      else expect(String(rows[0]._id)).toBe(firstRowId);
+    }
+    const updated = await Product.findById(product._id).lean();
+    expect(updated.product_name).toBe("Updated Empty Stock Product");
+    expect(updated.GodownList).toHaveLength(1);
+    expect(String(updated.GodownList[0].godown)).toBe(String(defaultGodown._id));
+    expect(updated.GodownList[0]).toMatchObject({ batch: "Primary Batch", balance_stock: 0, is_placeholder: true });
+    expect(updated.GodownList[0]._id).toBeDefined();
+  });
+
+  it("initializes a legacy product with no GodownList field", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Missing List Product Admin", mobileNumber: "9910010194", email: "missing-list-product@example.com" },
+    });
+    const defaultGodown = await createDefaultGodown({ cmp_id: context.company._id, Primary_user_id: context.user._id });
+    const { insertedId } = await Product.collection.insertOne({
+      cmp_id: new mongoose.Types.ObjectId(String(context.company._id)), Primary_user_id: context.user._id,
+      product_master_id: "PRD-MISSING-LIST", product_name: "Missing List Product", base_unit: "Nos",
+    });
+    const res = await postTallyProducts({ cmpId: context.company._id, data: [buildTallyProductItem({
+      Primary_user_id: String(context.user._id), cmp_id: String(context.company._id),
+      product_master_id: "PRD-MISSING-LIST", brand: null, category: null, sub_category: null, priceLevels: [],
+    })] });
+    expect(res.status).toBe(201);
+    const updated = await Product.collection.findOne({ _id: insertedId });
+    expect(updated.GodownList).toHaveLength(1);
+    expect(String(updated.GodownList[0].godown)).toBe(String(defaultGodown._id));
+    expect(updated.GodownList[0]).toMatchObject({ batch: "Primary Batch", balance_stock: 0, is_placeholder: true });
+  });
+
+  it("preserves an existing placeholder without adding another", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Placeholder Product Admin", mobileNumber: "9910010192", email: "placeholder-product@example.com" },
+    });
+    const defaultGodown = await createDefaultGodown({ cmp_id: context.company._id, Primary_user_id: context.user._id });
+    const rowId = new mongoose.Types.ObjectId();
+    const product = await Product.create({
+      cmp_id: context.company._id, Primary_user_id: context.user._id,
+      product_master_id: "PRD-PLACEHOLDER-REIMPORT", product_name: "Placeholder Product", base_unit: "Nos",
+      GodownList: [{ _id: rowId, godown: defaultGodown._id, batch: "Primary Batch", balance_stock: -5, is_placeholder: true }],
+    });
+    const before = (await Product.collection.findOne({ _id: product._id })).GodownList;
+    const res = await postTallyProducts({ cmpId: context.company._id, data: [buildTallyProductItem({
+      Primary_user_id: String(context.user._id), cmp_id: String(context.company._id),
+      product_master_id: "PRD-PLACEHOLDER-REIMPORT", brand: null, category: null, sub_category: null, priceLevels: [],
+    })] });
+    expect(res.status).toBe(201);
+    expect((await Product.collection.findOne({ _id: product._id })).GodownList).toEqual(before);
+  });
+
+  it("rejects an existing empty GodownList when no default godown exists", async () => {
+    const context = await setupTallyIntegrationContext({
+      userOverrides: { userName: "Missing Default Product Admin", mobileNumber: "9910010193", email: "missing-default-product@example.com" },
+    });
+    const product = await Product.create({
+      cmp_id: context.company._id, Primary_user_id: context.user._id,
+      product_master_id: "PRD-EMPTY-NO-DEFAULT", product_name: "Original Name", base_unit: "Nos", GodownList: [],
+    });
+    const res = await postTallyProducts({ cmpId: context.company._id, data: [buildTallyProductItem({
+      Primary_user_id: String(context.user._id), cmp_id: String(context.company._id),
+      product_master_id: "PRD-EMPTY-NO-DEFAULT", product_name: "Unwritten Name",
+      brand: null, category: null, sub_category: null, priceLevels: [],
+    })] });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("A default godown is required before initializing product stock.");
+    const unchanged = await Product.findById(product._id).lean();
+    expect(unchanged.product_name).toBe("Original Name");
+    expect(unchanged.GodownList).toEqual([]);
   });
 
   it("should create product successfully when dependencies resolve", async () => {
