@@ -336,6 +336,7 @@ function createStagedItemFromTransactionItem(item) {
     originalQuantity: billedQty,
     productDetail: detail,
     selectedUnit: item?.selectedUnit ?? detail?.selectedUnit ?? "",
+    priceLevel: item?.priceLevel ?? null,
     rate: Number(item?.rate) || 0,
     taxType: item?.taxType || "igst",
     initialPriceSource: item?.initialPriceSource || "manual",
@@ -738,6 +739,7 @@ export default function ProductSelectPage() {
             recalculateStagedItem({
               ...staged,
               productDetail,
+              priceLevel: priceLevel || null,
               rate: nextRate != null ? Number(nextRate) || 0 : 0,
               initialPriceSource: "priceLevel",
             }),
@@ -1086,6 +1088,8 @@ export default function ProductSelectPage() {
       const originalQuantity = Number(staged?.originalQuantity) || 0;
       const baseChanges = {
         rate: Number(staged?.rate) || 0,
+        priceLevel: staged?.priceLevel ?? committedPriceLevelRef.current ?? null,
+        initialPriceSource: staged?.initialPriceSource || "manual",
         selectedUnit: staged?.selectedUnit ?? detail?.baseUnit ?? "",
         taxInclusive: Boolean(staged?.taxInclusive),
         discountType: staged?.discountType || "percentage",

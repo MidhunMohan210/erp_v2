@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 
 import Product from "../Model/ProductSchema.js";
-import { Brand, Category, Subcategory } from "../Model/ProductSubDetails.js";
+import { Brand, Category, Godown, Subcategory } from "../Model/ProductSubDetails.js";
 import { resolveCompanyScope } from "../utils/companyScope.js";
 
 const PRODUCT_POPULATE = [
@@ -9,6 +9,45 @@ const PRODUCT_POPULATE = [
   { path: "category", select: "category category_id" },
   { path: "sub_category", select: "subcategory subcategory_id" },
 ];
+
+/**
+ * Adds the Godown display name without changing the stored Godown ObjectId.
+ * A single lookup is shared by every stock row on the current response page.
+ */
+async function enrichGodownNames(products, { owner, cmp_id }) {
+  const rows = products.flatMap((product) =>
+    Array.isArray(product.GodownList) ? product.GodownList : [],
+  );
+  const godownIds = [...new Set(rows.map((row) => String(row.godown || "")).filter(Boolean))];
+
+  if (godownIds.length === 0) {
+    return products.map((product) => ({
+      ...product,
+      GodownList: Array.isArray(product.GodownList)
+        ? product.GodownList.map((row) => ({ ...row, godown_name: null }))
+        : product.GodownList,
+    }));
+  }
+
+  const godowns = await Godown.find({
+    _id: { $in: godownIds },
+    cmp_id,
+    Primary_user_id: owner,
+  })
+    .select("_id godown")
+    .lean();
+  const namesById = new Map(godowns.map((godown) => [String(godown._id), godown.godown]));
+
+  return products.map((product) => ({
+    ...product,
+    GodownList: Array.isArray(product.GodownList)
+      ? product.GodownList.map((row) => ({
+          ...row,
+          godown_name: namesById.get(String(row.godown || "")) || null,
+        }))
+      : product.GodownList,
+  }));
+}
 
 function toObjectId(value) {
   if (!value || !mongoose.Types.ObjectId.isValid(value)) return null;
@@ -84,6 +123,7 @@ export const listProducts = async (req, res) => {
       brand = "",
       category = "",
       subcategory = "",
+      for_sale = "false",
     } = req.query;
 
     const pageNum = Number.parseInt(page, 10) || 1;
@@ -94,6 +134,12 @@ export const listProducts = async (req, res) => {
       Primary_user_id: owner,
       cmp_id,
     };
+
+    // The product-master list intentionally remains unfiltered. Sale callers opt
+    // in so the condition is applied before pagination and counting.
+    if (String(for_sale).toLowerCase() === "true") {
+      filter["GodownList.0"] = { $exists: true };
+    }
 
     const [brandId, categoryId, subcategoryId] = await Promise.all([
       resolveMasterFilterId({
@@ -154,10 +200,11 @@ export const listProducts = async (req, res) => {
       Product.countDocuments(filter),
     ]);
 
-    const hasMore = skip + items.length < total;
+    const enrichedItems = await enrichGodownNames(items, { owner, cmp_id });
+    const hasMore = skip + enrichedItems.length < total;
 
     return res.json({
-      items,
+      items: enrichedItems,
       total,
       page: pageNum,
       hasMore,
@@ -174,12 +221,15 @@ export const listProducts = async (req, res) => {
 
 export const getProductById = async (req, res) => {
   try {
-    const { Primary_user_id: owner } = resolveCompanyScope(req);
+    const { Primary_user_id: owner, cmp_id } = resolveCompanyScope(req, {
+      requireCompanyId: true,
+    });
     const { id } = req.params;
 
     const product = await Product.findOne({
       _id: id,
       Primary_user_id: owner,
+      cmp_id,
     })
       .populate(PRODUCT_POPULATE)
       .lean();
@@ -188,7 +238,8 @@ export const getProductById = async (req, res) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    return res.json(product);
+    const [enrichedProduct] = await enrichGodownNames([product], { owner, cmp_id });
+    return res.json(enrichedProduct);
   } catch (error) {
     console.error("getProductById error:", error);
     return res

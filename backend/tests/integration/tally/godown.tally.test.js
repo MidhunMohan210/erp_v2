@@ -179,7 +179,7 @@ describe("POST /api/tally/godowns", () => {
     expect(godownInDb.godown_id).toBe("GDN-TALLY-001");
     expect(String(godownInDb.cmp_id)).toBe(String(context.company._id));
     expect(String(godownInDb.Primary_user_id)).toBe(String(context.user._id));
-    expect(godownInDb.defaultGodown).toBe(true);
+    expect(godownInDb.defaultGodown).toBeUndefined();
     expect(godownInDb.source).toBe("tally");
     expect(godownInDb.lastUpdatedBySource).toBe("Bridge User");
     expect(godownInDb.tallyUserName).toBe("Bridge User");
@@ -249,7 +249,7 @@ describe("POST /api/tally/godowns", () => {
     expect(updatedGodown).not.toBeNull();
     expect(String(updatedGodown._id)).toBe(String(existingGodown._id));
     expect(updatedGodown.godown).toBe("Updated Name");
-    expect(updatedGodown.defaultGodown).toBe(true);
+    expect(updatedGodown.defaultGodown).toBeUndefined();
     expect(updatedGodown.source).toBe("tally");
     expect(updatedGodown.lastUpdatedBySource).toBe("Second Sync User");
     expect(updatedGodown.tallyUserName).toBe("Second Sync User");
@@ -310,7 +310,7 @@ describe("POST /api/tally/godowns", () => {
     expect(godowns).toHaveLength(1);
   });
 
-  it("should fail when no default godown exists and batch does not include a default", async () => {
+  it("should import godowns without requiring a default godown", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Godown Admin Six",
@@ -338,16 +338,12 @@ describe("POST /api/tally/godowns", () => {
       godown_id: "GDN-TALLY-NO-DEFAULT-001",
     });
 
-    expect(res.status).toBe(400);
-    expect(res.body).toEqual({
-      status: "failure",
-      message:
-        "At least one godown must be set as default for this company. Provide one item with defaultGodown = true.",
-    });
-    expect(godownCount).toBe(0);
+    expect(res.status).toBe(200);
+    expect(res.body.summary).toMatchObject({ insertedCount: 1, successCount: 1 });
+    expect(godownCount).toBe(1);
   });
 
-  it("should keep the existing default godown as default and force new imported godowns to non-default", async () => {
+  it("should not manage default flags during godown imports", async () => {
     const context = await setupTallyIntegrationContext({
       userOverrides: {
         userName: "Tally Godown Admin Seven",
@@ -400,9 +396,9 @@ describe("POST /api/tally/godowns", () => {
       skippedCount: 0,
     });
     expect(existingDefaultGodown).not.toBeNull();
-    expect(existingDefaultGodown.defaultGodown).toBe(true);
+    expect(existingDefaultGodown.defaultGodown).toBeUndefined();
     expect(importedGodown).not.toBeNull();
-    expect(importedGodown.defaultGodown).toBe(false);
+    expect(importedGodown.defaultGodown).toBeUndefined();
   });
 
   it("should skip godown when required fields are missing", async () => {

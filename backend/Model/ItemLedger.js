@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 
 const { Schema, model, models } = mongoose;
 
-const PartyLedgerSchema = new Schema(
+const ItemLedgerSchema = new Schema(
   {
     cmp_id: {
       type: Schema.Types.ObjectId,
@@ -10,20 +10,41 @@ const PartyLedgerSchema = new Schema(
       required: true,
     },
 
-    voucher_type: {
-      type: String,
-      enum: [
-        "receipt",
-        "payment",
-        "sale",
-        "purchase",
-        "credit_note",
-        "debit_note",
-      ],
+    item_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Product",
       required: true,
     },
 
+    godown_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Godown",
+      required: true,
+    },
+
+    godown_stock_row_id: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    },
+
+
+    batch: {
+      type: String,
+      default: null,
+    },
+
+    voucher_type: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+
     voucher_id: {
+      type: Schema.Types.ObjectId,
+      required: true,
+    },
+
+    voucher_item_id: {
       type: Schema.Types.ObjectId,
       required: true,
     },
@@ -39,42 +60,28 @@ const PartyLedgerSchema = new Schema(
       required: true,
     },
 
-    party_id: {
-      type: Schema.Types.ObjectId,
-      ref: "Party",
+    base_quantity: {
+      type: Number,
       required: true,
     },
 
-    party_name: {
+    base_unit: {
       type: String,
       required: true,
       trim: true,
     },
 
-    amount: {
-      type: Number,
-      required: true,
-    },
-
-    ledger_side: {
+    movement_type: {
       type: String,
-      enum: ["debit", "credit"],
+      enum: ["IN", "OUT"],
       required: true,
     },
-
-    against_id: {
-      type: Schema.Types.ObjectId,
-      ref: "Party",
-      // Receipts use the selected cash/bank Party here. Sales have no
-      // corresponding Party/head, so their ledger entry legitimately has null.
-      default: null,
-    },
-
 
     status: {
       type: String,
       enum: ["active", "cancelled"],
       default: "active",
+      required: true,
     },
 
     tally_status: {
@@ -98,19 +105,27 @@ const PartyLedgerSchema = new Schema(
   },
 );
 
-PartyLedgerSchema.index({
+ItemLedgerSchema.index({
   cmp_id: 1,
-  party_id: 1,
+  item_id: 1,
   date: -1,
 });
 
-PartyLedgerSchema.index({
+ItemLedgerSchema.index({
+  cmp_id: 1,
+  item_id: 1,
+  godown_stock_row_id: 1,
+  date: -1,
+});
+
+ItemLedgerSchema.index({
   cmp_id: 1,
   voucher_type: 1,
   voucher_id: 1,
+  voucher_item_id: 1,
 });
 
-const PartyLedger =
-  models.PartyLedger || model("PartyLedger", PartyLedgerSchema);
+const ItemLedger =
+  models.ItemLedger || model("ItemLedger", ItemLedgerSchema);
 
-export default PartyLedger;
+export default ItemLedger;

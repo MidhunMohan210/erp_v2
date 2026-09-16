@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 import Party from "../Model/partySchema.js";
+import Product from "../Model/ProductSchema.js";
 import SaleOrder from "../Model/SaleOrder.js";
 import { applyTransactionCreatorScope } from "../utils/authScope.js";
 import {
@@ -19,11 +20,16 @@ import {
   buildVoucherTimelineUpdatePayload,
 } from "./voucherTimelinePayload.service.js";
 import {
+  addLegacySaleOrderUnitFields,
   applySaleOrderUpdate,
   buildSaleOrderPayload,
   logSaleOrderTotalsMismatch,
   normalizeSelectedSeries,
 } from "./saleOrderDocument.service.js";
+import {
+  normalizeSaleChargeInput,
+  resolveSaleChargeMasters,
+} from "./saleFoundation.service.js";
 
 // Local helper to attach HTTP-aware status codes to thrown errors.
 // Controllers read `error.statusCode` to decide response status.
@@ -31,6 +37,110 @@ function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+async function resolveSaleOrderAdditionalCharges(
+  additionalCharges,
+  cmpId,
+  session,
+) {
+  if (!Array.isArray(additionalCharges)) {
+    throw createHttpError("additionalCharges must be an array", 400);
+  }
+
+  const normalizedCharges = additionalCharges.map((charge) =>
+    normalizeSaleChargeInput({
+      chargeMasterId:
+        charge?.additionalChargeId ??
+        charge?.additional_charge_id ??
+        charge?.chargeMasterId ??
+        charge?.charge_master_id,
+      action: charge?.action ?? "add",
+      value: charge?.value,
+    }),
+  );
+
+  const resolvedCharges = await resolveSaleChargeMasters(normalizedCharges, {
+    cmpId,
+    session,
+  });
+
+  // The document calculator reads rate snapshots directly while the Sale
+  // resolver keeps them under `rates`; expose both without trusting payload
+  // tax fields.
+  return resolvedCharges.map(({ rates, ...charge }) => ({
+    ...charge,
+    ...rates,
+    rates,
+  }));
+}
+
+const SALE_ORDER_PRODUCT_ENRICHMENT_POPULATE = [
+  { path: "brand", select: "brand brand_id" },
+  { path: "category", select: "category category_id" },
+  { path: "sub_category", select: "subcategory subcategory_id" },
+];
+
+function normalizeProductId(value) {
+  if (!value || !mongoose.Types.ObjectId.isValid(value)) return null;
+  return String(value);
+}
+
+async function enrichSaleOrderItemsWithLatestProducts(saleOrder = null) {
+  if (!saleOrder) return saleOrder;
+
+  const productIds = [
+    ...new Set(
+      (saleOrder.items || [])
+        .map((item) => normalizeProductId(item?.item_id))
+        .filter(Boolean)
+    ),
+  ];
+
+  if (productIds.length === 0) {
+    return {
+      ...saleOrder,
+      items: (saleOrder.items || []).map((item) => ({
+        ...item,
+        priceLevels: [],
+      })),
+    };
+  }
+
+  const products = await Product.find({
+    _id: { $in: productIds },
+    cmp_id: saleOrder.cmp_id,
+  })
+    .select("_id product_name brand category sub_category priceLevels")
+    .populate(SALE_ORDER_PRODUCT_ENRICHMENT_POPULATE)
+    .lean();
+
+  const productById = new Map(
+    products.map((product) => [String(product._id), product])
+  );
+
+  return {
+    ...saleOrder,
+    items: (saleOrder.items || []).map((item) => {
+      const product = productById.get(String(item?.item_id));
+
+      if (!product) {
+        return {
+          ...item,
+          priceLevels: [],
+        };
+      }
+
+      return {
+        ...item,
+        item_name: product.product_name,
+        brand: product.brand ?? null,
+        category: product.category ?? null,
+        sub_category: product.sub_category ?? null,
+        priceLevels: product.priceLevels ?? [],
+      };
+    }),
+  };
 }
 
 // Create flow summary:
@@ -67,6 +177,12 @@ export async function createSaleOrder(data = {}, req) {
         throw createHttpError("Selected party does not belong to this company", 400);
       }
 
+      const additionalCharges = await resolveSaleOrderAdditionalCharges(
+        data.additionalCharges ?? data.additional_charges ?? [],
+        cmpId,
+        session,
+      );
+
       // Centralized voucher generation guarantees unique numbering policy.
       const voucherIdentity = await issueVoucherIdentity({
         cmpId,
@@ -78,7 +194,7 @@ export async function createSaleOrder(data = {}, req) {
 
       // Convert API request shape into schema-ready document with normalized numeric fields.
       const saleOrderDoc = buildSaleOrderPayload(
-        { ...data, cmpId },
+        { ...data, cmpId, additionalCharges },
         voucherIdentity.voucher,
         voucherIdentity.serials,
         userId
@@ -93,7 +209,7 @@ export async function createSaleOrder(data = {}, req) {
       await createVoucherTimelineEntry(buildVoucherTimelinePayload(created), session);
     });
 
-    return createdSaleOrder;
+    return addLegacySaleOrderUnitFields(createdSaleOrder);
   } finally {
     // Always release session even when transaction throws.
     await session.endSession();
@@ -109,7 +225,10 @@ export async function getSaleOrderById(id, { cmp_id } = {}, req) {
     filter.cmp_id = cmp_id;
   }
 
-  return SaleOrder.findOne(filter).lean();
+  const saleOrder = await SaleOrder.findOne(filter).lean();
+  const enrichedSaleOrder = await enrichSaleOrderItemsWithLatestProducts(saleOrder);
+
+  return addLegacySaleOrderUnitFields(enrichedSaleOrder);
 }
 
 // Update flow summary:
@@ -160,8 +279,14 @@ export async function updateSaleOrder(id, data = {}, req) {
       // Prevent updates on states like `cancelled` / non-editable statuses.
       assertTransactionEditable("saleOrder", saleOrder.status);
 
+      const additionalCharges = await resolveSaleOrderAdditionalCharges(
+        data.additionalCharges ?? data.additional_charges ?? [],
+        cmpId,
+        session,
+      );
+
       // Mutates mongoose document in-memory with normalized values.
-      applySaleOrderUpdate(saleOrder, data, userId);
+      applySaleOrderUpdate(saleOrder, { ...data, additionalCharges }, userId);
 
       await saleOrder.save({ session });
       updatedSaleOrder = saleOrder.toObject();
@@ -177,7 +302,7 @@ export async function updateSaleOrder(id, data = {}, req) {
       );
     });
 
-    return updatedSaleOrder;
+    return addLegacySaleOrderUnitFields(updatedSaleOrder);
   } finally {
     await session.endSession();
   }
@@ -229,7 +354,7 @@ export async function cancelSaleOrder(id, data = {}, req) {
       );
     });
 
-    return cancelledSaleOrder;
+    return addLegacySaleOrderUnitFields(cancelledSaleOrder);
   } finally {
     await session.endSession();
   }

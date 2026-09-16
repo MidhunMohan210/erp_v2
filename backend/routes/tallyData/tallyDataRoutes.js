@@ -10,6 +10,7 @@ import { addParties } from "../../controllers/tallyDataController.js/tallyPartyC
 import { addSubDetails } from "../../controllers/tallyDataController.js/tallyProductSubDetailsController.js";
 import { addGodowns } from "../../controllers/tallyDataController.js/tallyGodownController.js";
 import { addProducts } from "../../controllers/tallyDataController.js/tallyProductController.js";
+import { importProductStockFromTally } from "../../controllers/tallyDataController.js/tallyStockController.js";
 import { saveAdditionalChargesFromTally } from "../../controllers/tallyDataController.js/additionalChargeController.js";
 import { importOutstandingFromTally } from "../../controllers/tallyDataController.js/outstandingController.js";
 import {
@@ -47,6 +48,7 @@ router.post("/categories", addSubDetails);
 router.post("/subcategories", addSubDetails);
 router.post("/godowns", addGodowns);
 router.post("/products", addProducts);
+router.post("/product-stock", importProductStockFromTally);
 router.post("/additional-charge", saveAdditionalChargesFromTally);
 router.post("/outstanding", importOutstandingFromTally);
 

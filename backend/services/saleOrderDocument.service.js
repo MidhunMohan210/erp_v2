@@ -50,17 +50,40 @@ function normalizeRequiredNumber(value, { fieldName, min, itemName }) {
 }
 
 function readAlternateUnitFields(row = {}) {
+  const hasLegacyAlternateAliases =
+    row?.alt_unit !== undefined ||
+    row?.unit_conversion !== undefined ||
+    row?.alt_unit_conversion !== undefined;
+  const legacyBaseDenominator = firstDefined(
+    row?.baseDenominator,
+    row?.base_denominator,
+    row?.unit_conversion
+  );
+  const legacyAltConversion = firstDefined(
+    row?.altConversion,
+    row?.alt_conversion,
+    row?.alt_unit_conversion
+  );
+  const actualQty = firstDefined(row?.actualQty, row?.actual_qty);
+  const billedQty = firstDefined(row?.billedQty, row?.billed_qty);
+
   return {
-    alternateUnit: firstDefined(row?.alternateUnit, row?.alternate_unit),
-    baseDenominator: firstDefined(row?.baseDenominator, row?.base_denominator),
-    altConversion: firstDefined(row?.altConversion, row?.alt_conversion),
+    alternateUnit: firstDefined(row?.alternateUnit, row?.alternate_unit, row?.alt_unit),
+    baseDenominator: legacyBaseDenominator,
+    altConversion: legacyAltConversion,
     alternateActualQty: firstDefined(
       row?.alternateActualQty,
-      row?.alternate_actual_qty
+      row?.alternate_actual_qty,
+      hasLegacyAlternateAliases
+        ? convertBaseQtyToAlternate(actualQty, legacyBaseDenominator, legacyAltConversion)
+        : undefined
     ),
     alternateBilledQty: firstDefined(
       row?.alternateBilledQty,
-      row?.alternate_billed_qty
+      row?.alternate_billed_qty,
+      hasLegacyAlternateAliases
+        ? convertBaseQtyToAlternate(billedQty, legacyBaseDenominator, legacyAltConversion)
+        : undefined
     ),
   };
 }
@@ -119,11 +142,11 @@ function normalizeAlternateUnitFields(row = {}) {
 function normalizeSaleOrderUnits(row = {}, alternateFields) {
   const itemName = row?.name || row?.product_name || row?.item_name || "";
   const baseUnit = normalizeRequiredUnit(
-    firstDefined(row?.baseUnit, row?.base_unit),
+    firstDefined(row?.baseUnit, row?.base_unit, row?.unit),
     { fieldName: "base_unit", itemName }
   );
   const selectedUnit = normalizeRequiredUnit(
-    firstDefined(row?.selectedUnit, row?.selected_unit),
+    firstDefined(row?.selectedUnit, row?.selected_unit, row?.unit, baseUnit),
     { fieldName: "selected_unit", itemName }
   );
   const validSelectedUnits = [baseUnit];
@@ -364,22 +387,21 @@ function mapSaleOrderItems(items = [], { preserveIds = false } = {}) {
 function mapAdditionalCharges(additionalCharges = [], taxType = "igst") {
   return additionalCharges.map((charge) => {
     const normalizedCharge = {
-      option: charge?.option || "",
+      additional_charge_id: firstDefined(
+        charge?.additional_charge_id,
+        charge?.additionalChargeId,
+        charge?.charge_master_id,
+        charge?.chargeMasterId,
+      ),
+      option: charge?.option || charge?.name || "",
       value: Number(charge?.value) || 0,
       action:
         charge?.action === "substract" ? "subtract" : charge?.action || "add",
-      igst:
-        Number(
-          firstDefined(
-            charge?.igst,
-            taxType === "igst"
-              ? firstDefined(charge?.taxPercentage, charge?.tax_percentage)
-              : 0
-          )
-        ) || 0,
+      igst: Number(firstDefined(charge?.rates?.igst, charge?.igst, taxType === "igst" ? firstDefined(charge?.taxPercentage, charge?.tax_percentage) : 0)) || 0,
       cgst:
         Number(
           firstDefined(
+            charge?.rates?.cgst,
             charge?.cgst,
             taxType === "cgst_sgst"
               ? (Number(firstDefined(charge?.taxPercentage, charge?.tax_percentage)) || 0) /
@@ -390,6 +412,7 @@ function mapAdditionalCharges(additionalCharges = [], taxType = "igst") {
       sgst:
         Number(
           firstDefined(
+            charge?.rates?.sgst,
             charge?.sgst,
             taxType === "cgst_sgst"
               ? (Number(firstDefined(charge?.taxPercentage, charge?.tax_percentage)) || 0) /
@@ -397,14 +420,11 @@ function mapAdditionalCharges(additionalCharges = [], taxType = "igst") {
               : 0
           )
         ) || 0,
-      cess: Number(firstDefined(charge?.cess)) || 0,
+      cess: Number(firstDefined(charge?.rates?.cess, charge?.cess)) || 0,
       addl_cess:
-        Number(firstDefined(charge?.addl_cess, charge?.addlCess)) || 0,
-      state_cess:
-        Number(firstDefined(charge?.state_cess, charge?.stateCess)) || 0,
+        Number(firstDefined(charge?.rates?.addl_cess, charge?.addl_cess, charge?.addlCess)) || 0,
+      state_cess: Number(firstDefined(charge?.rates?.state_cess, charge?.state_cess, charge?.stateCess)) || 0,
       hsn: charge?.hsn || null,
-      final_value:
-        Number(firstDefined(charge?.finalValue, charge?.final_value)) || 0,
     };
 
     const igstAmount =
@@ -429,6 +449,7 @@ function mapAdditionalCharges(additionalCharges = [], taxType = "igst") {
       cess_amount: 0,
       addl_cess_amount: 0,
       state_cess_amount: 0,
+      final_value: roundMoney(normalizedCharge.value + igstAmount + cgstAmount + sgstAmount),
     };
   });
 }
@@ -450,6 +471,27 @@ function mapDespatchDetails(despatchDetails = {}) {
 // Keep currency math consistent to 2 decimals where tax split is derived.
 function roundMoney(value) {
   return Math.round((Number(value) || 0) * 100) / 100;
+}
+
+function withLegacySaleOrderItemUnitFields(item = {}) {
+  const selectedUnit = item.selected_unit || item.base_unit || null;
+
+  return {
+    ...item,
+    unit: item.unit || selectedUnit,
+    alt_unit: item.alt_unit ?? item.alternate_unit ?? null,
+    unit_conversion: item.unit_conversion ?? item.base_denominator ?? null,
+    alt_unit_conversion: item.alt_unit_conversion ?? item.alt_conversion ?? null,
+  };
+}
+
+export function addLegacySaleOrderUnitFields(saleOrder = null) {
+  if (!saleOrder) return saleOrder;
+
+  return {
+    ...saleOrder,
+    items: (saleOrder.items || []).map(withLegacySaleOrderItemUnitFields),
+  };
 }
 
 // Canonical totals builder used by both create and update flows.
@@ -683,6 +725,7 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
 }
 
 export default {
+  addLegacySaleOrderUnitFields,
   applySaleOrderUpdate,
   buildSaleOrderPayload,
   buildSaleOrderTotals,

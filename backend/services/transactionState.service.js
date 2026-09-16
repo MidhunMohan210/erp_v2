@@ -7,18 +7,28 @@ function createHttpError(message, statusCode = 500) {
 const TRANSACTION_STATUS = {
   saleOrder: {
     initial: "open",
+    tallyInitial: "pending",
     cancelled: "cancelled",
     editableStatuses: ["open"],
     cancellableStatuses: ["open"],
   },
+  sale: {
+    initial: "active",
+    tallyInitial: "pending",
+    cancelled: "cancelled",
+    editableStatuses: [],
+    cancellableStatuses: ["active"],
+  },
   receipt: {
     initial: "active",
+    tallyInitial: "pending",
     cancelled: "cancelled",
     editableStatuses: [],
     cancellableStatuses: ["active"],
   },
   payment: {
     initial: "active",
+    tallyInitial: "pending",
     cancelled: "cancelled",
     editableStatuses: [],
     cancellableStatuses: ["active"],
@@ -31,6 +41,10 @@ function getConfig(transactionType) {
 
 export function getInitialTransactionStatus(transactionType) {
   return getConfig(transactionType)?.initial || null;
+}
+
+export function getInitialTransactionTallyStatus(transactionType) {
+  return getConfig(transactionType)?.tallyInitial || "pending";
 }
 
 export function getCancelledTransactionStatus(transactionType) {
@@ -72,5 +86,6 @@ export default {
   assertTransactionNotAlreadyCancelled,
   getCancelledTransactionStatus,
   getInitialTransactionStatus,
+  getInitialTransactionTallyStatus,
   markTransactionCancelled,
 };

@@ -23,10 +23,12 @@ import voucherListRoute from "./routes/voucher/voucherRoute.js";
 import outstandingRoute from "./routes/outstanding/outstandingRoute.js";
 import tallyDataRoute from "./routes/tallyData/tallyDataRoutes.js";
 import cashTransactionRoute from "./routes/cashTransaction/cashTransactionRoute.js";
+import saleRoute from "./routes/sale/saleRoute.js";
 import { protect } from "./middleware/authMiddleware.js";
 import printConfigRoutes from "./routes/printConfig/printConfigRoutes.js";
 import companySettingsRoutes from "./routes/companySettings/companySettingsRoutes.js";
 import integrationRoutes from "./routes/admin/integrationRoutes.js";
+import devRoute from "./routes/dev/devRoute.js";
 
 const app = express();
 
@@ -105,10 +107,16 @@ app.use("/api/sale-orders", saleOrderRoute);
 app.use("/api/vouchers", voucherListRoute);
 app.use("/api/outstanding", outstandingRoute);
 app.use("/api/cash-transactions", cashTransactionRoute);
+app.use("/api/sales", saleRoute);
 app.use("/api/tally", tallyDataRoute);
 app.use("/api/print-config", protect, printConfigRoutes);
 app.use("/api/company-settings", companySettingsRoutes);
 app.use("/api/admin/integrations", integrationRoutes);
+
+// Destructive development utilities are not registered outside development.
+if (process.env.NODE_ENV === "development") {
+  app.use("/api/dev", devRoute);
+}
 
 if (process.env.NODE_ENV === "production") {
   const __dirname = path.resolve();

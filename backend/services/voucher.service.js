@@ -5,7 +5,7 @@ import Receipt from "../Model/Receipt.js";
 import SaleOrder from "../Model/SaleOrder.js";
 import { applyTransactionCreatorScope } from "../utils/authScope.js";
 
-const DEFAULT_VOUCHER_TYPES = ["saleOrder", "receipt"];
+const DEFAULT_VOUCHER_TYPES = ["saleOrder", "sale", "receipt"];
 
 function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
