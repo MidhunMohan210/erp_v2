@@ -15,6 +15,7 @@ import { saveAdditionalChargesFromTally } from "../../controllers/tallyDataContr
 import { importOutstandingFromTally } from "../../controllers/tallyDataController.js/outstandingController.js";
 import {
   getReceiptsForTally,
+  getSalesForTally,
   getSaleOrdersForTally,
   markSaleOrdersConvertedFromTally,
 } from "../../controllers/tallyDataController.js/tallyExportController.js";
@@ -55,6 +56,7 @@ router.post("/outstanding", importOutstandingFromTally);
 /// tally export routes 
 // Sale Order export to Tally
 router.get("/get-sale-orders/:cmp_id/:sno", getSaleOrdersForTally);
+router.get("/get-sales/:cmp_id/:sno", getSalesForTally);
 router.get("/get-receipts/:cmp_id/:sno", getReceiptsForTally);
 router.post("/sale-orders/mark-converted", markSaleOrdersConvertedFromTally);
 

@@ -1,6 +1,7 @@
 // controllers/tallyController.js
 import mongoose from "mongoose";
 import Receipt from "../../Model/Receipt.js";
+import Sale from "../../Model/Sale.js";
 import SaleOrder from "../../Model/SaleOrder.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
 import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
@@ -51,7 +52,7 @@ const fetchBySerial = async (Model, cmp_id, sno, res, label) => {
 
     const docs = await Model.find({
       cmp_id,
-      company_level_serial_number: { $gt: parsedSerial },
+      company_level_serial_number: { $gte: parsedSerial },
     })
       .sort({ company_level_serial_number: 1 })
       .lean();
@@ -86,6 +87,12 @@ const fetchBySerial = async (Model, cmp_id, sno, res, label) => {
 export const getSaleOrdersForTally = async (req, res) => {
   const { cmp_id, sno } = req.params;
   return fetchBySerial(SaleOrder, cmp_id, sno, res, "saleOrder");
+};
+
+// Export sales after serial `sno` for Tally pull.
+export const getSalesForTally = async (req, res) => {
+  const { cmp_id, sno } = req.params;
+  return fetchBySerial(Sale, cmp_id, sno, res, "sale");
 };
 
 // Export receipts after serial `sno` for Tally pull.
