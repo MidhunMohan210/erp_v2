@@ -9,6 +9,7 @@ import PartyLedger from "../Model/PartyLedger.js";
 import PartyMonthlyBalance from "../Model/PartyMonthlyBalance.js";
 import Party from "../Model/partySchema.js";
 import PriceLevel from "../Model/PriceLevel.js";
+import Receipt from "../Model/Receipt.js";
 import Product from "../Model/ProductSchema.js";
 import Sale from "../Model/Sale.js";
 import { applyTransactionCreatorScope } from "../utils/authScope.js";
@@ -17,8 +18,14 @@ import {
   getInitialTransactionTallyStatus,
 } from "./transactionState.service.js";
 import { issueVoucherIdentity } from "./voucherIdentity.service.js";
-import { createVoucherTimelineEntry } from "./voucherTimeline.service.js";
-import { buildVoucherTimelinePayload } from "./voucherTimelinePayload.service.js";
+import {
+  createVoucherTimelineEntry,
+  updateVoucherTimelineEntry,
+} from "./voucherTimeline.service.js";
+import {
+  buildVoucherTimelinePayload,
+  buildVoucherTimelineUpdatePayload,
+} from "./voucherTimelinePayload.service.js";
 import {
   calculateSaleTotals,
   createSaleValidationError,
@@ -96,6 +103,117 @@ function isCashBankParty(party) {
     .trim()
     .toLowerCase();
   return type === "cash" || type === "bank";
+}
+
+function createCancellationError(message, statusCode = 400) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
+function sameId(left, right) {
+  return String(left) === String(right);
+}
+
+function sameNullableText(left, right) {
+  return (left || null) === (right || null);
+}
+
+function cancellationReason(value) {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string") {
+    throw createCancellationError("cancellation_reason must be text");
+  }
+  const reason = value.trim();
+  if (reason.length > 2000) {
+    throw createCancellationError("cancellation_reason is too long");
+  }
+  return reason || null;
+}
+
+async function reverseSaleStock(itemLedgers, cmp_id, session) {
+  const grouped = new Map();
+  for (const ledger of itemLedgers) {
+    const key = `${ledger.item_id}:${ledger.godown_stock_row_id}`;
+    grouped.set(key, (grouped.get(key) || 0) + Number(ledger.base_quantity));
+  }
+
+  for (const [key, quantity] of grouped) {
+    const [item_id, godown_stock_row_id] = key.split(":");
+    // Restore the exact embedded row that the original Sale reduced.
+    const update = await Product.updateOne(
+      { _id: item_id, cmp_id, "GodownList._id": godown_stock_row_id },
+      { $inc: { "GodownList.$.balance_stock": quantity } },
+      { session },
+    );
+    if (update.matchedCount !== 1) {
+      throw createCancellationError("Expected stock row is no longer available");
+    }
+  }
+}
+
+async function reverseItemMonthlyBalances(itemLedgers, cmp_id, date, session) {
+  const grouped = new Map();
+  for (const ledger of itemLedgers) {
+    const current = grouped.get(String(ledger.item_id)) || { quantity: 0, count: 0 };
+    grouped.set(String(ledger.item_id), {
+      quantity: current.quantity + Number(ledger.base_quantity),
+      count: current.count + 1,
+    });
+  }
+
+  const month_key = formatMonthKey(date);
+  for (const [item_id, { quantity, count }] of grouped) {
+    const update = await ItemMonthlyBalance.updateOne(
+      { cmp_id, item_id, month_key },
+      { $inc: { total_outward_qty: -quantity, transaction_count: -count } },
+      { session, runValidators: true },
+    );
+    if (update.matchedCount !== 1) {
+      throw createCancellationError("Expected item monthly balance is missing");
+    }
+  }
+}
+
+async function reversePartyMonthlyBalance({ cmp_id, party_id, date, amount, session }) {
+  const update = await PartyMonthlyBalance.updateOne(
+    { cmp_id, party_id, month_key: formatMonthKey(date) },
+    { $inc: { total_debit: -Number(amount), transaction_count: -1 } },
+    { session, runValidators: true },
+  );
+  if (update.matchedCount !== 1) {
+    throw createCancellationError("Expected party monthly balance is missing");
+  }
+}
+
+async function recalculateCancelledSaleOutstanding({ sale, session }) {
+  const outstandingRows = await Outstanding.find({
+    cmp_id: sale.cmp_id,
+    billId: String(sale._id),
+    source: "sale",
+  }).session(session);
+  if (outstandingRows.length !== 1) {
+    throw createCancellationError("Sale Outstanding relationship is corrupted");
+  }
+  const outstanding = outstandingRows[0];
+
+  const receipts = await Receipt.find({
+    cmp_id: sale.cmp_id,
+    voucher_type: "receipt",
+    status: "active",
+    "settlement_details.outstanding": outstanding._id,
+  }).session(session).lean();
+  const settledAmount = receipts.reduce((total, receipt) => total + (receipt.settlement_details || [])
+    .filter((item) => sameId(item.outstanding, outstanding._id))
+    .reduce((sum, item) => sum + Number(item.settled_amount || 0), 0), 0);
+
+  outstanding.bill_amount = 0;
+  outstanding.bill_pending_amt = settledAmount > 0 ? -settledAmount : 0;
+  outstanding.classification = settledAmount > 0 ? "cr" : "dr";
+  // Keep it active while receipts reference it, so receipt cancellation can
+  // restore the same document instead of losing referential continuity.
+  outstanding.isCancelled = settledAmount === 0;
+  await outstanding.save({ session });
 }
 
 function buildSaleCashBankLedger({ sale, party, amount, userId }) {
@@ -509,5 +627,139 @@ export async function getSaleById(id, { cmp_id } = {}, req = {}) {
   return Sale.findOne(filter).lean();
 }
 
+/**
+ * Reverses every pending Sale posting as one transaction. The conditional
+ * Sale update is the claim: only one concurrent request can reach reversals.
+ */
+export async function cancelSale(id, data = {}, req = {}) {
+  const cmp_id = requiredObjectId(req.companyId, "companyId");
+  const userId = requiredObjectId(req.user?._id || req.user?.id, "userId");
+  const reason = cancellationReason(data.cancellation_reason ?? data.cancel_reason);
+  const session = await mongoose.startSession();
+
+  try {
+    let cancelledSale = null;
+    await session.withTransaction(async () => {
+      const accessFilter = applyTransactionCreatorScope(req, { _id: id, cmp_id });
+      const existingSale = await Sale.findOne(accessFilter).session(session).lean();
+      if (!existingSale) throw createCancellationError("Sale not found", 404);
+      if (existingSale.status === "cancelled") {
+        throw createCancellationError("Sale is already cancelled");
+      }
+      if (existingSale.tally_status === "accepted") {
+        throw createCancellationError("Sale already accepted by Tally cannot be cancelled");
+      }
+
+      // This atomic state transition prevents two requests from restoring the
+      // same stock or reversing the same ledger/monthly balance twice.
+      const sale = await Sale.findOneAndUpdate(
+        { ...accessFilter, status: "active", tally_status: "pending" },
+        {
+          $set: {
+            status: "cancelled",
+            cancelled_at: new Date(),
+            cancelled_by: userId,
+            cancellation_reason: reason,
+            updated_by: userId,
+          },
+        },
+        { returnDocument: "after", session, runValidators: true },
+      );
+      if (!sale) {
+        throw createCancellationError("Sale is no longer available for cancellation");
+      }
+
+      const itemLedgers = await ItemLedger.find({
+        cmp_id,
+        voucher_type: "sale",
+        voucher_id: sale._id,
+      }).session(session).lean();
+      if (itemLedgers.length !== sale.items.length) {
+        throw createCancellationError("Expected ItemLedger rows are missing or duplicated");
+      }
+
+      const saleItems = new Map(sale.items.map((item) => [String(item._id), item]));
+      const ledgerItemIds = new Set();
+      for (const ledger of itemLedgers) {
+        const item = saleItems.get(String(ledger.voucher_item_id));
+        if (!item || ledgerItemIds.has(String(ledger.voucher_item_id))) {
+          throw createCancellationError("ItemLedger does not match the Sale item rows");
+        }
+        ledgerItemIds.add(String(ledger.voucher_item_id));
+        if (
+          ledger.status !== "active" ||
+          ledger.tally_status !== "pending" ||
+          ledger.movement_type !== "OUT" ||
+          !sameId(ledger.item_id, item.item_id) ||
+          !sameId(ledger.godown_id, item.godown_id) ||
+          !sameId(ledger.godown_stock_row_id, item.godown_stock_row_id) ||
+          !sameNullableText(ledger.batch, item.batch) ||
+          Number(ledger.base_quantity) !== Number(item.actual_qty)
+        ) {
+          throw createCancellationError("ItemLedger does not match the original Sale posting");
+        }
+      }
+
+      await reverseSaleStock(itemLedgers, cmp_id, session);
+      const itemLedgerUpdate = await ItemLedger.updateMany(
+        { _id: { $in: itemLedgers.map((ledger) => ledger._id) }, status: "active", tally_status: "pending" },
+        { $set: { status: "cancelled" } },
+        { session },
+      );
+      if (itemLedgerUpdate.modifiedCount !== itemLedgers.length) {
+        throw createCancellationError("ItemLedger rows could not be cancelled safely");
+      }
+      await reverseItemMonthlyBalances(itemLedgers, cmp_id, sale.date, session);
+
+      const party = await Party.findOne({ _id: sale.party_id, cmp_id }).session(session).lean();
+      if (!party) throw createCancellationError("Sale party is missing");
+      if (isCashBankParty(party)) {
+        const cashBankLedgers = await CashBankLedger.find({
+          cmp_id,
+          voucher_type: "sale",
+          voucher_id: sale._id,
+          status: "active",
+          tally_status: "pending",
+        }).session(session);
+        if (cashBankLedgers.length !== 1) throw createCancellationError("Expected Cash/Bank ledger is missing or duplicated");
+        const cashBankLedger = cashBankLedgers[0];
+        cashBankLedger.status = "cancelled";
+        await cashBankLedger.save({ session });
+      } else {
+        const partyLedgers = await PartyLedger.find({
+          cmp_id,
+          voucher_type: "sale",
+          voucher_id: sale._id,
+          status: "active",
+          tally_status: "pending",
+        }).session(session);
+        if (partyLedgers.length !== 1) throw createCancellationError("Expected PartyLedger is missing or duplicated");
+        const partyLedger = partyLedgers[0];
+        partyLedger.status = "cancelled";
+        await partyLedger.save({ session });
+        await reversePartyMonthlyBalance({
+          cmp_id,
+          party_id: sale.party_id,
+          date: sale.date,
+          amount: sale.totals.final_amount,
+          session,
+        });
+        await recalculateCancelledSaleOutstanding({ sale, session });
+      }
+
+      const timeline = await updateVoucherTimelineEntry(
+        { voucher_id: sale._id, voucher_type: sale.voucher_type },
+        buildVoucherTimelineUpdatePayload(sale, { status: "cancelled" }),
+        session,
+      );
+      if (!timeline) throw createCancellationError("Expected VoucherTimeline entry is missing");
+      cancelledSale = sale.toObject();
+    });
+    return cancelledSale;
+  } finally {
+    await session.endSession();
+  }
+}
+
 export { buildSaleCashBankLedger, isCashBankParty };
-export default { createSale, getSaleById };
+export default { createSale, getSaleById, cancelSale };

@@ -456,6 +456,15 @@ export async function cancelCashTransaction(id, data = {}, req) {
         outstanding.bill_pending_amt = currentPendingAmount + settledAmount;
         outstanding.classification =
           Number(outstanding.bill_pending_amt) < 0 ? "cr" : "dr";
+        // A cancelled Sale keeps this row active only while a Receipt still
+        // references it. Once that final Receipt is cancelled, close it.
+        if (
+          outstanding.source === "sale" &&
+          Number(outstanding.bill_amount) === 0 &&
+          Number(outstanding.bill_pending_amt) === 0
+        ) {
+          outstanding.isCancelled = true;
+        }
         await outstanding.save({ session });
       }
 

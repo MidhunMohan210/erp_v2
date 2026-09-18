@@ -13,7 +13,7 @@ import { Godown } from "../../Model/ProductSubDetails.js";
 import Sale from "../../Model/Sale.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
-import { createSale, getSaleById } from "../../services/sale.service.js";
+import { cancelSale, createSale, getSaleById } from "../../services/sale.service.js";
 import { auditSale } from "../../services/saleAudit.service.js";
 import { repairCashBankSales } from "../../utils/repairCashBankSales.js";
 import { createTestCompany } from "../helpers/company.js";
@@ -725,6 +725,145 @@ describe("createSale", () => {
     expect(
       (await Product.findById(product._id)).GodownList[0].balance_stock,
     ).toBe(openingStock);
+  });
+});
+
+describe("cancelSale", () => {
+  it("reverses a pending credit Sale without changing its identity", async () => {
+    const { context, party, godown, product, rowId, seriesId } =
+      await setupSaleContext();
+    const sale = await createSale(
+      {
+        request_id: "sale-service-cancel-credit",
+        selectedSeries: { _id: String(seriesId) },
+        transactionDate: "2026-07-15",
+        partyId: String(party._id),
+        items: [
+          {
+            itemId: String(product._id),
+            godownId: String(godown._id),
+            godownStockRowId: String(rowId),
+            selectedUnit: "NOS",
+            actualQty: 5,
+            billedQty: 5,
+            rate: 100,
+            taxInclusive: false,
+            discountType: "amount",
+            discountValue: 0,
+          },
+        ],
+        additionalCharges: [],
+      },
+      { companyId: String(context.company._id), user: context.user },
+    );
+
+    const cancelled = await cancelSale(
+      sale._id,
+      { cancellation_reason: "Customer requested cancellation" },
+      { companyId: String(context.company._id), user: context.user },
+    );
+    expect(cancelled).toMatchObject({
+      _id: sale._id,
+      voucher_number: sale.voucher_number,
+      request_id: sale.request_id,
+      status: "cancelled",
+      tally_status: "pending",
+      cancellation_reason: "Customer requested cancellation",
+    });
+    expect(
+      (await Product.findById(product._id)).GodownList[0].balance_stock,
+    ).toBe(100);
+    expect(
+      await ItemLedger.countDocuments({ voucher_id: sale._id, status: "cancelled" }),
+    ).toBe(1);
+    expect(
+      await PartyLedger.countDocuments({ voucher_id: sale._id, status: "cancelled" }),
+    ).toBe(1);
+    expect(
+      await ItemMonthlyBalance.findOne({
+        cmp_id: context.company._id,
+        item_id: product._id,
+        month_key: EXPECTED_MONTH,
+      }).lean(),
+    ).toMatchObject({ total_outward_qty: 0, transaction_count: 0 });
+    expect(
+      await PartyMonthlyBalance.findOne({
+        cmp_id: context.company._id,
+        party_id: party._id,
+        month_key: EXPECTED_MONTH,
+      }).lean(),
+    ).toMatchObject({ total_debit: 0, transaction_count: 0 });
+    expect(
+      await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean(),
+    ).toMatchObject({ bill_amount: 0, bill_pending_amt: 0, isCancelled: true });
+    expect(
+      await VoucherTimeline.findOne({ voucher_id: sale._id, voucher_type: "sale" }).lean(),
+    ).toMatchObject({ status: "cancelled" });
+
+    await expect(
+      cancelSale(sale._id, {}, { companyId: String(context.company._id), user: context.user }),
+    ).rejects.toThrow("already cancelled");
+    expect(
+      (await Product.findById(product._id)).GodownList[0].balance_stock,
+    ).toBe(100);
+  });
+
+  it("rejects a Tally-accepted Sale without reversing its postings", async () => {
+    const { context, party, godown, product, rowId, seriesId } =
+      await setupSaleContext();
+    const sale = await createSale(
+      {
+        request_id: "sale-service-cancel-accepted",
+        selectedSeries: { _id: String(seriesId) },
+        transactionDate: "2026-07-15",
+        partyId: String(party._id),
+        items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 5, billedQty: 5, rate: 100, taxInclusive: false, discountType: "amount", discountValue: 0 }],
+        additionalCharges: [],
+      },
+      { companyId: String(context.company._id), user: context.user },
+    );
+    await Sale.updateOne({ _id: sale._id }, { $set: { tally_status: "accepted" } });
+
+    await expect(
+      cancelSale(sale._id, {}, { companyId: String(context.company._id), user: context.user }),
+    ).rejects.toThrow("accepted by Tally");
+    expect((await Sale.findById(sale._id)).status).toBe("active");
+    expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
+    expect(await ItemLedger.countDocuments({ voucher_id: sale._id, status: "active" })).toBe(1);
+  });
+
+  it("cancels a Cash Sale without creating customer financial reversals", async () => {
+    const { context, godown, product, rowId, seriesId } = await setupSaleContext();
+    const cashParty = await createTestParty({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      accountGroup: (await createAccountGroup({
+        cmp_id: context.company._id,
+        Primary_user_id: context.user._id,
+        accountGroup_id: "sale-cancel-cash",
+      }))._id,
+      partyType: "cash",
+      partyName: "Cash Counter",
+      state: "Kerala",
+    });
+    const sale = await createSale(
+      {
+        request_id: "sale-service-cancel-cash",
+        selectedSeries: { _id: String(seriesId) },
+        transactionDate: "2026-07-15",
+        partyId: String(cashParty._id),
+        items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 5, billedQty: 5, rate: 100, taxInclusive: false, discountType: "amount", discountValue: 0 }],
+        additionalCharges: [],
+      },
+      { companyId: String(context.company._id), user: context.user },
+    );
+
+    await cancelSale(sale._id, {}, { companyId: String(context.company._id), user: context.user });
+    expect(await CashBankLedger.countDocuments({ voucher_id: sale._id, status: "cancelled" })).toBe(1);
+    expect(await PartyLedger.countDocuments({ voucher_id: sale._id })).toBe(0);
+    expect(await PartyMonthlyBalance.countDocuments({ party_id: cashParty._id })).toBe(0);
+    expect(await Outstanding.countDocuments({ billId: String(sale._id) })).toBe(0);
+    expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(100);
   });
 });
 
