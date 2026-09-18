@@ -80,14 +80,25 @@ async function getOutstandingTotalsMap({ owner, cmpObjectId, partyIds }) {
     {
       $group: {
         _id: "$party_id",
+        // Keep API bucket totals as positive display amounts. Outstanding
+        // stores credits as negative values, while older imports may use a
+        // positive amount with classification "cr".
         totalDr: {
           $sum: {
-            $cond: [{ $eq: ["$classification", "dr"] }, "$bill_pending_amt", 0],
+            $cond: [
+              { $eq: ["$classification", "dr"] },
+              { $abs: "$bill_pending_amt" },
+              0,
+            ],
           },
         },
         totalCr: {
           $sum: {
-            $cond: [{ $eq: ["$classification", "cr"] }, "$bill_pending_amt", 0],
+            $cond: [
+              { $eq: ["$classification", "cr"] },
+              { $abs: "$bill_pending_amt" },
+              0,
+            ],
           },
         },
       },

@@ -2,6 +2,7 @@ import request from "supertest";
 
 import app from "../../app.js";
 import PartyMonthlyBalance from "../../Model/PartyMonthlyBalance.js";
+import Outstanding from "../../Model/outstandingShcema.js";
 import Party from "../../Model/partySchema.js";
 import { createTestCompany } from "../helpers/company.js";
 import {
@@ -463,6 +464,173 @@ describe("GET /api/party/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.message).toBe("Party not found");
+  });
+});
+
+describe("party Outstanding balances", () => {
+  it.each([
+    {
+      name: "DR only",
+      amounts: [10000],
+      receivable: 10000,
+      payable: 0,
+      net: 10000,
+      classification: "dr",
+    },
+    {
+      name: "negative CR only",
+      amounts: [-4000],
+      receivable: 0,
+      payable: 4000,
+      net: -4000,
+      classification: "cr",
+    },
+    {
+      name: "mixed DR and CR",
+      amounts: [10000, -4000],
+      receivable: 10000,
+      payable: 4000,
+      net: 6000,
+      classification: "dr",
+    },
+    {
+      name: "net customer credit",
+      amounts: [3000, -5000],
+      receivable: 3000,
+      payable: 5000,
+      net: -2000,
+      classification: "cr",
+    },
+    {
+      name: "zero net balance",
+      amounts: [4000, -4000],
+      receivable: 4000,
+      payable: 4000,
+      net: 0,
+      classification: "dr",
+    },
+  ])("reports $name in party list and detail", async ({
+    amounts,
+    receivable,
+    payable,
+    net,
+    classification,
+  }) => {
+    const context = await setupIntegrationTestContext({
+      loginAndGetAuthContext,
+      createTestCompany,
+    });
+    const accountGroup = await createAccountGroup({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+    });
+    const party = await createTestParty({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      accountGroup: accountGroup._id,
+    });
+
+    await Outstanding.insertMany(
+      amounts.map((amount, index) => ({
+        Primary_user_id: context.user._id,
+        cmp_id: context.company._id,
+        accountGroup: accountGroup._id,
+        party_name: party.partyName,
+        party_id: party._id,
+        bill_date: new Date("2026-01-15T00:00:00.000Z"),
+        bill_no: `TEST-${index + 1}`,
+        bill_amount: Math.abs(amount),
+        bill_pending_amt: amount,
+        classification: amount < 0 ? "cr" : "dr",
+      })),
+    );
+
+    const list = await request(app)
+      .get("/api/party")
+      .set("Authorization", `Bearer ${context.token}`)
+      .query({ cmp_id: context.company._id.toString() });
+    const detail = await request(app)
+      .get(`/api/party/${party._id}`)
+      .set("Authorization", `Bearer ${context.token}`);
+
+    expect(list.status).toBe(200);
+    expect(detail.status).toBe(200);
+    expect(list.body.items).toHaveLength(1);
+    expect(list.body.items[0]).toMatchObject({
+      totalReceivable: receivable,
+      totalPayable: payable,
+      netOutstanding: net,
+      totalOutstanding: net,
+      classification,
+    });
+    expect(detail.body).toMatchObject({
+      totalOutstanding: net,
+      classification,
+    });
+
+    const receivableList = await request(app)
+      .get("/api/party")
+      .set("Authorization", `Bearer ${context.token}`)
+      .query({ cmp_id: context.company._id.toString(), ledgerType: "receivable" });
+    const payableList = await request(app)
+      .get("/api/party")
+      .set("Authorization", `Bearer ${context.token}`)
+      .query({ cmp_id: context.company._id.toString(), ledgerType: "payable" });
+
+    expect(receivableList.body.items[0].totalOutstanding).toBe(receivable);
+    expect(receivableList.body.items[0].classification).toBe("dr");
+    expect(payableList.body.items[0].totalOutstanding).toBe(payable);
+    expect(payableList.body.items[0].classification).toBe("cr");
+  });
+
+  it("treats a positive imported CR amount as credit", async () => {
+    const context = await setupIntegrationTestContext({
+      loginAndGetAuthContext,
+      createTestCompany,
+    });
+    const accountGroup = await createAccountGroup({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+    });
+    const party = await createTestParty({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      accountGroup: accountGroup._id,
+    });
+    await Outstanding.create({
+      Primary_user_id: context.user._id,
+      cmp_id: context.company._id,
+      accountGroup: accountGroup._id,
+      party_name: party.partyName,
+      party_id: party._id,
+      bill_date: new Date("2026-01-15T00:00:00.000Z"),
+      bill_no: "IMPORTED-CR",
+      bill_amount: 4000,
+      bill_pending_amt: 4000,
+      classification: "cr",
+    });
+
+    const detail = await request(app)
+      .get(`/api/party/${party._id}`)
+      .set("Authorization", `Bearer ${context.token}`);
+
+    expect(detail.status).toBe(200);
+    expect(detail.body.totalOutstanding).toBe(-4000);
+    expect(detail.body.classification).toBe("cr");
+
+    const list = await request(app)
+      .get("/api/party")
+      .set("Authorization", `Bearer ${context.token}`)
+      .query({ cmp_id: context.company._id.toString() });
+
+    expect(list.status).toBe(200);
+    expect(list.body.items[0]).toMatchObject({
+      totalReceivable: 0,
+      totalPayable: 4000,
+      netOutstanding: -4000,
+      totalOutstanding: -4000,
+      classification: "cr",
+    });
   });
 });
 
