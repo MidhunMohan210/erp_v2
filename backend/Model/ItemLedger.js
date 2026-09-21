@@ -49,6 +49,18 @@ const ItemLedgerSchema = new Schema(
       required: true,
     },
 
+    // A sale line is a stable subdocument, not merely a product reference.
+    // Keep the original field for backwards compatibility with existing
+    // postings, and persist the explicit name for new/editable Sale rows.
+    sale_item_id: {
+      type: Schema.Types.ObjectId,
+      default: null,
+    },
+
+    item_name: { type: String, default: null, trim: true },
+    rate: { type: Number, default: null },
+    amount: { type: Number, default: null },
+
     voucher_number: {
       type: String,
       required: true,
@@ -123,6 +135,13 @@ ItemLedgerSchema.index({
   voucher_type: 1,
   voucher_id: 1,
   voucher_item_id: 1,
+});
+
+ItemLedgerSchema.index({
+  cmp_id: 1,
+  voucher_type: 1,
+  voucher_id: 1,
+  sale_item_id: 1,
 });
 
 const ItemLedger =

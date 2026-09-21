@@ -10,10 +10,11 @@ import PartyLedger from "../../Model/PartyLedger.js";
 import PartyMonthlyBalance from "../../Model/PartyMonthlyBalance.js";
 import Product from "../../Model/ProductSchema.js";
 import { Godown } from "../../Model/ProductSubDetails.js";
+import Receipt from "../../Model/Receipt.js";
 import Sale from "../../Model/Sale.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
-import { cancelSale, createSale, getSaleById } from "../../services/sale.service.js";
+import { cancelSale, createSale, getSaleById, updateSale } from "../../services/sale.service.js";
 import { auditSale } from "../../services/saleAudit.service.js";
 import { repairCashBankSales } from "../../utils/repairCashBankSales.js";
 import { createTestCompany } from "../helpers/company.js";
@@ -725,6 +726,200 @@ describe("createSale", () => {
     expect(
       (await Product.findById(product._id)).GodownList[0].balance_stock,
     ).toBe(openingStock);
+  });
+});
+
+describe("updateSale", () => {
+  it("reposts a pending Sale in place while retaining its line, ledgers, outstanding and identity", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const request = {
+      request_id: "sale-service-edit-basic",
+      selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15",
+      partyId: String(party._id),
+      items: [{
+        itemId: String(product._id), godownId: String(godown._id),
+        godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 10,
+        billedQty: 10, rate: 100, taxInclusive: false,
+        discountType: "amount", discountValue: 0,
+      }],
+      additionalCharges: [],
+    };
+    const created = await createSale(request, {
+      companyId: String(context.company._id), user: context.user,
+    });
+    const originalItemId = String(created.items[0]._id);
+    const originalLedger = await ItemLedger.findOne({ voucher_id: created._id }).lean();
+    const originalOutstanding = await Outstanding.findOne({ billId: String(created._id), source: "sale" }).lean();
+
+    const updated = await updateSale(created._id, {
+      ...request,
+      transactionDate: "2026-07-16",
+      items: [{ ...request.items[0], _id: originalItemId, actualQty: 15, billedQty: 15 }],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    expect(String(updated._id)).toBe(String(created._id));
+    expect(updated.voucher_number).toBe(created.voucher_number);
+    expect(String(updated.items[0]._id)).toBe(originalItemId);
+    expect(updated.items[0].actual_qty).toBe(15);
+    expect(updated.totals.final_amount).toBe(1770);
+    expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(85);
+    const ledger = await ItemLedger.findOne({ voucher_id: created._id, status: "active" }).lean();
+    expect(String(ledger._id)).toBe(String(originalLedger._id));
+    expect(String(ledger.sale_item_id)).toBe(originalItemId);
+    expect(ledger.base_quantity).toBe(15);
+    const itemMonthly = await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: product._id, month_key: EXPECTED_MONTH }).lean();
+    expect(itemMonthly).toMatchObject({ total_outward_qty: 15, transaction_count: 1 });
+    const partyLedger = await PartyLedger.findOne({ voucher_id: created._id, status: "active" }).lean();
+    expect(partyLedger).toMatchObject({ party_id: party._id, amount: 1770, date: new Date("2026-07-16") });
+    const partyMonthly = await PartyMonthlyBalance.findOne({ cmp_id: context.company._id, party_id: party._id, month_key: EXPECTED_MONTH }).lean();
+    expect(partyMonthly).toMatchObject({ total_debit: 1770, transaction_count: 1 });
+    const outstanding = await Outstanding.findOne({ billId: String(created._id), source: "sale" }).lean();
+    expect(String(outstanding._id)).toBe(String(originalOutstanding._id));
+    expect(outstanding).toMatchObject({ bill_amount: 1770, bill_pending_amt: 1770, classification: "dr" });
+    const timeline = await VoucherTimeline.findOne({ voucher_id: created._id, voucher_type: "sale" }).lean();
+    expect(timeline).toMatchObject({ amount: 1770, status: "active" });
+  });
+
+  it("updates only the addressed duplicate-product line and cancels removed line ledgers", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const line = {
+      itemId: String(product._id), godownId: String(godown._id),
+      godownStockRowId: String(rowId), selectedUnit: "NOS", billedQty: 1,
+      rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0,
+    };
+    const sale = await createSale({
+      request_id: "sale-service-edit-duplicate", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...line, actualQty: 3 }, { ...line, actualQty: 4 }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    const [first, second] = sale.items;
+    await updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...line, _id: String(first._id), actualQty: 5, billedQty: 1 }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
+    const firstLedger = await ItemLedger.findOne({ voucher_id: sale._id, sale_item_id: first._id, status: "active" }).lean();
+    const secondLedger = await ItemLedger.findOne({ voucher_id: sale._id, sale_item_id: second._id, status: "cancelled" }).lean();
+    expect(firstLedger).toMatchObject({ base_quantity: 5 });
+    expect(secondLedger).not.toBeNull();
+  });
+
+  it("moves product, godown, party, and monthly balances using old-state reversal", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const secondGodown = await Godown.create({
+      godown: "Second", godown_id: "sale-edit-second", cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+    });
+    const secondRowId = new mongoose.Types.ObjectId();
+    const secondProduct = await Product.create({
+      product_name: "Replacement", cmp_id: context.company._id,
+      Primary_user_id: context.user._id, base_unit: "NOS", cgst: 9, sgst: 9, igst: 18,
+      product_master_id: "sale-edit-replacement",
+      GodownList: [{ _id: secondRowId, godown: secondGodown._id, balance_stock: 100 }],
+    });
+    const secondParty = await createTestParty({
+      cmp_id: context.company._id, Primary_user_id: context.user._id,
+      accountGroup: (await createAccountGroup({ cmp_id: context.company._id, Primary_user_id: context.user._id, accountGroup_id: "sale-edit-second-party" }))._id,
+      partyName: "Second customer", state: "Kerala",
+    });
+    const sale = await createSale({
+      request_id: "sale-service-edit-move", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 10, billedQty: 10, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
+    }, { companyId: String(context.company._id), user: context.user });
+    const originalOutstanding = await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean();
+
+    const updated = await updateSale(sale._id, {
+      transactionDate: "2026-08-01", partyId: String(secondParty._id),
+      items: [{ _id: String(sale.items[0]._id), itemId: String(secondProduct._id), godownId: String(secondGodown._id), godownStockRowId: String(secondRowId), selectedUnit: "NOS", actualQty: 7, billedQty: 7, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
+      additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(100);
+    expect((await Product.findById(secondProduct._id)).GodownList[0].balance_stock).toBe(93);
+    expect(await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: product._id, month_key: "2026-07" }).lean()).toMatchObject({ total_outward_qty: 0 });
+    expect(await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: secondProduct._id, month_key: "2026-08" }).lean()).toMatchObject({ total_outward_qty: 7 });
+    expect(await PartyMonthlyBalance.findOne({ cmp_id: context.company._id, party_id: party._id, month_key: "2026-07" }).lean()).toMatchObject({ total_debit: 0 });
+    expect(await PartyMonthlyBalance.findOne({ cmp_id: context.company._id, party_id: secondParty._id, month_key: "2026-08" }).lean()).toMatchObject({ total_debit: updated.totals.final_amount });
+    const outstanding = await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean();
+    expect(String(outstanding._id)).toBe(String(originalOutstanding._id));
+    expect(String(outstanding.party_id)).toBe(String(secondParty._id));
+  });
+
+  it("keeps receipt settlement history and recalculates signed outstanding pending", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const line = {
+      itemId: String(product._id), godownId: String(godown._id),
+      godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 10,
+      billedQty: 10, rate: 100, taxInclusive: false, discountType: "amount", discountValue: 0,
+    };
+    const sale = await createSale({
+      request_id: "sale-service-edit-receipt", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id), items: [line], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    const outstanding = await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean();
+    await Receipt.create({
+      cmp_id: context.company._id, voucher_type: "receipt", series_id: new mongoose.Types.ObjectId(),
+      series_name: "Test receipt", voucher_number: "EDIT-RCP-1", date: new Date("2026-07-16"),
+      party_id: party._id, party_name: party.partyName, cash_bank_id: party._id,
+      cash_bank_name: party.partyName, cash_bank_type: "cash", amount: 400, status: "active",
+      settlement_details: [{ outstanding: outstanding._id, outstanding_number: outstanding.bill_no,
+        outstanding_date: outstanding.bill_date, outstanding_type: "dr", previous_outstanding_amount: sale.totals.final_amount,
+        settled_amount: 400, remaining_outstanding_amount: sale.totals.final_amount - 400 }],
+    });
+
+    await updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...line, _id: String(sale.items[0]._id), actualQty: 8, billedQty: 8 }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    const editedOutstanding = await Outstanding.findById(outstanding._id).lean();
+    expect(editedOutstanding).toMatchObject({ bill_amount: 944, bill_pending_amt: 544, classification: "dr" });
+
+    await updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...line, _id: String(sale.items[0]._id), actualQty: 3, billedQty: 3 }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    expect(await Outstanding.findById(outstanding._id).lean()).toMatchObject({ bill_amount: 354, bill_pending_amt: -46, classification: "cr" });
+  });
+
+  it("switches cleanly between customer and cash Sale accounting branches", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const cashParty = await createTestParty({
+      cmp_id: context.company._id, Primary_user_id: context.user._id,
+      accountGroup: (await createAccountGroup({ cmp_id: context.company._id, Primary_user_id: context.user._id, accountGroup_id: "sale-edit-cash-party" }))._id,
+      partyType: "cash", partyName: "Edit cash", state: "Kerala",
+    });
+    const line = { itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 2, billedQty: 2, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 };
+    const sale = await createSale({ request_id: "sale-service-edit-cash", selectedSeries: { _id: String(seriesId) }, transactionDate: "2026-07-15", partyId: String(party._id), items: [line] }, { companyId: String(context.company._id), user: context.user });
+    const itemId = String(sale.items[0]._id);
+
+    await updateSale(sale._id, { transactionDate: "2026-07-15", partyId: String(cashParty._id), items: [{ ...line, _id: itemId }], additionalCharges: [] }, { companyId: String(context.company._id), user: context.user });
+    expect(await PartyLedger.findOne({ voucher_id: sale._id, status: "active" }).lean()).toBeNull();
+    expect(await CashBankLedger.findOne({ voucher_id: sale._id, status: "active" }).lean()).toMatchObject({ cash_bank_id: cashParty._id, ledger_side: "credit" });
+    expect(await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean()).toMatchObject({ isCancelled: true, bill_amount: 0 });
+
+    await updateSale(sale._id, { transactionDate: "2026-07-15", partyId: String(party._id), items: [{ ...line, _id: itemId }], additionalCharges: [] }, { companyId: String(context.company._id), user: context.user });
+    expect(await CashBankLedger.findOne({ voucher_id: sale._id, status: "active" }).lean()).toBeNull();
+    expect(await PartyLedger.findOne({ voucher_id: sale._id, status: "active" }).lean()).toMatchObject({ party_id: party._id, ledger_side: "debit" });
+    expect(await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean()).toMatchObject({ party_id: party._id, bill_pending_amt: 23.6, isCancelled: false });
+  });
+
+  it("rejects Tally-accepted Sales without changing their postings", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const sale = await createSale({
+      request_id: "sale-service-edit-accepted", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 5, billedQty: 5, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
+    }, { companyId: String(context.company._id), user: context.user });
+    await Sale.updateOne({ _id: sale._id }, { $set: { tally_status: "accepted" } });
+    await expect(updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...sale.items[0].toObject?.() }],
+    }, { companyId: String(context.company._id), user: context.user })).rejects.toThrow("Accepted Sale cannot be edited.");
+    expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
   });
 });
 

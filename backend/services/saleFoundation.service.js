@@ -112,7 +112,12 @@ export function normalizeSaleItemInput(input = {}) {
     input.warranty_card_id,
   );
 
+  const saleItemId = firstDefined(input.sale_item_id, input.saleItemId, input._id);
+  if (saleItemId != null && saleItemId !== "" && !mongoose.Types.ObjectId.isValid(saleItemId)) {
+    throw createSaleValidationError("sale_item_id must be a valid ObjectId");
+  }
   return {
+    sale_item_id: saleItemId == null || saleItemId === "" ? null : String(saleItemId),
     item_id: requiredObjectId(
       firstDefined(input.itemId, input.item_id),
       "itemId",

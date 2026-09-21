@@ -306,6 +306,31 @@ function mapSaleItems(items) {
   }));
 }
 
+function mapSaleItemLedger({ sale, item, userId }) {
+  return {
+    cmp_id: sale.cmp_id,
+    item_id: item.item_id,
+    item_name: item.item_name,
+    godown_id: item.godown_id,
+    godown_stock_row_id: item.godown_stock_row_id,
+    batch: item.batch,
+    voucher_type: "sale",
+    voucher_id: sale._id,
+    voucher_item_id: item._id,
+    sale_item_id: item._id,
+    voucher_number: sale.voucher_number,
+    date: sale.date,
+    base_quantity: item.actual_qty,
+    base_unit: item.base_unit,
+    rate: item.rate,
+    amount: item.total_amount,
+    movement_type: "OUT",
+    status: "active",
+    tally_status: "pending",
+    created_by: userId,
+  };
+}
+
 function mapCharges(charges) {
   return charges.map(({ charge_master_id, rates, name, ...charge }) => ({
     ...charge,
@@ -375,6 +400,352 @@ async function updatePartyMonthlyBalance({
     },
     { upsert: true, returnDocument: "after", session, runValidators: true },
   );
+}
+
+function hasOwn(object, key) {
+  return Object.prototype.hasOwnProperty.call(object || {}, key);
+}
+
+async function settledReceiptAmount({ cmp_id, outstanding_id, session }) {
+  const receipts = await Receipt.find({
+    cmp_id,
+    voucher_type: "receipt",
+    status: "active",
+    "settlement_details.outstanding": outstanding_id,
+  }).session(session).lean();
+
+  return receipts.reduce(
+    (total, receipt) => total + (receipt.settlement_details || [])
+      .filter((entry) => sameId(entry.outstanding, outstanding_id))
+      .reduce((sum, entry) => sum + Number(entry.settled_amount || 0), 0),
+    0,
+  );
+}
+
+async function updateSaleOutstanding({ outstanding, sale, party, amount, userId, session }) {
+  const settled = await settledReceiptAmount({
+    cmp_id: sale.cmp_id,
+    outstanding_id: outstanding._id,
+    session,
+  });
+  const pending = Number(amount) - settled;
+  Object.assign(outstanding, {
+    Primary_user_id: party.Primary_user_id,
+    accountGroup: party.accountGroup,
+    subGroup: party.subGroup || null,
+    party_name: party.partyName,
+    party_id: party._id,
+    mobile_no: party.mobileNumber || null,
+    email: party.emailID || null,
+    bill_date: sale.date,
+    bill_no: sale.voucher_number,
+    bill_due_date: sale.date,
+    bill_amount: Number(amount),
+    bill_pending_amt: pending,
+    classification: pending < 0 ? "cr" : "dr",
+    isCancelled: false,
+    createdBy: String(userId),
+  });
+  await outstanding.save({ session });
+}
+
+function salePartySnapshot(party) {
+  return {
+    name: party.partyName,
+    gst_no: party.gstNo || null,
+    billing_address: party.billingAddress || null,
+    shipping_address: party.shippingAddress || null,
+    mobile: party.mobileNumber || null,
+    state: party.state || null,
+  };
+}
+
+/**
+ * Reposts a pending Sale in-place.  The conditional Sale write below acts as
+ * the transaction claim, so a concurrent edit cannot reverse the same set of
+ * postings twice.
+ */
+export async function updateSale(id, data = {}, req = {}) {
+  const cmp_id = requiredObjectId(req.companyId, "companyId");
+  const userId = requiredObjectId(req.user?._id || req.user?.id, "userId");
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    throw createSaleValidationError("Sale id must be a valid ObjectId");
+  }
+
+  const session = await mongoose.startSession();
+  try {
+    let updatedSale = null;
+    await session.withTransaction(async () => {
+      const accessFilter = applyTransactionCreatorScope(req, { _id: id, cmp_id });
+      const visibleSale = await Sale.findOne(accessFilter).session(session).lean();
+      if (!visibleSale) {
+        const error = createSaleValidationError("Sale not found");
+        error.statusCode = 404;
+        throw error;
+      }
+      if (visibleSale.status === "cancelled") {
+        throw createSaleValidationError("Cancelled Sale cannot be edited.");
+      }
+      if (visibleSale.tally_status === "accepted") {
+        throw createSaleValidationError("Accepted Sale cannot be edited.");
+      }
+
+      // Claim this pending, active document before touching any posting.
+      const sale = await Sale.findOneAndUpdate(
+        { ...accessFilter, status: "active", tally_status: "pending" },
+        { $set: { updated_by: userId } },
+        { returnDocument: "before", session },
+      );
+      if (!sale) {
+        throw createSaleValidationError("Sale is no longer available for editing.");
+      }
+      const oldSale = sale.toObject();
+
+      const party_id = requiredObjectId(
+        data.partyId ?? data.party_id ?? oldSale.party_id,
+        "partyId",
+      );
+      const date = normalizeDate(data.transactionDate ?? data.date ?? oldSale.date);
+      const priceLevelValue = data.priceLevelId ?? data.price_level_id ?? oldSale.price_level_id;
+      const price_level_id = priceLevelValue == null || priceLevelValue === ""
+        ? null
+        : requiredObjectId(priceLevelValue, "priceLevelId");
+      const normalized = normalizeSaleInput(data);
+
+      const [company, party, priceLevel, oldParty] = await Promise.all([
+        Company.findById(cmp_id).session(session).lean(),
+        Party.findOne({ _id: party_id, cmp_id }).session(session).lean(),
+        price_level_id
+          ? PriceLevel.findOne({ _id: price_level_id, cmp_id }).session(session).lean()
+          : null,
+        Party.findOne({ _id: oldSale.party_id, cmp_id }).session(session).lean(),
+      ]);
+      if (!company) throw createSaleValidationError("Company not found");
+      if (!party) throw createSaleValidationError("Selected party does not belong to this company");
+      if (!oldParty) throw createSaleValidationError("Sale party is missing");
+      if (price_level_id && !priceLevel) {
+        throw createSaleValidationError("Price level does not belong to this company");
+      }
+
+      const [resolvedItems, resolvedCharges] = await Promise.all([
+        resolveSaleItemMasters(normalized.items, { cmpId: cmp_id, session }),
+        resolveSaleChargeMasters(normalized.additional_charges, { cmpId: cmp_id, session }),
+      ]);
+      const calculated = calculateSaleTotals(
+        resolvedItems,
+        resolvedCharges,
+        resolveTaxType(company, party),
+      );
+
+      const oldItemsById = new Map(oldSale.items.map((item) => [String(item._id), item]));
+      const incomingIds = new Set();
+      for (const item of calculated.items) {
+        if (!item.sale_item_id) continue;
+        if (!oldItemsById.has(String(item.sale_item_id))) {
+          throw createSaleValidationError("sale_item_id does not belong to this Sale");
+        }
+        if (incomingIds.has(String(item.sale_item_id))) {
+          throw createSaleValidationError("Each existing Sale item can appear only once");
+        }
+        incomingIds.add(String(item.sale_item_id));
+      }
+
+      const oldLedgers = await ItemLedger.find({
+        cmp_id,
+        voucher_type: "sale",
+        voucher_id: sale._id,
+        status: "active",
+      }).session(session).lean();
+      if (oldLedgers.length !== oldSale.items.length) {
+        throw createSaleValidationError("Expected active ItemLedger rows are missing or duplicated");
+      }
+      const ledgersBySaleItem = new Map();
+      for (const ledger of oldLedgers) {
+        const saleItemId = String(ledger.sale_item_id || ledger.voucher_item_id);
+        if (!oldItemsById.has(saleItemId) || ledgersBySaleItem.has(saleItemId)) {
+          throw createSaleValidationError("ItemLedger does not match the Sale item rows");
+        }
+        ledgersBySaleItem.set(saleItemId, ledger);
+      }
+      if (ledgersBySaleItem.size !== oldSale.items.length) {
+        throw createSaleValidationError("ItemLedger does not match the Sale item rows");
+      }
+
+      // Reverse every old physical and monthly movement before applying the
+      // rebuilt Sale.  Quantity is deliberately actual/base quantity only.
+      await reverseSaleStock(oldLedgers, cmp_id, session);
+      await reverseItemMonthlyBalances(oldLedgers, cmp_id, oldSale.date, session);
+
+      const persistedItems = calculated.items.map((item) => {
+        const mapped = mapSaleItems([item])[0];
+        if (item.sale_item_id) mapped._id = item.sale_item_id;
+        return mapped;
+      });
+      sale.items = persistedItems;
+      sale.date = date;
+      sale.party_id = party._id;
+      sale.party_snapshot = salePartySnapshot(party);
+      sale.mailing_name = party.partyName;
+      sale.tax_type = resolveTaxType(company, party);
+      sale.price_level_id = price_level_id;
+      sale.price_level_name = priceLevel?.pricelevel || null;
+      sale.additional_charges = mapCharges(calculated.additional_charges);
+      sale.despatch_details = mapDespatchDetails(
+        data.despatchDetails ?? data.despatch_details ?? oldSale.despatch_details,
+      );
+      sale.narration = hasOwn(data, "narration") ? normalizedText(data.narration) : oldSale.narration;
+      sale.totals = calculated.totals;
+      sale.updated_by = userId;
+      await sale.save({ session });
+
+      await decrementStock(sale.items, cmp_id, session);
+      await updateItemMonthlyBalances(sale.items, cmp_id, sale.date, session);
+
+      const newItemsById = new Map(sale.items.map((item) => [String(item._id), item]));
+      const removedLedgerIds = [];
+      const existingLedgerUpdates = [];
+      const newLedgerRows = [];
+      for (const [itemId, oldItem] of oldItemsById) {
+        const ledger = ledgersBySaleItem.get(itemId);
+        const newItem = newItemsById.get(itemId);
+        if (!newItem) {
+          removedLedgerIds.push(ledger._id);
+          continue;
+        }
+        existingLedgerUpdates.push(ItemLedger.updateOne(
+          { _id: ledger._id, status: "active", tally_status: "pending" },
+          { $set: mapSaleItemLedger({ sale, item: newItem, userId }) },
+          { session, runValidators: true },
+        ));
+      }
+      for (const item of sale.items) {
+        if (!oldItemsById.has(String(item._id))) {
+          newLedgerRows.push(mapSaleItemLedger({ sale, item, userId }));
+        }
+      }
+      if (removedLedgerIds.length) {
+        const result = await ItemLedger.updateMany(
+          { _id: { $in: removedLedgerIds }, status: "active", tally_status: "pending" },
+          { $set: { status: "cancelled" } },
+          { session },
+        );
+        if (result.modifiedCount !== removedLedgerIds.length) {
+          throw createSaleValidationError("ItemLedger rows could not be cancelled safely");
+        }
+      }
+      const ledgerResults = await Promise.all(existingLedgerUpdates);
+      if (ledgerResults.some((result) => result.modifiedCount !== 1)) {
+        throw createSaleValidationError("ItemLedger rows could not be updated safely");
+      }
+      if (newLedgerRows.length) await ItemLedger.create(newLedgerRows, { session, ordered: true });
+
+      const oldPartyLedgers = await PartyLedger.find({
+        cmp_id, voucher_type: "sale", voucher_id: sale._id, status: "active",
+      }).session(session);
+      const oldCashBankLedgers = await CashBankLedger.find({
+        cmp_id, voucher_type: "sale", voucher_id: sale._id, status: "active",
+      }).session(session);
+      if (oldPartyLedgers.length + oldCashBankLedgers.length !== 1) {
+        throw createSaleValidationError("Sale accounting ledger is missing or duplicated");
+      }
+      const oldIsCashBank = oldCashBankLedgers.length === 1;
+      const newIsCashBank = isCashBankParty(party);
+
+      if (!oldIsCashBank) {
+        const oldPartyLedger = oldPartyLedgers[0];
+        if (oldPartyLedger.tally_status !== "pending") {
+          throw createSaleValidationError("Accepted Sale cannot be edited.");
+        }
+        await reversePartyMonthlyBalance({
+          cmp_id, party_id: oldSale.party_id, date: oldSale.date,
+          amount: oldSale.totals.final_amount, session,
+        });
+      }
+
+      if (oldIsCashBank && !newIsCashBank) {
+        oldCashBankLedgers[0].status = "cancelled";
+        await oldCashBankLedgers[0].save({ session });
+      } else if (!oldIsCashBank && newIsCashBank) {
+        oldPartyLedgers[0].status = "cancelled";
+        await oldPartyLedgers[0].save({ session });
+      }
+
+      let oldOutstanding = null;
+      const outstandingRows = await Outstanding.find({
+        cmp_id, billId: String(sale._id), source: "sale",
+      }).session(session);
+      if ((!oldIsCashBank && outstandingRows.length !== 1) || outstandingRows.length > 1) {
+        throw createSaleValidationError("Sale Outstanding relationship is corrupted");
+      }
+      // A customer -> cash -> customer edit can legitimately encounter the
+      // original, cancelled Outstanding. Reuse it rather than creating a
+      // second bill row (and preserve any receipt history it contains).
+      oldOutstanding = outstandingRows[0] || null;
+
+      if (newIsCashBank) {
+        if (oldIsCashBank) {
+          Object.assign(oldCashBankLedgers[0], buildSaleCashBankLedger({
+            sale, party, amount: sale.totals.final_amount, userId,
+          }));
+          await oldCashBankLedgers[0].save({ session });
+        } else {
+          await recalculateCancelledSaleOutstanding({ sale: oldSale, session });
+          await CashBankLedger.create([buildSaleCashBankLedger({
+            sale, party, amount: sale.totals.final_amount, userId,
+          })], { session });
+        }
+      } else {
+        if (oldIsCashBank) {
+          await PartyLedger.create([{
+            cmp_id, voucher_type: "sale", voucher_id: sale._id,
+            voucher_number: sale.voucher_number, date: sale.date,
+            party_id: party._id, party_name: party.partyName,
+            amount: sale.totals.final_amount, ledger_side: "debit", against_id: null,
+            status: "active", tally_status: "pending", created_by: userId,
+          }], { session });
+        } else {
+          Object.assign(oldPartyLedgers[0], {
+            voucher_number: sale.voucher_number, date: sale.date,
+            party_id: party._id, party_name: party.partyName,
+            amount: sale.totals.final_amount, ledger_side: "debit",
+            status: "active", tally_status: "pending",
+          });
+          await oldPartyLedgers[0].save({ session });
+        }
+        await updatePartyMonthlyBalance({
+          cmp_id, party_id: party._id, date: sale.date,
+          amount: sale.totals.final_amount, session,
+        });
+        if (oldOutstanding) {
+          await updateSaleOutstanding({
+            outstanding: oldOutstanding, sale, party,
+            amount: sale.totals.final_amount, userId, session,
+          });
+        } else {
+          await Outstanding.create([{
+            Primary_user_id: party.Primary_user_id,
+            cmp_id, accountGroup: party.accountGroup, subGroup: party.subGroup || null,
+            party_name: party.partyName, alias: null, party_id: party._id,
+            mobile_no: party.mobileNumber || null, email: party.emailID || null,
+            bill_date: sale.date, bill_no: sale.voucher_number, billId: String(sale._id),
+            bill_amount: sale.totals.final_amount, bill_due_date: sale.date,
+            bill_pending_amt: sale.totals.final_amount, classification: "dr",
+            createdBy: String(userId), source: "sale",
+          }], { session });
+        }
+      }
+
+      const timeline = await updateVoucherTimelineEntry(
+        { voucher_id: sale._id, voucher_type: sale.voucher_type },
+        buildVoucherTimelineUpdatePayload(sale), session,
+      );
+      if (!timeline) throw createSaleValidationError("Expected VoucherTimeline entry is missing");
+      updatedSale = sale.toObject();
+    });
+    return updatedSale;
+  } finally {
+    await session.endSession();
+  }
 }
 
 /** Creates every Sale posting effect in one Mongo transaction. */
@@ -507,24 +878,7 @@ export async function createSale(data = {}, req = {}) {
       // Mongoose requires ordered inserts when creating more than one document
       // in a transaction-bound session.
       await ItemLedger.create(
-        sale.items.map((item) => ({
-          cmp_id,
-          item_id: item.item_id,
-          godown_id: item.godown_id,
-          godown_stock_row_id: item.godown_stock_row_id,
-          batch: item.batch ,
-          voucher_type: "sale",
-          voucher_id: sale._id,
-          voucher_item_id: item._id,
-          voucher_number: sale.voucher_number,
-          date,
-          base_quantity: item.actual_qty,
-          base_unit: item.base_unit,
-          movement_type: "OUT",
-          status: getInitialTransactionStatus("sale"),
-          tally_status: getInitialTransactionTallyStatus("sale"),
-          created_by: userId,
-        })),
+        sale.items.map((item) => mapSaleItemLedger({ sale, item, userId })),
         { session, ordered: true },
       );
       await updateItemMonthlyBalances(calculated.items, cmp_id, date, session);
@@ -762,4 +1116,4 @@ export async function cancelSale(id, data = {}, req = {}) {
 }
 
 export { buildSaleCashBankLedger, isCashBankParty };
-export default { createSale, getSaleById, cancelSale };
+export default { createSale, getSaleById, updateSale, cancelSale };
