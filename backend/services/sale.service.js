@@ -152,21 +152,26 @@ async function reverseSaleStock(itemLedgers, cmp_id, session) {
   }
 }
 
-async function reverseItemMonthlyBalances(itemLedgers, cmp_id, date, session) {
+// ItemMonthlyBalance records a product's contribution from a voucher, not
+// every individual line on that voucher. A Sale with three rows for the same
+// product therefore contributes one transaction_count for that product.
+function itemMonthlyContributions(items, quantityField) {
   const grouped = new Map();
-  for (const ledger of itemLedgers) {
-    const current = grouped.get(String(ledger.item_id)) || { quantity: 0, count: 0 };
-    grouped.set(String(ledger.item_id), {
-      quantity: current.quantity + Number(ledger.base_quantity),
-      count: current.count + 1,
-    });
+  for (const item of items) {
+    const key = String(item.item_id);
+    const current = grouped.get(key) || { item_id: item.item_id, quantity: 0 };
+    current.quantity += Number(item[quantityField]) || 0;
+    grouped.set(key, current);
   }
+  return grouped.values();
+}
 
+async function reverseItemMonthlyBalances(itemLedgers, cmp_id, date, session) {
   const month_key = formatMonthKey(date);
-  for (const [item_id, { quantity, count }] of grouped) {
+  for (const { item_id, quantity } of itemMonthlyContributions(itemLedgers, "base_quantity")) {
     const update = await ItemMonthlyBalance.updateOne(
       { cmp_id, item_id, month_key },
-      { $inc: { total_outward_qty: -quantity, transaction_count: -count } },
+      { $inc: { total_outward_qty: -quantity, transaction_count: -1 } },
       { session, runValidators: true },
     );
     if (update.matchedCount !== 1) {
@@ -363,21 +368,13 @@ async function decrementStock(items, cmp_id, session) {
 }
 
 async function updateItemMonthlyBalances(items, cmp_id, date, session) {
-  const grouped = new Map();
-  for (const item of items) {
-    const current = grouped.get(item.item_id) || { quantity: 0, count: 0 };
-    grouped.set(item.item_id, {
-      quantity: current.quantity + item.actual_qty,
-      count: current.count + 1,
-    });
-  }
   const month_key = formatMonthKey(date);
-  for (const [item_id, { quantity, count }] of grouped) {
+  for (const { item_id, quantity } of itemMonthlyContributions(items, "actual_qty")) {
     await ItemMonthlyBalance.findOneAndUpdate(
       { cmp_id, item_id, month_key },
       {
         $setOnInsert: { cmp_id, item_id, month_key },
-        $inc: { total_outward_qty: quantity, transaction_count: count },
+        $inc: { total_outward_qty: quantity, transaction_count: 1 },
       },
       { upsert: true, returnDocument: "after", session, runValidators: true },
     );

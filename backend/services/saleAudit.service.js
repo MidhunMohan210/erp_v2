@@ -195,7 +195,9 @@ export async function auditSale({ saleId, companyId }) {
       monthKey: saleMonthKey,
       thisSaleContribution: {
         outwardQuantity: saleItems.reduce((sum, item) => sum + Number(item.actual_qty), 0),
-        transactionCount: saleItems.length,
+        // A Sale contributes this item once for the month, even when the
+        // item appears on multiple physical/batch/godown lines.
+        transactionCount: saleItems.length ? 1 : 0,
       },
       currentMonthlyBalance,
     };

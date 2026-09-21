@@ -60,7 +60,11 @@ async function rebuildItemBalances({ cmpId, affectedKeys, session }) {
   if (affectedKeys.size === 0) return { updated: 0, deletedEmpty: 0 };
   const affected = [...affectedKeys.values()];
   const affectedItemIds = [...new Set(affected.map((entry) => id(entry.item_id)))];
-  const remainingLedgers = await ItemLedger.find({ cmp_id: cmpId, item_id: { $in: affectedItemIds } })
+  const remainingLedgers = await ItemLedger.find({
+    cmp_id: cmpId,
+    item_id: { $in: affectedItemIds },
+    status: "active",
+  })
     .session(session)
     .lean();
   const totals = new Map();
@@ -68,7 +72,8 @@ async function rebuildItemBalances({ cmpId, affectedKeys, session }) {
     const key = itemBalanceKey(ledger.item_id, formatMonthKey(ledger.date));
     if (!affectedKeys.has(key)) continue;
     const current = totals.get(key) || {
-      total_inward_qty: 0, total_outward_qty: 0, accepted_inward_qty: 0, accepted_outward_qty: 0, transaction_count: 0,
+      total_inward_qty: 0, total_outward_qty: 0, accepted_inward_qty: 0, accepted_outward_qty: 0,
+      voucher_ids: new Set(),
     };
     const quantity = Number(ledger.base_quantity) || 0;
     if (ledger.movement_type === "IN") {
@@ -78,7 +83,10 @@ async function rebuildItemBalances({ cmpId, affectedKeys, session }) {
       current.total_outward_qty += quantity;
       if (ledger.tally_status === "accepted") current.accepted_outward_qty += quantity;
     }
-    current.transaction_count += 1;
+    // Multiple lines for the same voucher contribute one transaction to a
+    // monthly item balance. This is especially important for duplicate Sale
+    // product rows.
+    current.voucher_ids.add(`${ledger.voucher_type}:${id(ledger.voucher_id)}`);
     totals.set(key, current);
   }
 
@@ -91,9 +99,13 @@ async function rebuildItemBalances({ cmpId, affectedKeys, session }) {
       deletedEmpty += result.deletedCount;
       continue;
     }
+    const { voucher_ids, ...monthlyTotal } = total;
     await ItemMonthlyBalance.updateOne(
       { cmp_id: cmpId, ...scope },
-      { $set: total, $setOnInsert: { cmp_id: cmpId, ...scope } },
+      {
+        $set: { ...monthlyTotal, transaction_count: voucher_ids.size },
+        $setOnInsert: { cmp_id: cmpId, ...scope },
+      },
       { upsert: true, session, runValidators: true },
     );
     updated += 1;

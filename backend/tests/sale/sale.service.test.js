@@ -87,7 +87,7 @@ async function assertItemPosting({
     total_inward_qty: 0,
     accepted_inward_qty: 0,
     accepted_outward_qty: 0,
-    transaction_count: expectedQuantities.length,
+    transaction_count: 1,
   });
   const ledgerOutward = ledgers
     .filter((row) => row.status === "active" && row.movement_type === "OUT")
@@ -437,6 +437,10 @@ describe("createSale", () => {
       activeEntries: 2,
       cancelledHistoricalEntries: 0,
       valid: true,
+    });
+    expect(audit.itemMonthlyBalances[0].thisSaleContribution).toEqual({
+      outwardQuantity: 5,
+      transactionCount: 1,
     });
   });
 
@@ -823,6 +827,43 @@ describe("updateSale", () => {
       valid: true,
       issues: [],
     });
+    expect(await ItemMonthlyBalance.findOne({
+      cmp_id: context.company._id, item_id: product._id, month_key: EXPECTED_MONTH,
+    }).lean()).toMatchObject({ total_outward_qty: 5, transaction_count: 1 });
+  });
+
+  it("keeps one monthly transaction count while duplicate product rows are added and removed", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const line = {
+      itemId: String(product._id), godownId: String(godown._id),
+      godownStockRowId: String(rowId), selectedUnit: "NOS", rate: 10,
+      taxInclusive: false, discountType: "amount", discountValue: 0,
+    };
+    const sale = await createSale({
+      request_id: "sale-service-edit-add-duplicate", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...line, actualQty: 2, billedQty: 2 }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    const originalLineId = String(sale.items[0]._id);
+    const balance = () => ItemMonthlyBalance.findOne({
+      cmp_id: context.company._id, item_id: product._id, month_key: EXPECTED_MONTH,
+    }).lean();
+    expect(await balance()).toMatchObject({ total_outward_qty: 2, transaction_count: 1 });
+
+    let edited = await updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [
+        { ...line, _id: originalLineId, actualQty: 2, billedQty: 2 },
+        { ...line, actualQty: 1, billedQty: 1 },
+      ], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    expect(await balance()).toMatchObject({ total_outward_qty: 3, transaction_count: 1 });
+
+    edited = await updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ ...line, _id: String(edited.items[0]._id), actualQty: 2, billedQty: 2 }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    expect(await balance()).toMatchObject({ total_outward_qty: 2, transaction_count: 1 });
   });
 
   it("reports an orphan active ItemLedger but ignores cancelled historical rows", async () => {
@@ -903,8 +944,8 @@ describe("updateSale", () => {
 
     expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(100);
     expect((await Product.findById(secondProduct._id)).GodownList[0].balance_stock).toBe(93);
-    expect(await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: product._id, month_key: "2026-07" }).lean()).toMatchObject({ total_outward_qty: 0 });
-    expect(await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: secondProduct._id, month_key: "2026-08" }).lean()).toMatchObject({ total_outward_qty: 7 });
+    expect(await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: product._id, month_key: "2026-07" }).lean()).toMatchObject({ total_outward_qty: 0, transaction_count: 0 });
+    expect(await ItemMonthlyBalance.findOne({ cmp_id: context.company._id, item_id: secondProduct._id, month_key: "2026-08" }).lean()).toMatchObject({ total_outward_qty: 7, transaction_count: 1 });
     expect(await PartyMonthlyBalance.findOne({ cmp_id: context.company._id, party_id: party._id, month_key: "2026-07" }).lean()).toMatchObject({ total_debit: 0 });
     expect(await PartyMonthlyBalance.findOne({ cmp_id: context.company._id, party_id: secondParty._id, month_key: "2026-08" }).lean()).toMatchObject({ total_debit: updated.totals.final_amount });
     const outstanding = await Outstanding.findOne({ billId: String(sale._id), source: "sale" }).lean();
