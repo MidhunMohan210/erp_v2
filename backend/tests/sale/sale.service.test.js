@@ -431,6 +431,13 @@ describe("createSale", () => {
         cashBankLedger: false,
       },
     });
+    expect(audit.checks.itemLedger).toMatchObject({
+      expectedEntries: 2,
+      actualEntries: 2,
+      activeEntries: 2,
+      cancelledHistoricalEntries: 0,
+      valid: true,
+    });
   });
 
   it.each(["cash", "bank"])(
@@ -805,6 +812,62 @@ describe("updateSale", () => {
     const secondLedger = await ItemLedger.findOne({ voucher_id: sale._id, sale_item_id: second._id, status: "cancelled" }).lean();
     expect(firstLedger).toMatchObject({ base_quantity: 5 });
     expect(secondLedger).not.toBeNull();
+    const audit = await auditSale({ saleId: sale._id, companyId: context.company._id });
+    expect(audit.audit.valid).toBe(true);
+    expect(audit.checks.overallValid).toBe(true);
+    expect(audit.checks.itemLedger).toMatchObject({
+      expectedEntries: 1,
+      actualEntries: 1,
+      activeEntries: 1,
+      cancelledHistoricalEntries: 1,
+      valid: true,
+      issues: [],
+    });
+  });
+
+  it("reports an orphan active ItemLedger but ignores cancelled historical rows", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const sale = await createSale({
+      request_id: "sale-service-audit-orphan", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id),
+      items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 1, billedQty: 1, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
+    }, { companyId: String(context.company._id), user: context.user });
+    const active = await ItemLedger.findOne({ voucher_id: sale._id, status: "active" }).lean();
+    const orphan = { ...active };
+    delete orphan._id;
+    delete orphan.created_at;
+    delete orphan.updated_at;
+    orphan.voucher_item_id = new mongoose.Types.ObjectId();
+    orphan.sale_item_id = new mongoose.Types.ObjectId();
+    await ItemLedger.create(orphan);
+
+    const audit = await auditSale({ saleId: sale._id, companyId: context.company._id });
+    expect(audit.audit.valid).toBe(false);
+    expect(audit.checks.itemLedger.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("references a Sale item that does not exist"),
+    ]));
+  });
+
+  it("reports a missing active ItemLedger for a current Sale item", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const line = { itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 1, billedQty: 1, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 };
+    const sale = await createSale({
+      request_id: "sale-service-audit-missing", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id), items: [line, line],
+    }, { companyId: String(context.company._id), user: context.user });
+    const ledgers = await ItemLedger.find({ voucher_id: sale._id, status: "active" }).sort({ _id: 1 }).lean();
+    await ItemLedger.updateOne({ _id: ledgers[1]._id }, { $set: { status: "cancelled" } });
+
+    const audit = await auditSale({ saleId: sale._id, companyId: context.company._id });
+    expect(audit.audit.valid).toBe(false);
+    expect(audit.checks.itemLedger).toMatchObject({
+      expectedEntries: 2,
+      actualEntries: 1,
+      cancelledHistoricalEntries: 1,
+    });
+    expect(audit.checks.itemLedger.issues).toEqual(expect.arrayContaining([
+      expect.stringContaining("Missing ItemLedger for Sale item"),
+    ]));
   });
 
   it("moves product, godown, party, and monthly balances using old-state reversal", async () => {

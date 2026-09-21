@@ -53,9 +53,15 @@ function checkResult(issues, expectedEntries, actualEntries) {
 
 function ledgerAudit(sale, ledgers) {
   const issues = [];
+  // Removed Sale lines deliberately retain a cancelled ItemLedger for audit
+  // history. Only active postings describe the current Sale state.
+  const activeLedgers = ledgers.filter((ledger) => ledger.status === "active");
+  const cancelledLedgers = ledgers.filter((ledger) => ledger.status === "cancelled");
   const bySaleItem = new Map();
-  for (const ledger of ledgers) {
-    const key = id(ledger.voucher_item_id);
+  for (const ledger of activeLedgers) {
+    // sale_item_id is the explicit stable Sale-line reference. Fall back to
+    // voucher_item_id for postings created before that field was introduced.
+    const key = id(ledger.sale_item_id || ledger.voucher_item_id);
     bySaleItem.set(key, [...(bySaleItem.get(key) || []), ledger]);
   }
 
@@ -81,13 +87,17 @@ function ledgerAudit(sale, ledgers) {
     }
   }
 
-  for (const ledger of ledgers) {
-    if (!expectedIds.has(id(ledger.voucher_item_id))) {
+  for (const ledger of activeLedgers) {
+    if (!expectedIds.has(id(ledger.sale_item_id || ledger.voucher_item_id))) {
       issues.push(`Extra ItemLedger ${id(ledger._id)} references a Sale item that does not exist`);
     }
   }
 
-  return checkResult(issues, sale.items.length, ledgers.length);
+  return {
+    ...checkResult(issues, sale.items.length, activeLedgers.length),
+    activeEntries: activeLedgers.length,
+    cancelledHistoricalEntries: cancelledLedgers.length,
+  };
 }
 
 function partyLedgerAudit(sale, ledgers) {
@@ -244,7 +254,7 @@ export async function auditSale({ saleId, companyId }) {
   return {
     sale,
     itemLedgers: itemLedgers.map((ledger) => {
-      const saleItem = saleItemById.get(id(ledger.voucher_item_id));
+      const saleItem = saleItemById.get(id(ledger.sale_item_id || ledger.voucher_item_id));
       return {
         ...ledger,
         saleItem: saleItem && {
