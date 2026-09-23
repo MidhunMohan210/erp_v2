@@ -200,6 +200,14 @@ godownSchema.index(
   { name: "one_default_godown_per_company", unique: true, partialFilterExpression: { defaultGodown: true } }
 );
 
+// Direct writes (including imports and administrative scripts) must not race
+// the asynchronous automatic index build after a fresh database connection.
+// Waiting here makes the partial unique index an actual database invariant
+// before the first Godown can be inserted.
+godownSchema.pre("save", async function ensureDefaultGodownIndex() {
+  await this.constructor.init();
+});
+
 export const Brand = mongoose.model("Brand", brandSchema);
 export const Category = mongoose.model("Category", categorySchema);
 export const Subcategory = mongoose.model("Subcategory", subcategorySchema);

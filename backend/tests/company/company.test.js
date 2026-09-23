@@ -58,6 +58,11 @@ describe("Company routes", () => {
     });
 
     expect(printConfigs.length).toBeGreaterThan(0);
+    const salePrintConfig = printConfigs.find(
+      (config) => config.voucher_type === "sale",
+    );
+    expect(salePrintConfig).toBeDefined();
+    expect(salePrintConfig.config.print_title).toBe("Sale");
   });
 
   it("returns 401 when creating a company without auth", async () => {

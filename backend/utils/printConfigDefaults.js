@@ -18,6 +18,27 @@ export const PRINT_CONFIG_DEFAULTS = {
     enable_stock_wise_amount: true,
     enable_net_amount: true,
   },
+  // Sale uses the same supported controls as Sale Order, but is stored under
+  // its own voucher_type so changing one print layout never changes the other.
+  sale: {
+    print_title: "Sale",
+    show_print_title: true,
+    enable_company_details: true,
+    enable_discount_column: true,
+    enable_discount_amount: true,
+    enable_hsn: true,
+    enable_tax_percentage: true,
+    enable_incl_tax_rate: false,
+    enable_tax_analysis: false,
+    enable_stock_wise_tax_amount: true,
+    enable_tax_amount: true,
+    enable_terms_conditions: false,
+    enable_bank_details: true,
+    enable_rate: true,
+    enable_quantity: true,
+    enable_stock_wise_amount: true,
+    enable_net_amount: true,
+  },
   receipt: {
     print_title: "Receipt",
     show_print_title: true,

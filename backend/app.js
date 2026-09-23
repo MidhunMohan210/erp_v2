@@ -89,6 +89,10 @@ const limiter = rateLimit({
   max: 500,
   standardHeaders: true,
   legacyHeaders: false,
+  // Integration suites create hundreds of isolated API fixtures. Rate
+  // limiting those requests makes setup intermittently receive non-success
+  // responses and hides the route behavior under test.
+  skip: () => process.env.NODE_ENV === "test",
 });
 app.use("/api", limiter);
 

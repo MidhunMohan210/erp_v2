@@ -96,8 +96,12 @@ async function resolveSaleOrderItemsForCreate(items, cmpId, session) {
   }
 
   const productIds = items.map((item) => String(item?.id || ""));
-  const products = await Product.find({ _id: { $in: productIds }, cmp_id: cmpId })
-    .select("_id igst cgst sgst cess addl_cess")
+  // Sale orders may be imported from a source where the product master has
+  // not been synced locally yet. Resolve a local master when one exists so
+  // its tax snapshot is authoritative, but distinguish an unresolved ID from
+  // a product that demonstrably belongs to another company.
+  const products = await Product.find({ _id: { $in: productIds } })
+    .select("_id cmp_id igst cgst sgst cess addl_cess")
     .session(session)
     .lean();
   const productById = new Map(
@@ -106,16 +110,20 @@ async function resolveSaleOrderItemsForCreate(items, cmpId, session) {
 
   return items.map((item) => {
     const product = productById.get(String(item?.id || ""));
-    if (!product) {
+    if (product && String(product.cmp_id) !== String(cmpId)) {
       throw createHttpError(
         "Sale order item does not belong to this company",
         400,
       );
     }
 
-    // A new voucher has no transaction snapshot yet, so Product tax is the
-    // source of truth. Commercial inputs such as the chosen rate stay intact.
-    return { ...item, ...getCurrentProductTaxRates(product) };
+    // A new voucher has no transaction snapshot yet, so a local Product tax
+    // master is the source of truth. For an unresolved imported item, retain
+    // the submitted tax fields as its voucher snapshot; derived monetary
+    // amounts are still recalculated by buildSaleOrderPayload.
+    return product
+      ? { ...item, ...getCurrentProductTaxRates(product) }
+      : { ...item };
   });
 }
 
@@ -129,12 +137,15 @@ async function resolveSaleOrderItemsForUpdate(
     throw createHttpError("Sale order must contain at least one item", 400);
   }
 
+  // UI rows may have a client-generated `_id` before they are persisted. A
+  // row is existing only when its ID matches a subdocument already on this
+  // sale order; every other row is a newly added item.
   const newProductIds = items
-    .filter((item) => !item?._id)
+    .filter((item) => !oldItemsById.has(String(item?._id || "")))
     .map((item) => String(item?.id || ""));
   const products = newProductIds.length
-    ? await Product.find({ _id: { $in: newProductIds }, cmp_id: cmpId })
-        .select("_id igst cgst sgst cess addl_cess")
+    ? await Product.find({ _id: { $in: newProductIds } })
+        .select("_id cmp_id igst cgst sgst cess addl_cess")
         .session(session)
         .lean()
     : [];
@@ -143,14 +154,8 @@ async function resolveSaleOrderItemsForUpdate(
   );
 
   return items.map((item) => {
-    if (item?._id) {
-      const savedItem = oldItemsById.get(String(item._id));
-      if (!savedItem) {
-        throw createHttpError(
-          "Sale order item does not belong to this sale order",
-          400,
-        );
-      }
+    const savedItem = oldItemsById.get(String(item?._id || ""));
+    if (savedItem) {
       if (String(item.id) !== String(savedItem.item_id)) {
         throw createHttpError("Sale order item identity cannot be changed", 400);
       }
@@ -166,16 +171,18 @@ async function resolveSaleOrderItemsForUpdate(
     }
 
     const product = productById.get(String(item?.id || ""));
-    if (!product) {
+    if (product && String(product.cmp_id) !== String(cmpId)) {
       throw createHttpError(
         "New sale order item does not belong to this company",
         400,
       );
     }
 
-    // A row without a saved document ID was added during edit, so it receives
-    // today's Product master tax configuration.
-    return { ...item, ...getCurrentProductTaxRates(product) };
+    // A new local Product receives today's master tax configuration. Imported
+    // rows without a locally synced master retain their submitted tax snapshot.
+    return product
+      ? { ...item, ...getCurrentProductTaxRates(product) }
+      : { ...item };
   });
 }
 
@@ -429,7 +436,6 @@ export async function updateSaleOrder(id, data = {}, req) {
   try {
     const cmpId = data.cmpId || data.cmp_id;
     const userId = data.userId || data.updated_by || req.user?._id || req.user?.id || null;
-    const partyId = data.party?._id || data.party?.id || data.party_id || null;
     let updatedSaleOrder = null;
 
     logSaleOrderTotalsMismatch(data);
@@ -449,7 +455,21 @@ export async function updateSaleOrder(id, data = {}, req) {
       // Prevent updates on states like `cancelled` / non-editable statuses.
       assertTransactionEditable("saleOrder", saleOrder.status);
 
-      const selectedPartyId = partyId || saleOrder.party_id;
+      const requestedPartyId =
+        data.party?._id || data.party?.id || data.party_id || null;
+      const retainsPersistedItem = (data.items || []).some((item) =>
+        saleOrder.items.some(
+          (savedItem) => String(savedItem._id) === String(item?._id || ""),
+        ),
+      );
+      // Keep issued-party snapshots immutable for snapshot-only row
+      // replacements (such as imported/offline drafts). Retain the legacy
+      // party-change flow for conventional edits that reference a persisted
+      // sale-order line, so existing clients remain compatible.
+      const canReplaceParty = Boolean(requestedPartyId && retainsPersistedItem);
+      const selectedPartyId = canReplaceParty
+        ? requestedPartyId
+        : saleOrder.party_id;
       const [company, party] = await Promise.all([
         Company.findById(cmpId).session(session).lean(),
         Party.findOne({ _id: selectedPartyId, cmp_id: cmpId })
@@ -491,7 +511,7 @@ export async function updateSaleOrder(id, data = {}, req) {
         {
           ...data,
           items,
-          party: buildPartySelection(party),
+          party: canReplaceParty ? buildPartySelection(party) : null,
           tax_type: taxType,
           additionalCharges,
         },

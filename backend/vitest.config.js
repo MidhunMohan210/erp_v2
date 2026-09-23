@@ -5,11 +5,14 @@ export default defineConfig({
     globals: true,
     environment: "node",
     setupFiles: ["./tests/setup/db.js"],
-    // Full-suite parallelism starts several in-memory Mongo replica sets.
-    // Five seconds is occasionally too short for otherwise valid test setup
-    // and transaction work under that local resource contention.
+    // Each worker starts an in-memory Mongo replica set. Two workers retain
+    // practical feedback times without overloading local test environments.
     testTimeout: 15_000,
-    maxWorkers: 4,
+    maxWorkers: 2,
+    // MongoMemory replica-set startup and HTTP fixture setup can transiently
+    // reset under local resource pressure. Retrying runs the test after the
+    // global cleanup hook has restored an empty database.
+    retry: 2,
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],

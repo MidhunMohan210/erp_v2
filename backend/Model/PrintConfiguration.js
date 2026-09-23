@@ -10,7 +10,7 @@ const PrintConfigurationSchema = new mongoose.Schema(
     voucher_type: {
       type: String,
       required: true,
-      enum: ["sale_order", "receipt"],
+      enum: ["sale_order", "sale", "receipt"],
     },
     config: {
       type: Object,
