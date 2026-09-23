@@ -316,9 +316,74 @@ function normalizeTaxType(body = {}) {
   return body.tax_type || body.taxType || "igst";
 }
 
+function calculateSaleOrderItemAmounts(row = {}, taxType = "igst") {
+  const billedQty = Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0;
+  const rate = Number(row?.rate) || 0;
+  const taxRate =
+    Number(firstDefined(row?.taxRate, row?.tax_rate, row?.gst)) || 0;
+  const grossAmount = billedQty * rate;
+  const taxInclusive = Boolean(
+    firstDefined(row?.taxInclusive, row?.tax_inclusive),
+  );
+  const basePrice =
+    taxInclusive && taxRate > 0
+      ? grossAmount / (1 + taxRate / 100)
+      : grossAmount;
+  const discountType = row?.discountType || row?.discount_type || "amount";
+  const requestedDiscount =
+    discountType === "percentage"
+      ? (basePrice *
+          (Number(
+            firstDefined(row?.discountPercentage, row?.discount_percentage),
+          ) ||
+            0)) /
+        100
+      : Number(firstDefined(row?.discountAmount, row?.discount_amount)) || 0;
+  const discountAmount = Math.min(Math.max(requestedDiscount, 0), basePrice);
+  const taxableAmount = Math.max(basePrice - discountAmount, 0);
+  const igstAmount =
+    taxType === "igst" ? taxableAmount * (taxRate / 100) : 0;
+  const cgstAmount =
+    taxType === "cgst_sgst" ? taxableAmount * (taxRate / 200) : 0;
+  const sgstAmount =
+    taxType === "cgst_sgst" ? taxableAmount * (taxRate / 200) : 0;
+  const taxAmount = igstAmount + cgstAmount + sgstAmount;
+  const cessAmount =
+    taxableAmount *
+    ((Number(firstDefined(row?.cessRate, row?.cess_rate, row?.cess)) || 0) /
+      100);
+  const addlCessAmount =
+    billedQty *
+    (Number(
+      firstDefined(
+        row?.addlCessRate,
+        row?.addl_cess_rate,
+        row?.addlCess,
+        row?.addl_cess,
+      ),
+    ) ||
+      0);
+
+  return {
+    base_price: basePrice,
+    discount_amount: discountAmount,
+    taxable_amount: taxableAmount,
+    igst_amount: igstAmount,
+    cgst_amount: cgstAmount,
+    sgst_amount: sgstAmount,
+    tax_amount: taxAmount,
+    cess_amount: cessAmount,
+    addl_cess_amount: addlCessAmount,
+    total_amount: taxableAmount + taxAmount + cessAmount + addlCessAmount,
+  };
+}
+
 // Convert incoming item rows into schema-compliant order item subdocuments.
 // `preserveIds` is used in update flow so existing line-item `_id` values survive edits.
-function mapSaleOrderItems(items = [], { preserveIds = false } = {}) {
+function mapSaleOrderItems(
+  items = [],
+  { preserveIds = false, taxType = "igst" } = {},
+) {
   return items.map((row) => {
     const alternateFields = normalizeAlternateUnitFields(row);
 
@@ -361,18 +426,9 @@ function mapSaleOrderItems(items = [], { preserveIds = false } = {}) {
         Number(firstDefined(row?.discountPercentage, row?.discount_percentage)) || 0,
       discount_amount:
         Number(firstDefined(row?.discountAmount, row?.discount_amount)) || 0,
-      base_price: Number(firstDefined(row?.basePrice, row?.base_price)) || 0,
-      taxable_amount:
-        Number(firstDefined(row?.taxableAmount, row?.taxable_amount)) || 0,
-      igst_amount: Number(firstDefined(row?.igstAmount, row?.igst_amount)) || 0,
-      cgst_amount: Number(firstDefined(row?.cgstAmount, row?.cgst_amount)) || 0,
-      sgst_amount: Number(firstDefined(row?.sgstAmount, row?.sgst_amount)) || 0,
-      tax_amount: Number(firstDefined(row?.taxAmount, row?.tax_amount)) || 0,
-      cess_amount: Number(firstDefined(row?.cessAmount, row?.cess_amount)) || 0,
-      addl_cess_amount:
-        Number(firstDefined(row?.addlCessAmount, row?.addl_cess_amount)) || 0,
-      total_amount:
-        Number(firstDefined(row?.totalAmount, row?.total_amount, row?.total)) || 0,
+      // Client monetary amounts are previews only. Rebuild every derived value
+      // from the commercial inputs and the server-resolved tax snapshot.
+      ...calculateSaleOrderItemAmounts(row, taxType),
       price_level_id: row?.priceLevel || row?.price_level_id || null,
       initial_price_source:
         row?.initialPriceSource || row?.initial_price_source || null,
@@ -384,7 +440,11 @@ function mapSaleOrderItems(items = [], { preserveIds = false } = {}) {
 
 // Normalize additional charges and fix known legacy typo:
 // `substract` -> `subtract`
-function mapAdditionalCharges(additionalCharges = [], taxType = "igst") {
+function mapAdditionalCharges(
+  additionalCharges = [],
+  taxType = "igst",
+  { preserveIds = false } = {},
+) {
   return additionalCharges.map((charge) => {
     const normalizedCharge = {
       additional_charge_id: firstDefined(
@@ -441,6 +501,10 @@ function mapAdditionalCharges(additionalCharges = [], taxType = "igst") {
         : 0;
 
     return {
+      _id:
+        preserveIds && charge?._id
+          ? charge._id
+          : new mongoose.Types.ObjectId(),
       ...normalizedCharge,
       igst_amount: igstAmount,
       cgst_amount: cgstAmount,
@@ -678,7 +742,7 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
     price_level_id: priceLevelObject?._id || null,
     price_level_name: priceLevelObject?.pricelevel || priceLevelObject?.name || null,
     // Monetary details
-    items: mapSaleOrderItems(items),
+    items: mapSaleOrderItems(items, { taxType: normalizeTaxType(body) }),
     additional_charges: mapAdditionalCharges(
       additionalCharges,
       normalizeTaxType(body)
@@ -700,11 +764,25 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
 export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
   const priceLevelObject = normalizePriceLevelObject(data);
   const requestedMailingName = data?.mailingName ?? data?.mailing_name;
+  const party = data.party || null;
 
   saleOrder.date = new Date(data.transactionDate);
+  if (party?._id) {
+    // The selected Party was validated in the service. Replace every
+    // denormalized field together so no old-party details survive the update.
+    saleOrder.party_id = party._id;
+    saleOrder.party_snapshot = {
+      name: party.partyName || "",
+      gst_no: party.gstNo || null,
+      billing_address: party.billingAddress || null,
+      shipping_address: party.shippingAddress || null,
+      mobile: party.mobileNumber || null,
+      state: party.state || null,
+    };
+  }
   saleOrder.mailing_name =
     (requestedMailingName == null
-      ? saleOrder?.mailing_name
+      ? party?.partyName || saleOrder?.mailing_name
       : String(requestedMailingName).trim()) ||
     saleOrder?.party_snapshot?.name ||
     null;
@@ -712,10 +790,14 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
   saleOrder.price_level_id = priceLevelObject?._id || null;
   saleOrder.price_level_name =
     priceLevelObject?.pricelevel || priceLevelObject?.name || null;
-  saleOrder.items = mapSaleOrderItems(data.items || [], { preserveIds: true });
+  saleOrder.items = mapSaleOrderItems(data.items || [], {
+    preserveIds: true,
+    taxType: normalizeTaxType(data),
+  });
   saleOrder.additional_charges = mapAdditionalCharges(
     data.additionalCharges || [],
-    normalizeTaxType(data)
+    normalizeTaxType(data),
+    { preserveIds: true },
   );
   saleOrder.despatch_details = mapDespatchDetails(data.despatchDetails || {});
   saleOrder.totals = buildSaleOrderTotals(data);

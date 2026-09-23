@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 
+import Company from "../Model/CompanySchema.js";
 import Party from "../Model/partySchema.js";
 import Product from "../Model/ProductSchema.js";
 import SaleOrder from "../Model/SaleOrder.js";
@@ -39,6 +40,116 @@ function createHttpError(message, statusCode = 500) {
   return error;
 }
 
+function resolveTaxType(company, party) {
+  const companyState = String(company?.state || "").trim().toLowerCase();
+  const partyState = String(party?.state || "").trim().toLowerCase();
+
+  return companyState && partyState && companyState === partyState
+    ? "cgst_sgst"
+    : "igst";
+}
+
+function buildPartySelection(party) {
+  return {
+    _id: String(party._id),
+    partyName: party.partyName || "",
+    gstNo: party.gstNo || null,
+    billingAddress: party.billingAddress || null,
+    shippingAddress: party.shippingAddress || null,
+    mobileNumber: party.mobileNumber || null,
+    state: party.state || null,
+  };
+}
+
+function getSavedChargeTaxRates(charge) {
+  const igst = Number(charge?.igst) || 0;
+  const intraStateTotal =
+    (Number(charge?.cgst) || 0) + (Number(charge?.sgst) || 0);
+  // Masters store both representations of the same GST rate. Select the
+  // complete rate instead of summing IGST and the CGST/SGST equivalent.
+  const totalTaxRate = Math.max(igst, intraStateTotal);
+
+  return {
+    igst: totalTaxRate,
+    cgst: totalTaxRate / 2,
+    sgst: totalTaxRate / 2,
+  };
+}
+
+function getCurrentProductTaxRates(product) {
+  const igst = Number(product?.igst) || 0;
+  const cgst = Number(product?.cgst) || 0;
+  const sgst = Number(product?.sgst) || 0;
+
+  return {
+    // Product masters normally carry both tax representations. Prefer IGST
+    // when present; otherwise retain the equivalent CGST + SGST total.
+    taxRate: igst || cgst + sgst,
+    cessRate: Number(product?.cess) || 0,
+    addlCessRate: Number(product?.addl_cess) || 0,
+  };
+}
+
+async function resolveSaleOrderItemsForUpdate(
+  items,
+  oldItemsById,
+  cmpId,
+  session,
+) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw createHttpError("Sale order must contain at least one item", 400);
+  }
+
+  const newProductIds = items
+    .filter((item) => !item?._id)
+    .map((item) => String(item?.id || ""));
+  const products = newProductIds.length
+    ? await Product.find({ _id: { $in: newProductIds }, cmp_id: cmpId })
+        .select("_id igst cgst sgst cess addl_cess")
+        .session(session)
+        .lean()
+    : [];
+  const productById = new Map(
+    products.map((product) => [String(product._id), product]),
+  );
+
+  return items.map((item) => {
+    if (item?._id) {
+      const savedItem = oldItemsById.get(String(item._id));
+      if (!savedItem) {
+        throw createHttpError(
+          "Sale order item does not belong to this sale order",
+          400,
+        );
+      }
+      if (String(item.id) !== String(savedItem.item_id)) {
+        throw createHttpError("Sale order item identity cannot be changed", 400);
+      }
+
+      // Existing document rows always use their historical tax snapshot, even
+      // if the Product master was changed after this sale order was created.
+      return {
+        ...item,
+        taxRate: Number(savedItem.tax_rate) || 0,
+        cessRate: Number(savedItem.cess_rate) || 0,
+        addlCessRate: Number(savedItem.addl_cess_rate) || 0,
+      };
+    }
+
+    const product = productById.get(String(item?.id || ""));
+    if (!product) {
+      throw createHttpError(
+        "New sale order item does not belong to this company",
+        400,
+      );
+    }
+
+    // A row without a saved document ID was added during edit, so it receives
+    // today's Product master tax configuration.
+    return { ...item, ...getCurrentProductTaxRates(product) };
+  });
+}
+
 async function resolveSaleOrderAdditionalCharges(
   additionalCharges,
   cmpId,
@@ -48,17 +159,27 @@ async function resolveSaleOrderAdditionalCharges(
     throw createHttpError("additionalCharges must be an array", 400);
   }
 
-  const normalizedCharges = additionalCharges.map((charge) =>
-    normalizeSaleChargeInput({
-      chargeMasterId:
-        charge?.additionalChargeId ??
-        charge?.additional_charge_id ??
-        charge?.chargeMasterId ??
-        charge?.charge_master_id,
-      action: charge?.action ?? "add",
-      value: charge?.value,
-    }),
-  );
+  const normalizedCharges = additionalCharges.map((charge) => {
+    const chargeMasterId =
+      charge?.additionalChargeId ??
+      charge?.additional_charge_id ??
+      charge?.chargeMasterId ??
+      charge?.charge_master_id;
+
+    return {
+      ...normalizeSaleChargeInput({
+        chargeMasterId,
+        action: charge?.action ?? "add",
+        value: charge?.value,
+      }),
+      // A newly selected native charge uses its master ID as `_id`. A saved
+      // document charge uses a different row `_id` plus additionalChargeId.
+      _id:
+        charge?._id && String(charge._id) !== String(chargeMasterId)
+          ? charge._id
+          : null,
+    };
+  });
 
   const resolvedCharges = await resolveSaleChargeMasters(normalizedCharges, {
     cmpId,
@@ -73,6 +194,23 @@ async function resolveSaleOrderAdditionalCharges(
     ...rates,
     rates,
   }));
+}
+
+function applyExistingAdditionalChargeTaxSnapshots(charges, oldChargesById) {
+  return charges.map((charge) => {
+    if (!charge?._id) return charge;
+
+    const savedCharge = oldChargesById.get(String(charge._id));
+    if (!savedCharge) {
+      throw createHttpError(
+        "Sale order charge does not belong to this sale order",
+        400,
+      );
+    }
+
+    const rates = getSavedChargeTaxRates(savedCharge);
+    return { ...charge, ...rates, rates };
+  });
 }
 
 const SALE_ORDER_PRODUCT_ENRICHMENT_POPULATE = [
@@ -165,14 +303,19 @@ export async function createSaleOrder(data = {}, req) {
 
     await session.withTransaction(async () => {
       // Ownership guardrail: sale order cannot reference party from another company.
-      const party = await Party.findOne({
+      const [company, party] = await Promise.all([
+        Company.findById(cmpId).session(session).lean(),
+        Party.findOne({
         _id: partyId,
         cmp_id: cmpId,
       })
-        .select("_id")
         .session(session)
-        .lean();
+        .lean(),
+      ]);
 
+      if (!company) {
+        throw createHttpError("Company not found", 400);
+      }
       if (!party) {
         throw createHttpError("Selected party does not belong to this company", 400);
       }
@@ -194,7 +337,13 @@ export async function createSaleOrder(data = {}, req) {
 
       // Convert API request shape into schema-ready document with normalized numeric fields.
       const saleOrderDoc = buildSaleOrderPayload(
-        { ...data, cmpId, additionalCharges },
+        {
+          ...data,
+          cmpId,
+          party: buildPartySelection(party),
+          tax_type: resolveTaxType(company, party),
+          additionalCharges,
+        },
         voucherIdentity.voucher,
         voucherIdentity.serials,
         userId
@@ -250,21 +399,6 @@ export async function updateSaleOrder(id, data = {}, req) {
     logSaleOrderTotalsMismatch(data);
 
     await session.withTransaction(async () => {
-      // Party might be unchanged on update; validate only if provided.
-      if (partyId) {
-        const party = await Party.findOne({
-          _id: partyId,
-          cmp_id: cmpId,
-        })
-          .select("_id")
-          .session(session)
-          .lean();
-
-        if (!party) {
-          throw createHttpError("Selected party does not belong to this company", 400);
-        }
-      }
-
       const saleOrder = await SaleOrder.findOne(
         applyTransactionCreatorScope(req, {
           _id: id,
@@ -279,14 +413,54 @@ export async function updateSaleOrder(id, data = {}, req) {
       // Prevent updates on states like `cancelled` / non-editable statuses.
       assertTransactionEditable("saleOrder", saleOrder.status);
 
-      const additionalCharges = await resolveSaleOrderAdditionalCharges(
-        data.additionalCharges ?? data.additional_charges ?? [],
+      const selectedPartyId = partyId || saleOrder.party_id;
+      const [company, party] = await Promise.all([
+        Company.findById(cmpId).session(session).lean(),
+        Party.findOne({ _id: selectedPartyId, cmp_id: cmpId })
+          .session(session)
+          .lean(),
+      ]);
+      if (!company) throw createHttpError("Company not found", 400);
+      if (!party) {
+        throw createHttpError("Selected party does not belong to this company", 400);
+      }
+
+      const oldItemsById = new Map(
+        saleOrder.items.map((item) => [String(item._id), item]),
+      );
+      const oldChargesById = new Map(
+        saleOrder.additional_charges.map((charge) => [String(charge._id), charge]),
+      );
+      const items = await resolveSaleOrderItemsForUpdate(
+        data.items,
+        oldItemsById,
         cmpId,
         session,
       );
 
+      const resolvedAdditionalCharges = await resolveSaleOrderAdditionalCharges(
+        data.additionalCharges ?? data.additional_charges ?? [],
+        cmpId,
+        session,
+      );
+      const additionalCharges = applyExistingAdditionalChargeTaxSnapshots(
+        resolvedAdditionalCharges,
+        oldChargesById,
+      );
+      const taxType = resolveTaxType(company, party);
+
       // Mutates mongoose document in-memory with normalized values.
-      applySaleOrderUpdate(saleOrder, { ...data, additionalCharges }, userId);
+      applySaleOrderUpdate(
+        saleOrder,
+        {
+          ...data,
+          items,
+          party: buildPartySelection(party),
+          tax_type: taxType,
+          additionalCharges,
+        },
+        userId,
+      );
 
       await saleOrder.save({ session });
       updatedSaleOrder = saleOrder.toObject();
