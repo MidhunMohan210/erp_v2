@@ -266,6 +266,7 @@ function mapDespatchDetails(input = {}) {
 }
 
 function mapSaleItems(items) {
+  const money = (value) => Math.round((Number(value) || 0) * 100) / 100;
   return items.map((item) => ({
     item_id: item.item_id,
     item_name: item.item_name,
@@ -294,18 +295,21 @@ function mapSaleItems(items) {
         ? item.discount_value
         : item.discount_amount,
     tax_rate: item.tax_rates.igst || item.tax_rates.cgst + item.tax_rates.sgst,
+    igst_rate: item.tax_rates.igst,
+    cgst_rate: item.tax_rates.cgst,
+    sgst_rate: item.tax_rates.sgst,
     cess_rate: item.tax_rates.cess,
     addl_cess_rate: item.tax_rates.addl_cess,
     tax_inclusive: item.tax_inclusive,
-    igst_amount: item.igst_amount,
-    cgst_amount: item.cgst_amount,
-    sgst_amount: item.sgst_amount,
-    tax_amount: item.tax_amount,
-    cess_amount: item.cess_amount,
-    addl_cess_amount: item.addl_cess_amount,
-    base_price: item.base_price,
-    taxable_amount: item.taxable_amount,
-    total_amount: item.total_amount,
+    igst_amount: money(item.igst_amount),
+    cgst_amount: money(item.cgst_amount),
+    sgst_amount: money(item.sgst_amount),
+    tax_amount: money(item.tax_amount),
+    cess_amount: money(item.cess_amount),
+    addl_cess_amount: money(item.addl_cess_amount),
+    base_price: money(item.base_price),
+    taxable_amount: money(item.taxable_amount),
+    total_amount: money(item.total_amount),
     description: item.description,
     warranty_card_id: item.warranty_card_id,
   }));
@@ -337,10 +341,56 @@ function mapSaleItemLedger({ sale, item, userId }) {
 }
 
 function mapCharges(charges) {
-  return charges.map(({ charge_master_id, rates, name, ...charge }) => ({
+  const money = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  return charges.map(({ charge_master_id, rates, name, sale_charge_id, ...charge }) => ({
     ...charge,
+    ...(sale_charge_id ? { _id: sale_charge_id } : {}),
+    igst_amount: money(charge.igst_amount),
+    cgst_amount: money(charge.cgst_amount),
+    sgst_amount: money(charge.sgst_amount),
+    tax_amount: money(charge.tax_amount),
+    cess_amount: money(charge.cess_amount),
+    addl_cess_amount: money(charge.addl_cess_amount),
+    state_cess_amount: money(charge.state_cess_amount),
+    final_value: money(charge.final_value),
     additional_charge_id: charge_master_id,
   }));
+}
+
+function savedItemTaxRates(item) {
+  const legacyTotalRate = Number(item.tax_rate) || 0;
+  const hasExplicitRates = item.igst_rate != null || item.cgst_rate != null || item.sgst_rate != null;
+  return {
+    // Older Sales only have total tax_rate. The historical contract assumed
+    // a standard equal intra-state split, while the same total applies to IGST.
+    igst: hasExplicitRates ? Number(item.igst_rate) || 0 : legacyTotalRate,
+    cgst: hasExplicitRates ? Number(item.cgst_rate) || 0 : legacyTotalRate / 2,
+    sgst: hasExplicitRates ? Number(item.sgst_rate) || 0 : legacyTotalRate / 2,
+    cess: Number(item.cess_rate) || 0,
+    addl_cess: Number(item.addl_cess_rate) || 0,
+  };
+}
+
+function applyExistingItemTaxSnapshots(items, oldItemsById) {
+  return items.map((item) => {
+    const existing = item.sale_item_id && oldItemsById.get(String(item.sale_item_id));
+    return existing ? { ...item, tax_rates: savedItemTaxRates(existing) } : item;
+  });
+}
+
+function applyExistingChargeTaxSnapshots(charges, oldChargesById) {
+  return charges.map((charge) => {
+    const existing = charge.sale_charge_id && oldChargesById.get(String(charge.sale_charge_id));
+    if (!existing) return charge;
+    return {
+      ...charge,
+      rates: {
+        igst: Number(existing.igst) || 0,
+        cgst: Number(existing.cgst) || 0,
+        sgst: Number(existing.sgst) || 0,
+      },
+    };
+  });
 }
 
 async function decrementStock(items, cmp_id, session) {
@@ -524,17 +574,22 @@ export async function updateSale(id, data = {}, req = {}) {
         throw createSaleValidationError("Price level does not belong to this company");
       }
 
-      const [resolvedItems, resolvedCharges] = await Promise.all([
+      const oldItemsById = new Map(oldSale.items.map((item) => [String(item._id), item]));
+      const oldChargesById = new Map(
+        (oldSale.additional_charges || []).map((charge) => [String(charge._id), charge]),
+      );
+      const [resolvedItemMasters, resolvedChargeMasters] = await Promise.all([
         resolveSaleItemMasters(normalized.items, { cmpId: cmp_id, session }),
         resolveSaleChargeMasters(normalized.additional_charges, { cmpId: cmp_id, session }),
       ]);
+      const resolvedItems = applyExistingItemTaxSnapshots(resolvedItemMasters, oldItemsById);
+      const resolvedCharges = applyExistingChargeTaxSnapshots(resolvedChargeMasters, oldChargesById);
       const calculated = calculateSaleTotals(
         resolvedItems,
         resolvedCharges,
         resolveTaxType(company, party),
       );
 
-      const oldItemsById = new Map(oldSale.items.map((item) => [String(item._id), item]));
       const incomingIds = new Set();
       for (const item of calculated.items) {
         if (!item.sale_item_id) continue;
@@ -545,6 +600,17 @@ export async function updateSale(id, data = {}, req = {}) {
           throw createSaleValidationError("Each existing Sale item can appear only once");
         }
         incomingIds.add(String(item.sale_item_id));
+      }
+      const incomingChargeIds = new Set();
+      for (const charge of calculated.additional_charges) {
+        if (!charge.sale_charge_id) continue;
+        if (!oldChargesById.has(String(charge.sale_charge_id))) {
+          throw createSaleValidationError("sale_charge_id does not belong to this Sale");
+        }
+        if (incomingChargeIds.has(String(charge.sale_charge_id))) {
+          throw createSaleValidationError("Each existing Sale charge can appear only once");
+        }
+        incomingChargeIds.add(String(charge.sale_charge_id));
       }
 
       const oldLedgers = await ItemLedger.find({

@@ -58,6 +58,11 @@ const SaleItemSchema = new Schema(
     discount_amount: { type: Number, default: 0 },
 
     tax_rate: { type: Number, default: 0 },
+    // Explicit transaction tax-rate snapshot. `tax_rate` remains for older
+    // Sale documents and display compatibility.
+    igst_rate: { type: Number, default: null },
+    cgst_rate: { type: Number, default: null },
+    sgst_rate: { type: Number, default: null },
     cess_rate: { type: Number, default: 0 },
     addl_cess_rate: { type: Number, default: 0 },
     tax_inclusive: { type: Boolean, default: false },

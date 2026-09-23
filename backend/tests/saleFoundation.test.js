@@ -15,8 +15,10 @@ describe("Sale foundation calculations", () => {
 
   it("calculates item and signed master charge amounts authoritatively", () => {
     const result = calculateSaleTotals([resolved], [{ action: "subtract", value: 20, rates: { igst: 18, cgst: 9, sgst: 9 } }]);
-    expect(result.items[0]).toMatchObject({ base_price: 200, discount_amount: 20, taxable_amount: 180, igst_amount: 32.4, total_amount: 212.4 });
-    expect(result.additional_charges[0]).toMatchObject({ tax_amount: -3.6, final_value: -23.6, cess_amount: 0 });
+    expect(result.items[0]).toMatchObject({ base_price: 200, discount_amount: 20, taxable_amount: 180, igst_amount: 32.4 });
+    expect(result.items[0].total_amount).toBeCloseTo(212.4, 10);
+    expect(result.additional_charges[0]).toMatchObject({ final_value: -23.6, cess_amount: 0 });
+    expect(result.additional_charges[0].tax_amount).toBeCloseTo(-3.6, 10);
     expect(result.totals.final_amount).toBe(188.8);
   });
 
@@ -43,15 +45,27 @@ describe("Sale foundation calculations", () => {
       discount_amount: 50 / 1.18,
       taxable_amount: 50 / 1.18,
       igst_amount: 9 / 1.18,
-      total_amount: 50,
+      total_amount: expect.any(Number),
     });
     expect(amountDiscount.items[0]).toMatchObject({
       base_price: 100 / 1.18,
       discount_amount: 10,
       taxable_amount: 100 / 1.18 - 10,
       igst_amount: (100 / 1.18 - 10) * 0.18,
-      total_amount: 88.2,
+      total_amount: expect.any(Number),
     });
+    expect(percentageDiscount.items[0].total_amount).toBeCloseTo(50, 10);
+    expect(amountDiscount.items[0].total_amount).toBeCloseTo(88.2, 10);
+  });
+
+  it("keeps full precision through aggregation and normalizes final totals to currency", () => {
+    const result = calculateSaleTotals([
+      { ...resolved, billed_qty: 1, rate: 10.01, discount_type: "percentage", discount_value: 12.5 },
+      { ...resolved, billed_qty: 3, rate: 7.77, discount_type: "percentage", discount_value: 12.5 },
+    ]);
+    expect(result.items[0].total_amount).not.toBe(Math.round(result.items[0].total_amount * 100) / 100);
+    expect(result.totals.final_amount).toBe(Math.round(result.totals.final_amount * 100) / 100);
+    expect(result.totals.item_total).toBe(Math.round(result.totals.item_total * 100) / 100);
   });
 
   it("rejects a negative final amount instead of clamping it", () => {

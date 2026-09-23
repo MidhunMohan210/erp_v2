@@ -173,11 +173,17 @@ export function normalizeSaleChargeInput(input = {}) {
       "Additional charge action must be add or subtract",
     );
   }
+  const saleChargeId = firstDefined(input.sale_charge_id, input.saleChargeId, input._id);
+  if (saleChargeId != null && saleChargeId !== "" && !mongoose.Types.ObjectId.isValid(saleChargeId)) {
+    throw createSaleValidationError("sale_charge_id must be a valid ObjectId");
+  }
   return {
+    sale_charge_id: saleChargeId == null || saleChargeId === "" ? null : String(saleChargeId),
     charge_master_id: requiredObjectId(
       firstDefined(
         input.additionalChargeId,
         input.additional_charge_id,
+        input.masterChargeId,
         input.chargeMasterId,
         input.charge_master_id,
       ),
@@ -329,14 +335,12 @@ export function calculateSaleItem(item, taxType = "igst") {
     ...tax,
     cess_amount,
     addl_cess_amount,
-    total_amount: roundMoney(
-      taxable_amount + tax.tax_amount + cess_amount + addl_cess_amount,
-    ),
+    total_amount: taxable_amount + tax.tax_amount + cess_amount + addl_cess_amount,
   };
 }
 
 export function calculateSaleCharge(charge, taxType = "igst") {
-  const tax = splitTax(charge.value, taxType, charge.rates);
+  const tax = splitTax(charge.value, taxType, charge.rates, { round: false });
   const sign = charge.action === "subtract" ? -1 : 1;
   return {
     ...charge,
@@ -353,7 +357,7 @@ export function calculateSaleCharge(charge, taxType = "igst") {
     cess_amount: 0,
     addl_cess_amount: 0,
     state_cess_amount: 0,
-    final_value: roundMoney((charge.value + tax.tax_amount) * sign),
+    final_value: (charge.value + tax.tax_amount) * sign,
   };
 }
 
@@ -376,6 +380,9 @@ export function calculateSaleTotals(
   if (final_amount < 0)
     throw createSaleValidationError("Sale finalAmount cannot be negative");
   return {
+    // Keep calculation values exact until the Sale document mapper persists
+    // them. This prevents a rounded intermediate becoming the input to a
+    // subsequent aggregate calculation.
     items: calculated_items,
     additional_charges: calculated_charges,
     totals: {

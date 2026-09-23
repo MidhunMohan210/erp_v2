@@ -1028,6 +1028,111 @@ describe("updateSale", () => {
   });
 });
 
+describe("Sale edit tax snapshots", () => {
+  it("uses saved rates for existing lines and charges, while new edit rows use current master rates", async () => {
+    const { context, party, godown, product, rowId, seriesId, charge } = await setupSaleContext();
+    const interstateParty = await createTestParty({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      accountGroup: (await createAccountGroup({
+        cmp_id: context.company._id,
+        Primary_user_id: context.user._id,
+        accountGroup_id: "sale-edit-tax-snapshot-interstate",
+      }))._id,
+      partyName: "Interstate customer",
+      state: "Tamil Nadu",
+    });
+    const line = {
+      itemId: String(product._id), godownId: String(godown._id),
+      godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 1,
+      billedQty: 1, rate: 118, taxInclusive: true,
+      discountType: "percentage", discountValue: 10,
+    };
+    const chargeInput = {
+      additionalChargeId: String(charge._id), action: "add", value: 10,
+    };
+    const created = await createSale({
+      request_id: "sale-edit-tax-snapshot",
+      selectedSeries: { _id: String(seriesId) }, transactionDate: "2026-07-15",
+      partyId: String(party._id), items: [line], additionalCharges: [chargeInput],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    await Product.updateOne({ _id: product._id }, { $set: { igst: 12, cgst: 6, sgst: 6 } });
+    await AdditionalCharges.updateOne({ _id: charge._id }, { $set: { igst: 12, cgst: 6, sgst: 6 } });
+    const updated = await updateSale(created._id, {
+      transactionDate: "2026-07-16", partyId: String(interstateParty._id),
+      narration: "Snapshot-preserving edit",
+      items: [
+        { ...line, _id: String(created.items[0]._id), actualQty: 2, billedQty: 2 },
+        { ...line, actualQty: 1, billedQty: 1 },
+      ],
+      additionalCharges: [
+        { ...chargeInput, _id: String(created.additional_charges[0]._id) },
+        { ...chargeInput, value: 5 },
+      ],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    expect(updated.narration).toBe("Snapshot-preserving edit");
+    expect(updated.tax_type).toBe("igst");
+    const existingItem = updated.items.find((item) => String(item._id) === String(created.items[0]._id));
+    const newItem = updated.items.find((item) => String(item._id) !== String(created.items[0]._id));
+    expect(existingItem).toMatchObject({ igst_rate: 18, cgst_rate: 9, sgst_rate: 9, tax_rate: 18 });
+    expect(existingItem.igst_amount).toBeGreaterThan(0);
+    expect(existingItem.cgst_amount).toBe(0);
+    expect(existingItem.sgst_amount).toBe(0);
+    expect(newItem).toMatchObject({ igst_rate: 12, cgst_rate: 6, sgst_rate: 6, tax_rate: 12 });
+    expect(updated.additional_charges.find((entry) => entry.value === 10)).toMatchObject({ igst: 18, cgst: 9, sgst: 9 });
+    expect(updated.additional_charges.find((entry) => entry.value === 5)).toMatchObject({ igst: 12, cgst: 6, sgst: 6 });
+    expect(await PartyLedger.findOne({ voucher_id: created._id, status: "active" }).lean()).toMatchObject({ amount: updated.totals.final_amount });
+    expect(await Outstanding.findOne({ billId: String(created._id), source: "sale" }).lean()).toMatchObject({ bill_amount: updated.totals.final_amount });
+    expect(await VoucherTimeline.findOne({ voucher_id: created._id, voucher_type: "sale" }).lean()).toMatchObject({ amount: updated.totals.final_amount });
+
+    const returnedToIntrastate = await updateSale(created._id, {
+      transactionDate: "2026-07-16", partyId: String(party._id),
+      items: [
+        { ...line, _id: String(existingItem._id), actualQty: 2, billedQty: 2 },
+        { ...line, _id: String(newItem._id), actualQty: 1, billedQty: 1 },
+      ],
+      additionalCharges: [
+        { ...chargeInput, _id: String(updated.additional_charges.find((entry) => entry.value === 10)._id) },
+        { ...chargeInput, _id: String(updated.additional_charges.find((entry) => entry.value === 5)._id), value: 5 },
+      ],
+    }, { companyId: String(context.company._id), user: context.user });
+    const returnedExisting = returnedToIntrastate.items.find((item) => String(item._id) === String(existingItem._id));
+    expect(returnedToIntrastate.tax_type).toBe("cgst_sgst");
+    expect(returnedExisting).toMatchObject({ tax_rate: 18, igst_amount: 0 });
+    expect(returnedExisting.cgst_amount).toBeGreaterThan(0);
+    expect(returnedExisting.sgst_amount).toBeGreaterThan(0);
+  });
+
+  it("falls back to legacy total tax_rate snapshots when explicit rates are absent", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const line = {
+      itemId: String(product._id), godownId: String(godown._id),
+      godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 1,
+      billedQty: 1, rate: 100, taxInclusive: false,
+      discountType: "amount", discountValue: 0,
+    };
+    const sale = await createSale({
+      request_id: "sale-edit-legacy-tax-snapshot", selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15", partyId: String(party._id), items: [line],
+    }, { companyId: String(context.company._id), user: context.user });
+    await Sale.updateOne(
+      { _id: sale._id },
+      { $unset: { "items.$[line].igst_rate": 1, "items.$[line].cgst_rate": 1, "items.$[line].sgst_rate": 1 } },
+      { arrayFilters: [{ "line._id": sale.items[0]._id }] },
+    );
+    await Product.updateOne({ _id: product._id }, { $set: { igst: 12, cgst: 6, sgst: 6 } });
+
+    const updated = await updateSale(sale._id, {
+      transactionDate: "2026-07-16", partyId: String(party._id),
+      items: [{ ...line, _id: String(sale.items[0]._id), actualQty: 2, billedQty: 2 }],
+      additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+    expect(updated.items[0]).toMatchObject({ tax_rate: 18, igst_rate: 18, cgst_rate: 9, sgst_rate: 9 });
+  });
+});
+
 describe("cancelSale", () => {
   it("reverses a pending credit Sale without changing its identity", async () => {
     const { context, party, godown, product, rowId, seriesId } =
