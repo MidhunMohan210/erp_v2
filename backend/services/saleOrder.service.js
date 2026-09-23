@@ -90,6 +90,35 @@ function getCurrentProductTaxRates(product) {
   };
 }
 
+async function resolveSaleOrderItemsForCreate(items, cmpId, session) {
+  if (!Array.isArray(items) || items.length === 0) {
+    throw createHttpError("Sale order must contain at least one item", 400);
+  }
+
+  const productIds = items.map((item) => String(item?.id || ""));
+  const products = await Product.find({ _id: { $in: productIds }, cmp_id: cmpId })
+    .select("_id igst cgst sgst cess addl_cess")
+    .session(session)
+    .lean();
+  const productById = new Map(
+    products.map((product) => [String(product._id), product]),
+  );
+
+  return items.map((item) => {
+    const product = productById.get(String(item?.id || ""));
+    if (!product) {
+      throw createHttpError(
+        "Sale order item does not belong to this company",
+        400,
+      );
+    }
+
+    // A new voucher has no transaction snapshot yet, so Product tax is the
+    // source of truth. Commercial inputs such as the chosen rate stay intact.
+    return { ...item, ...getCurrentProductTaxRates(product) };
+  });
+}
+
 async function resolveSaleOrderItemsForUpdate(
   items,
   oldItemsById,
@@ -320,6 +349,12 @@ export async function createSaleOrder(data = {}, req) {
         throw createHttpError("Selected party does not belong to this company", 400);
       }
 
+      const items = await resolveSaleOrderItemsForCreate(
+        data.items,
+        cmpId,
+        session,
+      );
+
       const additionalCharges = await resolveSaleOrderAdditionalCharges(
         data.additionalCharges ?? data.additional_charges ?? [],
         cmpId,
@@ -342,6 +377,7 @@ export async function createSaleOrder(data = {}, req) {
           cmpId,
           party: buildPartySelection(party),
           tax_type: resolveTaxType(company, party),
+          items,
           additionalCharges,
         },
         voucherIdentity.voucher,

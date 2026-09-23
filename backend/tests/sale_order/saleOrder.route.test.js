@@ -123,7 +123,7 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
     items: [
       {
         _id: new mongoose.Types.ObjectId().toString(),
-        id: new mongoose.Types.ObjectId().toString(),
+        id: String(baseContext.product._id),
         name: "Widget A",
         baseUnit: "pcs",
         selectedUnit: "pcs",
@@ -229,6 +229,14 @@ async function bootstrapBaseContext() {
     party,
   };
 
+  baseContext.product = (
+    await createProductMasters("Default Sale Order Product", {
+      igst: 18,
+      cgst: 9,
+      sgst: 9,
+    })
+  ).product;
+
   baseContext.series = await createTestSeries(baseContext.companyId, "saleOrder");
   return baseContext;
 }
@@ -321,6 +329,11 @@ async function createProductMasters(label = "Apple", overrides = {}) {
     category: overrides.category ?? category._id,
     sub_category: overrides.sub_category ?? subcategory._id,
     base_unit: "pcs",
+    igst: overrides.igst ?? 0,
+    cgst: overrides.cgst ?? 0,
+    sgst: overrides.sgst ?? 0,
+    cess: overrides.cess ?? 0,
+    addl_cess: overrides.addl_cess ?? 0,
     priceLevels: overrides.priceLevels || [
       {
         priceLevel: wholesale._id,
@@ -515,12 +528,47 @@ describe("POST /api/sale-orders — Business logic", () => {
     });
   });
 
+  it("uses Company and Product master tax instead of client tax fields", async () => {
+    const res = await createSaleOrderForTest({
+      tax_type: "igst",
+      items: [
+        {
+          id: String(baseContext.product._id),
+          name: "Client tax override attempt",
+          baseUnit: "pcs",
+          selectedUnit: "pcs",
+          actualQty: 1,
+          billedQty: 1,
+          rate: 100,
+          taxRate: 99,
+          taxableAmount: 1,
+          igstAmount: 99,
+          totalAmount: 1,
+        },
+      ],
+      totals: { finalAmount: 1 },
+    });
+    const saleOrder = await SaleOrder.findById(
+      res.body.data.saleOrder._id,
+    ).lean();
+
+    expect(saleOrder.tax_type).toBe("cgst_sgst");
+    expect(saleOrder.items[0]).toMatchObject({
+      tax_rate: 18,
+      taxable_amount: 100,
+      igst_amount: 0,
+      cgst_amount: 9,
+      sgst_amount: 9,
+      total_amount: 118,
+    });
+  });
+
   it("accepts legacy mobile item unit fields and returns legacy unit aliases", async () => {
     const res = await createSaleOrderForTest({
       items: [
         {
           _id: new mongoose.Types.ObjectId().toString(),
-          id: new mongoose.Types.ObjectId().toString(),
+          id: String(baseContext.product._id),
           name: "Legacy Box",
           unit: "Box",
           alt_unit: "Piece",
@@ -1013,7 +1061,7 @@ describe("GET /api/sale-orders/:saleOrderId", () => {
     expect(res.body.data.saleOrder.items[1].priceLevels[0].priceRate).toBe(410);
   });
 
-  it("does not enrich from a Product outside the Sale Order company", async () => {
+  it("rejects a Product outside the Sale Order company during creation", async () => {
     const otherCompany = await createOwnedCompany(baseContext.token, "Fetch Scope Company");
     const foreignProduct = await Product.create({
       product_name: "Foreign Product Latest",
@@ -1023,7 +1071,9 @@ describe("GET /api/sale-orders/:saleOrderId", () => {
       base_unit: "pcs",
       priceLevels: [{ priceRate: 999, priceDisc: 0 }],
     });
-    const createRes = await createSaleOrderForTest({
+    const res = await postSaleOrder(
+      baseContext.token,
+      buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
       items: [
         {
           _id: new mongoose.Types.ObjectId().toString(),
@@ -1039,21 +1089,20 @@ describe("GET /api/sale-orders/:saleOrderId", () => {
           totalAmount: 64.9,
         },
       ],
-    });
+      }),
+    );
 
-    const res = await getSaleOrderRequest(createRes.body.data.saleOrder._id);
-
-    expect(res.status).toBe(200);
-    expect(res.body.data.saleOrder.items[0]).toMatchObject({
-      item_id: String(foreignProduct._id),
-      item_name: "Scoped Saved Name",
-      rate: 55,
-      priceLevels: [],
-    });
+    expect(res.status).toBe(400);
+    expect(res.body.message).toBe("Sale order item does not belong to this company");
   });
 
   it("does not alter saved transaction fields while enriching latest Product metadata", async () => {
-    const masters = await createProductMasters("Snapshot");
+    const masters = await createProductMasters("Snapshot", {
+      igst: 18,
+      cgst: 9,
+      sgst: 9,
+      cess: 2,
+    });
     const createRes = await createSaleOrderForTest({
       items: [
         {
@@ -1473,7 +1522,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
     const percentageOrder = await createSaleOrderForTest({
       items: [
         {
-          id: new mongoose.Types.ObjectId().toString(),
+          id: String(baseContext.product._id),
           name: "Inclusive percentage row",
           baseUnit: "pcs",
           selectedUnit: "pcs",
@@ -1494,7 +1543,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
     const fixedOrder = await createSaleOrderForTest({
       items: [
         {
-          id: new mongoose.Types.ObjectId().toString(),
+          id: String(baseContext.product._id),
           name: "Inclusive fixed row",
           baseUnit: "pcs",
           selectedUnit: "pcs",
