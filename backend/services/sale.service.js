@@ -713,6 +713,10 @@ export async function updateSale(id, data = {}, req = {}) {
       }
       const oldIsCashBank = oldCashBankLedgers.length === 1;
       const newIsCashBank = isCashBankParty(party);
+      const partyIdentityChanged =
+        !oldIsCashBank && !newIsCashBank && !sameId(oldSale.party_id, party._id);
+      const cashBankIdentityChanged =
+        oldIsCashBank && newIsCashBank && !sameId(oldSale.party_id, party._id);
 
       if (!oldIsCashBank) {
         const oldPartyLedger = oldPartyLedgers[0];
@@ -725,10 +729,10 @@ export async function updateSale(id, data = {}, req = {}) {
         });
       }
 
-      if (oldIsCashBank && !newIsCashBank) {
+      if (oldIsCashBank && (!newIsCashBank || cashBankIdentityChanged)) {
         oldCashBankLedgers[0].status = "cancelled";
         await oldCashBankLedgers[0].save({ session });
-      } else if (!oldIsCashBank && newIsCashBank) {
+      } else if (!oldIsCashBank && (newIsCashBank || partyIdentityChanged)) {
         oldPartyLedgers[0].status = "cancelled";
         await oldPartyLedgers[0].save({ session });
       }
@@ -746,7 +750,7 @@ export async function updateSale(id, data = {}, req = {}) {
       oldOutstanding = outstandingRows[0] || null;
 
       if (newIsCashBank) {
-        if (oldIsCashBank) {
+        if (oldIsCashBank && !cashBankIdentityChanged) {
           Object.assign(oldCashBankLedgers[0], buildSaleCashBankLedger({
             sale, party, amount: sale.totals.final_amount, userId,
           }));
@@ -758,7 +762,7 @@ export async function updateSale(id, data = {}, req = {}) {
           })], { session });
         }
       } else {
-        if (oldIsCashBank) {
+        if (oldIsCashBank || partyIdentityChanged) {
           await PartyLedger.create([{
             cmp_id, voucher_type: "sale", voucher_id: sale._id,
             voucher_number: sale.voucher_number, date: sale.date,
@@ -767,6 +771,9 @@ export async function updateSale(id, data = {}, req = {}) {
             status: "active", tally_status: "pending", created_by: userId,
           }], { session });
         } else {
+          // Same accounting identity: the current posting remains mutable.
+          // A party change takes the branch above, preserving the cancelled
+          // ledger as the immutable historical posting for the old party.
           Object.assign(oldPartyLedgers[0], {
             voucher_number: sale.voucher_number, date: sale.date,
             party_id: party._id, party_name: party.partyName,
