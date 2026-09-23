@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 
 import VoucherTimeline from "../Model/VoucherTimeline.js";
 import Receipt from "../Model/Receipt.js";
+import Sale from "../Model/Sale.js";
 import SaleOrder from "../Model/SaleOrder.js";
 import { applyTransactionCreatorScope } from "../utils/authScope.js";
 
@@ -35,42 +36,35 @@ function endOfDay(date) {
   return next;
 }
 
-function resolveDateRange(from, to) {
+function resolveDateRange(from, to, { defaultToToday = false } = {}) {
   const today = new Date();
 
   if (!from && !to) {
+    if (!defaultToToday) {
+      // The transaction list is an audit/history view. Do not silently hide
+      // future-dated vouchers when the caller has not requested a date range.
+      return { fromDate: null, toDate: null };
+    }
     return {
       fromDate: startOfDay(today),
       toDate: endOfDay(today),
     };
   }
 
-  if (from && !to) {
-    const parsedFrom = parseDateInput(from);
-    if (!parsedFrom) {
-      throw createHttpError("Invalid from date", 400);
-    }
+  const parsedFrom = from ? parseDateInput(from) : null;
+  const parsedTo = to ? parseDateInput(to) : null;
 
-    return {
-      fromDate: startOfDay(parsedFrom),
-      toDate: endOfDay(parsedFrom),
-    };
-  }
-
-  const parsedFrom = parseDateInput(from);
-  const parsedTo = parseDateInput(to);
-
-  if (!parsedFrom || !parsedTo) {
+  if ((from && !parsedFrom) || (to && !parsedTo)) {
     throw createHttpError("Invalid date range", 400);
   }
 
-  if (parsedFrom > parsedTo) {
+  if (parsedFrom && parsedTo && parsedFrom > parsedTo) {
     throw createHttpError("'from' date cannot be after 'to' date", 400);
   }
 
   return {
-    fromDate: startOfDay(parsedFrom),
-    toDate: endOfDay(parsedTo),
+    fromDate: parsedFrom ? startOfDay(parsedFrom) : null,
+    toDate: parsedTo ? endOfDay(parsedTo) : null,
   };
 }
 
@@ -120,10 +114,10 @@ async function resolveVoucherIdsForCreator({
     ? DEFAULT_VOUCHER_TYPES
     : voucherTypes;
 
-  const dateFilter = {
-    $gte: fromDate,
-    $lte: toDate,
-  };
+  const dateFilter = {};
+  if (fromDate) dateFilter.$gte = fromDate;
+  if (toDate) dateFilter.$lte = toDate;
+  const hasDateFilter = Object.keys(dateFilter).length > 0;
 
   const queries = [];
 
@@ -131,8 +125,8 @@ async function resolveVoucherIdsForCreator({
     const saleOrderFilter = {
       cmp_id: cmpId,
       created_by: creatorId,
-      date: dateFilter,
     };
+    if (hasDateFilter) saleOrderFilter.date = dateFilter;
 
     if (status && ["open", "converted", "cancelled"].includes(status)) {
       saleOrderFilter.status = status;
@@ -145,12 +139,24 @@ async function resolveVoucherIdsForCreator({
     );
   }
 
+  if (resolvedVoucherTypes.includes("sale")) {
+    const saleFilter = {
+      cmp_id: cmpId,
+      created_by: creatorId,
+    };
+    if (hasDateFilter) saleFilter.date = dateFilter;
+    if (status && ["active", "cancelled"].includes(status)) {
+      saleFilter.status = status;
+    }
+    queries.push(Sale.find(saleFilter).select("_id").lean());
+  }
+
   if (resolvedVoucherTypes.includes("receipt")) {
     const receiptFilter = {
       cmp_id: cmpId,
       created_by: creatorId,
-      date: dateFilter,
     };
+    if (hasDateFilter) receiptFilter.date = dateFilter;
 
     if (status && ["active", "cancelled"].includes(status)) {
       receiptFilter.status = status;
@@ -180,7 +186,7 @@ export async function getVoucherTotalsSummary({ cmpId, date }, req) {
     throw createHttpError("Invalid cmpId", 400);
   }
 
-  const { fromDate, toDate } = resolveDateRange(date, date);
+  const { fromDate, toDate } = resolveDateRange(date, date, { defaultToToday: true });
 
   const saleOrderFilter = applyTransactionCreatorScope(req, {
     cmp_id: new mongoose.Types.ObjectId(cmpId),
@@ -245,13 +251,13 @@ export async function getVouchers(filters = {}, req) {
   const voucherTypes = resolveVoucherTypes(voucherType);
   const currentPage = parsePositiveInteger(page, 1);
   const pageSize = parsePositiveInteger(limit, 20);
-  const timelineFilter = {
-    cmp_id: cmpId,
-    date: {
-      $gte: fromDate,
-      $lte: toDate,
-    },
-  };
+  const timelineFilter = { cmp_id: cmpId };
+  const timelineDateFilter = {};
+  if (fromDate) timelineDateFilter.$gte = fromDate;
+  if (toDate) timelineDateFilter.$lte = toDate;
+  if (Object.keys(timelineDateFilter).length > 0) {
+    timelineFilter.date = timelineDateFilter;
+  }
   const skip = (currentPage - 1) * pageSize;
 
   if (!voucherTypes.includes("all")) {
@@ -291,7 +297,7 @@ export async function getVouchers(filters = {}, req) {
       amount: 1,
       status: 1,
     })
-      .sort({ created_at: -1, _id: -1 })
+      .sort({ date: -1, _id: -1 })
       .skip(skip)
       .limit(pageSize)
       .lean(),
@@ -308,8 +314,8 @@ export async function getVouchers(filters = {}, req) {
   }));
 
   return {
-    from: fromDate.toISOString(),
-    to: toDate.toISOString(),
+    from: fromDate?.toISOString() || null,
+    to: toDate?.toISOString() || null,
     page: currentPage,
     limit: pageSize,
     hasMore: skip + vouchers.length < totalCount,

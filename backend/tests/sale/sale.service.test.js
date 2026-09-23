@@ -16,6 +16,7 @@ import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
 import { cancelSale, createSale, getSaleById, updateSale } from "../../services/sale.service.js";
 import { auditSale } from "../../services/saleAudit.service.js";
+import { getVouchers } from "../../services/voucher.service.js";
 import { repairCashBankSales } from "../../utils/repairCashBankSales.js";
 import { createTestCompany } from "../helpers/company.js";
 import {
@@ -1214,5 +1215,104 @@ describe("getSaleById", () => {
     });
     expect(fetched.items).toHaveLength(1);
     expect(inaccessible).toBeNull();
+  });
+});
+
+describe("getVouchers", () => {
+  it("includes a future-dated Sale when no transaction date range is supplied", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const transactionDate = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, "0")}-${String(tomorrow.getDate()).padStart(2, "0")}`;
+    const sale = await createSale({
+      request_id: "sale-service-future-voucher-list",
+      selectedSeries: { _id: String(seriesId) },
+      transactionDate,
+      partyId: String(party._id),
+      items: [{
+        itemId: String(product._id), godownId: String(godown._id),
+        godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 1,
+        billedQty: 1, rate: 10, taxInclusive: false,
+        discountType: "amount", discountValue: 0,
+      }],
+      additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    const result = await getVouchers({
+      cmpId: String(context.company._id), voucherType: "sale",
+    }, { user: context.user });
+
+    expect(result).toMatchObject({ from: null, to: null, count: 1 });
+    expect(result.vouchers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ _id: sale._id, voucher_type: "sale" }),
+    ]));
+  });
+
+  it("sorts by voucher date and supports optional date bounds with pagination", async () => {
+    const { context } = await setupSaleContext();
+    const voucherIds = [
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId(),
+    ];
+
+    await VoucherTimeline.create([
+      {
+        cmp_id: context.company._id,
+        voucher_type: "sale",
+        voucher_id: voucherIds[0],
+        date: new Date("2026-09-20T00:00:00.000Z"),
+        voucher_number: "SALE-PAST",
+        amount: 10,
+        status: "active",
+      },
+      {
+        cmp_id: context.company._id,
+        voucher_type: "sale",
+        voucher_id: voucherIds[1],
+        date: new Date("2026-09-21T00:00:00.000Z"),
+        voucher_number: "SALE-TODAY",
+        amount: 20,
+        status: "active",
+      },
+      {
+        cmp_id: context.company._id,
+        voucher_type: "sale",
+        voucher_id: voucherIds[2],
+        date: new Date("2026-10-01T00:00:00.000Z"),
+        voucher_number: "SALE-FUTURE",
+        amount: 30,
+        status: "active",
+      },
+    ]);
+
+    const getSales = (filters = {}) => getVouchers({
+      cmpId: String(context.company._id),
+      voucherType: "sale",
+      ...filters,
+    }, { user: context.user });
+    const voucherDates = (result) => result.vouchers.map((voucher) =>
+      new Date(voucher.date).toISOString().slice(0, 10),
+    );
+
+    const latest = await getSales({ page: 1, limit: 2 });
+    expect(voucherDates(latest)).toEqual(["2026-10-01", "2026-09-21"]);
+    expect(latest.hasMore).toBe(true);
+
+    const secondPage = await getSales({ page: 2, limit: 2 });
+    expect(voucherDates(secondPage)).toEqual(["2026-09-20"]);
+    expect(secondPage.hasMore).toBe(false);
+
+    const fromOnly = await getSales({ from: "2026-09-21" });
+    expect(voucherDates(fromOnly)).toEqual(["2026-10-01", "2026-09-21"]);
+
+    const toOnly = await getSales({ to: "2026-09-21" });
+    expect(voucherDates(toOnly)).toEqual(["2026-09-21", "2026-09-20"]);
+
+    const explicitRange = await getSales({
+      from: "2026-09-21",
+      to: "2026-09-30",
+    });
+    expect(voucherDates(explicitRange)).toEqual(["2026-09-21"]);
   });
 });
