@@ -715,6 +715,8 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
   return {
     // Ownership + voucher identity
     cmp_id: cmpId,
+    request_id: body.request_id || null,
+    request_fingerprint: body.request_fingerprint || null,
     voucher_type: "saleOrder",
     series_id: selectedSeries?._id,
     series_name: selectedSeries?.seriesName || voucher.series?.seriesName || null,

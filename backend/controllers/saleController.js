@@ -4,14 +4,22 @@ import {
   createSale as createSaleService,
   cancelSale as cancelSaleService,
   getSaleById as getSaleByIdService,
+  findSaleByRequestId as findSaleByRequestIdService,
   updateSale as updateSaleService,
 } from "../services/sale.service.js";
 import { auditSale as auditSaleService } from "../services/saleAudit.service.js";
 
 export async function createSale(req, res) {
+
   try {
-    const sale = await createSaleService(req.body || {}, req);
-    return res.status(201).json({ success: true, data: { sale } });
+    const result = await createSaleService(req.body || {}, req);
+    const { idempotent_replay = false, ...sale } = result;
+
+    return res.status(idempotent_replay ? 200 : 201).json({
+      success: true,
+      idempotent_replay,
+      data: { sale },
+    });
   } catch (error) {
     if (process.env.NODE_ENV !== "test") console.error("createSale error:", error);
     return res.status(error.statusCode || 500).json({ success: false, message: error.message || "Failed to create sale" });
@@ -38,6 +46,31 @@ export async function getSaleById(req, res) {
   } catch (error) {
     if (process.env.NODE_ENV !== "test") console.error("getSaleById error:", error);
     return res.status(error.statusCode || 500).json({ success: false, message: error.message || "Failed to fetch sale" });
+  }
+}
+
+export async function getSaleByRequestId(req, res) {
+  try {
+    const sale = await findSaleByRequestIdService(
+      req.params.requestId,
+      { cmp_id: req.companyId },
+      req,
+    );
+    if (!sale) return res.status(404).json({ success: false, message: "Sale not found" });
+    return res.status(200).json({
+      success: true,
+      data: {
+        exists: true,
+        transaction_type: "sale",
+        request_id: sale.request_id,
+        id: sale._id,
+        voucher_number: sale.voucher_number,
+        status: sale.status,
+        created_at: sale.created_at,
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || "Failed to find Sale" });
   }
 }
 

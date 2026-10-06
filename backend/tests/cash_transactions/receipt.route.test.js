@@ -19,6 +19,7 @@ import {
 } from "../helpers/party.js";
 import { loginAndGetAuthContext } from "../helpers/user.js";
 import * as voucherTimelineService from "../../services/voucherTimeline.service.js";
+import { auditReceipt } from "../../services/receiptAudit.service.js";
 
 let baseContext = null;
 const BASE_USER = {
@@ -357,6 +358,57 @@ function cancelReceiptRequest(receiptId, body = {}, token = baseContext.token) {
     });
 }
 
+async function buildReceiptEditPayload(receiptId, overrides = {}) {
+  const receipt = await Receipt.findById(receiptId).lean();
+  return {
+    expected_updated_at: receipt.updated_at.toISOString(),
+    voucher_type: "receipt",
+    date: receipt.date.toISOString(),
+    party_id: String(receipt.party_id),
+    party_name: receipt.party_name,
+    cash_bank_id: String(receipt.cash_bank_id),
+    cash_bank_type: receipt.cash_bank_type,
+    instrument_type: receipt.instrument_type,
+    amount: receipt.amount,
+    settlement_details: receipt.settlement_details.map((detail) => ({
+      outstanding: String(detail.outstanding),
+      settled_amount: detail.settled_amount,
+    })),
+    narration: receipt.narration,
+    cheque_number: receipt.cheque_number,
+    cheque_date: receipt.cheque_date?.toISOString() || null,
+    ...overrides,
+  };
+}
+
+async function editReceiptRequest(
+  receiptId,
+  overrides = {},
+  token = baseContext.token,
+) {
+  const payload = await buildReceiptEditPayload(receiptId, overrides);
+  return request(app)
+    .put(`/api/cash-transactions/${receiptId}`)
+    .set("Authorization", `Bearer ${token}`)
+    .set("X-Company-Id", String(baseContext.companyId))
+    .send(payload);
+}
+
+function putReceiptEditPayload(receiptId, payload, token = baseContext.token) {
+  return request(app)
+    .put(`/api/cash-transactions/${receiptId}`)
+    .set("Authorization", `Bearer ${token}`)
+    .set("X-Company-Id", String(baseContext.companyId))
+    .send(payload);
+}
+
+function getReceiptEditAvailability(receiptId, token = baseContext.token) {
+  return request(app)
+    .get(`/api/cash-transactions/${receiptId}/edit-allocation-availability`)
+    .set("Authorization", `Bearer ${token}`)
+    .set("X-Company-Id", String(baseContext.companyId));
+}
+
 function getReceiptRequest(receiptId, companyId = baseContext.companyId, token = baseContext.token) {
   return request(app)
     .get(`/api/cash-transactions/${receiptId}`)
@@ -364,8 +416,57 @@ function getReceiptRequest(receiptId, companyId = baseContext.companyId, token =
     .query({ cmp_id: String(companyId) });
 }
 
+function getReceiptByRequestId(requestId, companyId = baseContext.companyId) {
+  return request(app)
+    .get(`/api/cash-transactions/by-request-id/${requestId}`)
+    .set("Authorization", `Bearer ${baseContext.token}`)
+    .query({ cmp_id: String(companyId) });
+}
+
 beforeAll(async () => {
   baseContext = null;
+});
+
+describe("Receipt audit service - read only diagnostics", () => {
+  it("reports a healthy active Receipt and performs zero writes", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    const before = await getReceiptAccountingCounts();
+
+    const audit = await auditReceipt({ receiptId, companyId: baseContext.companyId });
+    const after = await getReceiptAccountingCounts();
+
+    expect(audit.audit.healthy).toBe(true);
+    expect(audit.checks.partyLedger.valid).toBe(true);
+    expect(audit.checks.cashBankLedger.valid).toBe(true);
+    expect(after).toEqual(before);
+  });
+
+  it("reports a missing posting instead of repairing it", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    await PartyLedger.deleteMany({ voucher_id: receiptId, voucher_type: "receipt" });
+
+    const audit = await auditReceipt({ receiptId, companyId: baseContext.companyId });
+
+    expect(audit.audit.healthy).toBe(false);
+    expect(audit.checks.partyLedger.valid).toBe(false);
+    expect(await PartyLedger.countDocuments({ voucher_id: receiptId, voucher_type: "receipt" })).toBe(0);
+  });
+
+  it("audits cancelled historical Receipt rows and keeps company scope", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    const cancelled = await cancelReceiptRequest(receiptId);
+    expect(cancelled.status).toBe(200);
+
+    const audit = await auditReceipt({ receiptId, companyId: baseContext.companyId });
+    const otherCompany = await createOwnedCompany(baseContext.token, "Receipt Audit Other Company");
+
+    expect(audit.receipt.status).toBe("cancelled");
+    expect(audit.checks.partyLedger.valid).toBe(true);
+    await expect(auditReceipt({ receiptId, companyId: otherCompany.companyId })).rejects.toMatchObject({ statusCode: 404 });
+  });
 });
 
 beforeEach(async () => {
@@ -1635,6 +1736,588 @@ describe("GET /api/cash-transactions/:id", () => {
 
     expect(res.status).toBe(404);
     expect(res.body.message).toBe("Cash transaction not found");
+  });
+});
+
+describe("GET /api/cash-transactions/by-request-id/:requestId", () => {
+  it("returns minimal Receipt reconciliation data without creating another posting", async () => {
+    const requestId = "receipt-request-lookup";
+    const createRes = await createReceiptForTest({ request_id: requestId });
+    const receiptId = createRes.body.data.cashTransaction._id;
+    const beforeCount = await Receipt.countDocuments();
+
+    const response = await getReceiptByRequestId(requestId);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      exists: true,
+      transaction_type: "receipt",
+      request_id: requestId,
+      id: receiptId,
+    });
+    expect(await Receipt.countDocuments()).toBe(beforeCount);
+  });
+
+  it("returns 404 for an unknown or cross-company request ID", async () => {
+    expect((await getReceiptByRequestId("receipt-request-missing")).status).toBe(404);
+    const otherCompany = await createOwnedCompany(baseContext.token, "Fetch Scope Company");
+    const createRes = await createReceiptForTest({ request_id: "receipt-request-other-company" });
+    expect(createRes.status).toBe(201);
+    expect((await getReceiptByRequestId("receipt-request-other-company", otherCompany.companyId)).status).toBe(404);
+  });
+});
+
+describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
+  it("supports narration-only and no-op edits without changing voucher identity", async () => {
+    const created = await createReceiptForTest({ narration: "Original" });
+    const original = created.body.data.cashTransaction;
+
+    const narrationEdit = await editReceiptRequest(original._id, {
+      narration: "Updated narration",
+    });
+    expect(narrationEdit.status).toBe(200);
+    expect(narrationEdit.body.data.cashTransaction).toMatchObject({
+      _id: original._id,
+      request_id: original.request_id,
+      request_fingerprint: original.request_fingerprint,
+      voucher_number: original.voucher_number,
+      company_level_serial_number: original.company_level_serial_number,
+      user_level_serial_number: original.user_level_serial_number,
+      narration: "Updated narration",
+    });
+
+    const noOp = await editReceiptRequest(original._id);
+    expect(noOp.status).toBe(200);
+    expect(await Receipt.countDocuments({ _id: original._id })).toBe(1);
+    expect(await PartyLedger.countDocuments({ voucher_id: original._id })).toBe(1);
+    expect(await CashBankLedger.countDocuments({ voucher_id: original._id })).toBe(1);
+  });
+
+  it("increases and decreases amount while keeping monthly and ledger totals correct", async () => {
+    const created = await createReceiptForTest({ amount: 500 });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const increased = await editReceiptRequest(receiptId, { amount: 800 });
+    expect(increased.status).toBe(200);
+    expect(increased.body.data.cashTransaction.advance_amount).toBe(800);
+
+    const decreased = await editReceiptRequest(receiptId, { amount: 300 });
+    expect(decreased.status).toBe(200);
+    const [partyLedger, cashLedger, monthly] = await Promise.all([
+      PartyLedger.findOne({ voucher_id: receiptId }).lean(),
+      CashBankLedger.findOne({ voucher_id: receiptId }).lean(),
+      PartyMonthlyBalance.findOne({
+        cmp_id: baseContext.companyId,
+        party_id: baseContext.party._id,
+        month_key: "2026-06",
+      }).lean(),
+    ]);
+    expect(partyLedger.amount).toBe(300);
+    expect(cashLedger.amount).toBe(300);
+    expect(monthly.total_credit).toBe(300);
+    expect(monthly.transaction_count).toBe(1);
+  });
+
+  it("returns fully settled and partially settled original bills with reversible availability", async () => {
+    const fullySettled = await createOutstandingForParty({
+      billNo: "INV-EDIT-FULL",
+      billAmount: 500,
+      pendingAmount: 500,
+    });
+    const partial = await createOutstandingForParty({
+      billNo: "INV-EDIT-PARTIAL",
+      billAmount: 700,
+      pendingAmount: 700,
+    });
+    const created = await createReceiptForTest({
+      amount: 900,
+      settlement_details: [
+        buildSettlement(fullySettled, 500),
+        buildSettlement(partial, 400),
+      ],
+    });
+
+    const response = await getReceiptEditAvailability(
+      created.body.data.cashTransaction._id,
+    );
+    expect(response.status).toBe(200);
+    const fullItem = response.body.data.items.find(
+      (item) => item._id === String(fullySettled._id),
+    );
+    const partialItem = response.body.data.items.find(
+      (item) => item._id === String(partial._id),
+    );
+    expect(fullItem).toMatchObject({
+      current_pending: 0,
+      original_settled_amount: 500,
+      editable_available: 500,
+      originally_allocated: true,
+    });
+    expect(partialItem).toMatchObject({
+      current_pending: 300,
+      original_settled_amount: 400,
+      editable_available: 700,
+      originally_allocated: true,
+    });
+    expect(response.body.data.expected_updated_at).toBeTruthy();
+  });
+
+  it("retains, increases, decreases, removes, adds and replaces allocations", async () => {
+    const billA = await createOutstandingForParty({
+      billNo: "INV-EDIT-A",
+      billAmount: 600,
+      pendingAmount: 600,
+    });
+    const billB = await createOutstandingForParty({
+      billNo: "INV-EDIT-B",
+      billAmount: 800,
+      pendingAmount: 800,
+    });
+    const created = await createReceiptForTest({
+      amount: 700,
+      settlement_details: [buildSettlement(billA, 400)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const retained = await editReceiptRequest(receiptId);
+    expect(retained.status).toBe(200);
+    expect((await Outstanding.findById(billA._id).lean()).bill_pending_amt).toBe(200);
+
+    const increased = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(billA._id), settled_amount: 600 }],
+    });
+    expect(increased.status).toBe(200);
+    expect((await Outstanding.findById(billA._id).lean()).bill_pending_amt).toBe(0);
+
+    const decreased = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(billA._id), settled_amount: 200 }],
+    });
+    expect(decreased.status).toBe(200);
+    expect((await Outstanding.findById(billA._id).lean()).bill_pending_amt).toBe(400);
+
+    const replaced = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(billB._id), settled_amount: 500 }],
+    });
+    expect(replaced.status).toBe(200);
+    expect((await Outstanding.findById(billA._id).lean()).bill_pending_amt).toBe(600);
+    expect((await Outstanding.findById(billB._id).lean()).bill_pending_amt).toBe(300);
+
+    const multiple = await editReceiptRequest(receiptId, {
+      settlement_details: [
+        { outstanding: String(billB._id), settled_amount: 300 },
+        { outstanding: String(billA._id), settled_amount: 250 },
+      ],
+    });
+    expect(multiple.status).toBe(200);
+    expect(multiple.body.data.cashTransaction.advance_amount).toBe(150);
+
+    const removed = await editReceiptRequest(receiptId, {
+      settlement_details: [],
+    });
+    expect(removed.status).toBe(200);
+    expect((await Outstanding.findById(billA._id).lean()).bill_pending_amt).toBe(600);
+    expect((await Outstanding.findById(billB._id).lean()).bill_pending_amt).toBe(800);
+    expect(removed.body.data.cashTransaction.advance_amount).toBe(700);
+  });
+
+  it("rejects invalid replacement allocations without changing original accounting", async () => {
+    const bill = await createOutstandingForParty({
+      billNo: "INV-EDIT-LIMIT",
+      billAmount: 500,
+      pendingAmount: 500,
+    });
+    const otherParty = await createTestParty({
+      cmp_id: baseContext.companyId,
+      Primary_user_id: baseContext.userId,
+      accountGroup: baseContext.accountGroup._id,
+      created_by: baseContext.userId,
+      partyName: "Other Receipt Party",
+    });
+    const otherBill = await createOutstandingForParty({
+      party: otherParty,
+      billNo: "INV-EDIT-OTHER-PARTY",
+    });
+    const created = await createReceiptForTest({
+      amount: 500,
+      settlement_details: [buildSettlement(bill, 300)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const tooMuch = await editReceiptRequest(receiptId, {
+      amount: 700,
+      settlement_details: [{ outstanding: String(bill._id), settled_amount: 501 }],
+    });
+    expect(tooMuch.status).toBe(400);
+
+    const overTotal = await editReceiptRequest(receiptId, {
+      amount: 200,
+      settlement_details: [{ outstanding: String(bill._id), settled_amount: 300 }],
+    });
+    expect(overTotal.status).toBe(400);
+
+    const duplicate = await editReceiptRequest(receiptId, {
+      settlement_details: [
+        { outstanding: String(bill._id), settled_amount: 100 },
+        { outstanding: String(bill._id), settled_amount: 100 },
+      ],
+    });
+    expect(duplicate.status).toBe(400);
+
+    const foreignParty = await editReceiptRequest(receiptId, {
+      settlement_details: [
+        { outstanding: String(otherBill._id), settled_amount: 100 },
+      ],
+    });
+    expect(foreignParty.status).toBe(400);
+
+    expect((await Outstanding.findById(bill._id).lean()).bill_pending_amt).toBe(200);
+    expect((await Receipt.findById(receiptId).lean()).amount).toBe(500);
+  });
+
+  it("handles all advance transitions by reusing one historical advance row", async () => {
+    const bill = await createOutstandingForParty({
+      billNo: "INV-EDIT-ADVANCE",
+      billAmount: 500,
+      pendingAmount: 500,
+    });
+    const created = await createReceiptForTest({ amount: 500 });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const partialAdvance = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(bill._id), settled_amount: 300 }],
+    });
+    expect(partialAdvance.status).toBe(200);
+    expect(partialAdvance.body.data.cashTransaction.advance_amount).toBe(200);
+
+    const noAdvance = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(bill._id), settled_amount: 500 }],
+    });
+    expect(noAdvance.status).toBe(200);
+    expect(noAdvance.body.data.cashTransaction.advance_amount).toBe(0);
+
+    let advance = await Outstanding.findOne({ billId: receiptId, source: "advance_receipt" }).lean();
+    expect(advance).toMatchObject({ bill_pending_amt: 0, isCancelled: true });
+
+    const largerAdvance = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(bill._id), settled_amount: 100 }],
+    });
+    expect(largerAdvance.status).toBe(200);
+    advance = await Outstanding.findOne({ billId: receiptId, source: "advance_receipt" }).lean();
+    expect(advance).toMatchObject({ bill_amount: 400, bill_pending_amt: -400, isCancelled: false });
+    expect(await Outstanding.countDocuments({ billId: receiptId, source: "advance_receipt" })).toBe(1);
+
+    const smallerAdvance = await editReceiptRequest(receiptId, {
+      settlement_details: [{ outstanding: String(bill._id), settled_amount: 250 }],
+    });
+    expect(smallerAdvance.status).toBe(200);
+    advance = await Outstanding.findOne({ billId: receiptId, source: "advance_receipt" }).lean();
+    expect(advance).toMatchObject({ bill_amount: 250, bill_pending_amt: -250, isCancelled: false });
+    expect(await Outstanding.countDocuments({ billId: receiptId, source: "advance_receipt" })).toBe(1);
+  });
+
+  it("updates cash/bank account, instrument and cheque fields in both Receipt and ledger", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const cheque = await editReceiptRequest(receiptId, {
+      cash_bank_id: String(baseContext.bankAccount._id),
+      cash_bank_type: "bank",
+      instrument_type: "cheque",
+      cheque_number: "CHQ-EDIT-1",
+      cheque_date: "2026-07-02T00:00:00.000Z",
+      narration: "Moved to bank",
+    });
+    expect(cheque.status).toBe(200);
+    expect(cheque.body.data.cashTransaction).toMatchObject({
+      cash_bank_id: String(baseContext.bankAccount._id),
+      cash_bank_type: "bank",
+      instrument_type: "cheque",
+      cheque_number: "CHQ-EDIT-1",
+    });
+
+    const cashAgain = await editReceiptRequest(receiptId, {
+      cash_bank_id: String(baseContext.cashAccount._id),
+      cash_bank_type: "cash",
+      instrument_type: "cash",
+      cheque_number: "STALE",
+      cheque_date: "2026-07-03T00:00:00.000Z",
+    });
+    expect(cashAgain.status).toBe(200);
+    expect(cashAgain.body.data.cashTransaction.cheque_number).toBeNull();
+    expect(cashAgain.body.data.cashTransaction.cheque_date).toBeNull();
+    const ledger = await CashBankLedger.findOne({ voucher_id: receiptId }).lean();
+    expect(ledger).toMatchObject({
+      cash_bank_id: baseContext.cashAccount._id,
+      cash_bank_type: "cash",
+      instrument_type: "cash",
+      direction: "in",
+    });
+  });
+
+  it("enforces Create instrument and cheque validation during Edit", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const wrongAccount = await editReceiptRequest(receiptId, {
+      instrument_type: "upi",
+    });
+    expect(wrongAccount.status).toBe(400);
+    expect(wrongAccount.body.message).toBe("Bank instruments require a bank account");
+
+    const missingCheque = await editReceiptRequest(receiptId, {
+      cash_bank_id: String(baseContext.bankAccount._id),
+      cash_bank_type: "bank",
+      instrument_type: "cheque",
+      cheque_number: null,
+      cheque_date: null,
+    });
+    expect(missingCheque.status).toBe(400);
+    expect(missingCheque.body.message).toBe("Cheque number is required");
+  });
+
+  it("supports bank-to-bank and cheque/UPI transitions without stale cheque data", async () => {
+    const secondBank = await createTestParty({
+      cmp_id: baseContext.companyId,
+      Primary_user_id: baseContext.userId,
+      accountGroup: baseContext.bankAccountGroup._id,
+      created_by: baseContext.userId,
+      partyName: "Secondary Bank Account",
+      partyType: "bank",
+      bank_name: "ICICI Bank",
+      ac_no: "9988776655",
+      state: "Kerala",
+    });
+    const created = await createReceiptForTest({
+      cash_bank_id: String(baseContext.bankAccount._id),
+      cash_bank_name: baseContext.bankAccount.partyName,
+      cash_bank_type: "bank",
+      instrument_type: "upi",
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const cheque = await editReceiptRequest(receiptId, {
+      cash_bank_id: String(secondBank._id),
+      cash_bank_type: "bank",
+      instrument_type: "cheque",
+      cheque_number: "CHQ-BANK-2",
+      cheque_date: "2026-06-30T00:00:00.000Z",
+    });
+    expect(cheque.status).toBe(200);
+    expect(cheque.body.data.cashTransaction.cash_bank_id).toBe(String(secondBank._id));
+
+    const upi = await editReceiptRequest(receiptId, {
+      instrument_type: "upi",
+      cheque_number: "SHOULD-CLEAR",
+      cheque_date: "2026-07-01T00:00:00.000Z",
+    });
+    expect(upi.status).toBe(200);
+    expect(upi.body.data.cashTransaction.cheque_number).toBeNull();
+    expect(upi.body.data.cashTransaction.cheque_date).toBeNull();
+  });
+
+  it("moves the monthly contribution across months without changing its count", async () => {
+    const created = await createReceiptForTest({ amount: 500 });
+    const receiptId = created.body.data.cashTransaction._id;
+    const moved = await editReceiptRequest(receiptId, {
+      date: "2026-07-05T00:00:00.000Z",
+      amount: 650,
+    });
+    expect(moved.status).toBe(200);
+
+    const [june, july, partyLedger, cashLedger, timeline] = await Promise.all([
+      PartyMonthlyBalance.findOne({ cmp_id: baseContext.companyId, party_id: baseContext.party._id, month_key: "2026-06" }).lean(),
+      PartyMonthlyBalance.findOne({ cmp_id: baseContext.companyId, party_id: baseContext.party._id, month_key: "2026-07" }).lean(),
+      PartyLedger.findOne({ voucher_id: receiptId }).lean(),
+      CashBankLedger.findOne({ voucher_id: receiptId }).lean(),
+      VoucherTimeline.findOne({ voucher_id: receiptId }).lean(),
+    ]);
+    expect(june).toMatchObject({ total_credit: 0, transaction_count: 0 });
+    expect(july).toMatchObject({ total_credit: 650, transaction_count: 1 });
+    expect(partyLedger.date.toISOString()).toBe("2026-07-05T00:00:00.000Z");
+    expect(cashLedger.date.toISOString()).toBe("2026-07-05T00:00:00.000Z");
+    expect(timeline).toMatchObject({ amount: 650 });
+    expect(timeline.date.toISOString()).toBe("2026-07-05T00:00:00.000Z");
+  });
+
+  it("updates amount and date inside one monthly bucket without duplicating the count", async () => {
+    const created = await createReceiptForTest({ amount: 500 });
+    const receiptId = created.body.data.cashTransaction._id;
+    const edited = await editReceiptRequest(receiptId, {
+      date: "2026-06-10T00:00:00.000Z",
+      amount: 725,
+    });
+    expect(edited.status).toBe(200);
+    const monthly = await PartyMonthlyBalance.findOne({
+      cmp_id: baseContext.companyId,
+      party_id: baseContext.party._id,
+      month_key: "2026-06",
+    }).lean();
+    expect(monthly).toMatchObject({ total_credit: 725, transaction_count: 1 });
+  });
+
+  it("rejects party and immutable identity changes", async () => {
+    const created = await createReceiptForTest();
+    const receipt = created.body.data.cashTransaction;
+    const anotherPartyId = new mongoose.Types.ObjectId().toString();
+
+    const partyChange = await editReceiptRequest(receipt._id, {
+      party_id: anotherPartyId,
+    });
+    expect(partyChange.status).toBe(400);
+    expect(partyChange.body.message).toBe("Receipt party cannot be changed");
+
+    const partyNameChange = await editReceiptRequest(receipt._id, {
+      party_name: "Changed Party Name",
+    });
+    expect(partyNameChange.status).toBe(400);
+
+    const identityChange = await editReceiptRequest(receipt._id, {
+      request_id: "different-request-id",
+      voucher_number: "RCP-999",
+    });
+    expect(identityChange.status).toBe(400);
+    const stored = await Receipt.findById(receipt._id).lean();
+    expect(stored.request_id).toBe(receipt.request_id);
+    expect(stored.voucher_number).toBe(receipt.voucher_number);
+  });
+
+  it("rejects cancelled and stale edits", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    const stalePayload = await buildReceiptEditPayload(receiptId, {
+      narration: "Stale edit",
+    });
+
+    const firstEdit = await editReceiptRequest(receiptId, {
+      narration: "Winning edit",
+    });
+    expect(firstEdit.status).toBe(200);
+    const stale = await putReceiptEditPayload(receiptId, stalePayload);
+    expect(stale.status).toBe(409);
+
+    const cancelled = await cancelReceiptRequest(receiptId);
+    expect(cancelled.status).toBe(200);
+    const cancelledEdit = await editReceiptRequest(receiptId);
+    expect(cancelledEdit.status).toBe(400);
+    expect(cancelledEdit.body.message).toBe("Cancelled receipt cannot be edited");
+  });
+
+  it("allows only one of two edits using the same version to win", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    const payload = await buildReceiptEditPayload(receiptId);
+
+    const responses = await Promise.all([
+      putReceiptEditPayload(receiptId, { ...payload, narration: "Edit A" }),
+      putReceiptEditPayload(receiptId, { ...payload, narration: "Edit B" }),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    expect(await PartyLedger.countDocuments({ voucher_id: receiptId, status: "active" })).toBe(1);
+    expect(await CashBankLedger.countDocuments({ voucher_id: receiptId, status: "active" })).toBe(1);
+  });
+
+  it("rolls back completely when original linked accounting is missing", async () => {
+    const bill = await createOutstandingForParty({
+      billNo: "INV-EDIT-ROLLBACK",
+      billAmount: 500,
+      pendingAmount: 500,
+    });
+    const created = await createReceiptForTest({
+      amount: 500,
+      settlement_details: [buildSettlement(bill, 300)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+    await PartyLedger.deleteOne({ voucher_id: receiptId });
+
+    const response = await editReceiptRequest(receiptId, {
+      amount: 700,
+      settlement_details: [],
+    });
+    expect(response.status).toBe(409);
+    expect((await Receipt.findById(receiptId).lean()).amount).toBe(500);
+    expect((await Outstanding.findById(bill._id).lean()).bill_pending_amt).toBe(200);
+    expect((await CashBankLedger.findOne({ voucher_id: receiptId }).lean()).amount).toBe(500);
+  });
+
+  it("rejects duplicate or missing linked ledgers and inconsistent Outstanding/advance rows", async () => {
+    const duplicateLedgerReceipt = await createReceiptForTest();
+    const duplicateReceiptId = duplicateLedgerReceipt.body.data.cashTransaction._id;
+    const originalPartyLedger = await PartyLedger.findOne({ voucher_id: duplicateReceiptId }).lean();
+    delete originalPartyLedger._id;
+    delete originalPartyLedger.created_at;
+    delete originalPartyLedger.updated_at;
+    await PartyLedger.create(originalPartyLedger);
+    expect((await editReceiptRequest(duplicateReceiptId)).status).toBe(409);
+
+    const missingCashReceipt = await createReceiptForTest();
+    const missingCashId = missingCashReceipt.body.data.cashTransaction._id;
+    await CashBankLedger.deleteOne({ voucher_id: missingCashId });
+    expect((await editReceiptRequest(missingCashId)).status).toBe(409);
+
+    const bill = await createOutstandingForParty({
+      billNo: "INV-EDIT-INCONSISTENT",
+      billAmount: 400,
+      pendingAmount: 400,
+    });
+    const inconsistentReceipt = await createReceiptForTest({
+      amount: 500,
+      settlement_details: [buildSettlement(bill, 300)],
+    });
+    const inconsistentId = inconsistentReceipt.body.data.cashTransaction._id;
+    await Outstanding.findByIdAndUpdate(bill._id, { bill_pending_amt: 390 });
+    expect((await editReceiptRequest(inconsistentId)).status).toBe(409);
+
+    const advanceReceipt = await createReceiptForTest({ amount: 500 });
+    const advanceReceiptId = advanceReceipt.body.data.cashTransaction._id;
+    await Outstanding.findOneAndUpdate(
+      { billId: advanceReceiptId, source: "advance_receipt" },
+      { bill_pending_amt: -450 },
+    );
+    expect((await editReceiptRequest(advanceReceiptId)).status).toBe(409);
+  });
+
+  it("keeps Edit and Cancel race-safe and leaves one coherent cancelled state", async () => {
+    const created = await createReceiptForTest({ amount: 500 });
+    const receiptId = created.body.data.cashTransaction._id;
+    const editPayload = await buildReceiptEditPayload(receiptId, { amount: 650 });
+
+    const [editResponse, cancelResponse] = await Promise.all([
+      putReceiptEditPayload(receiptId, editPayload),
+      cancelReceiptRequest(receiptId),
+    ]);
+    expect(cancelResponse.status).toBe(200);
+    expect([200, 400, 409]).toContain(editResponse.status);
+
+    const [receipt, partyLedgers, cashLedgers] = await Promise.all([
+      Receipt.findById(receiptId).lean(),
+      PartyLedger.find({ voucher_id: receiptId }).lean(),
+      CashBankLedger.find({ voucher_id: receiptId }).lean(),
+    ]);
+    expect(receipt.status).toBe("cancelled");
+    expect(partyLedgers).toHaveLength(1);
+    expect(cashLedgers).toHaveLength(1);
+    expect(partyLedgers[0].status).toBe("cancelled");
+    expect(cashLedgers[0].status).toBe("cancelled");
+    const audit = await auditReceipt({ receiptId, companyId: baseContext.companyId });
+    expect(audit.audit.issues).toEqual([]);
+  });
+
+  it("rolls back a forced timeline failure and remains cancellable afterward", async () => {
+    const created = await createReceiptForTest({ amount: 500 });
+    const receiptId = created.body.data.cashTransaction._id;
+    vi.spyOn(voucherTimelineService, "updateVoucherTimelineEntry")
+      .mockRejectedValueOnce(new Error("Edit timeline failure"));
+
+    const response = await editReceiptRequest(receiptId, { amount: 750 });
+    expect(response.status).toBe(500);
+    expect((await Receipt.findById(receiptId).lean()).amount).toBe(500);
+    expect((await PartyLedger.findOne({ voucher_id: receiptId }).lean()).amount).toBe(500);
+    expect((await CashBankLedger.findOne({ voucher_id: receiptId }).lean()).amount).toBe(500);
+    expect((await PartyMonthlyBalance.findOne({ party_id: baseContext.party._id }).lean()).total_credit).toBe(500);
+
+    vi.restoreAllMocks();
+    const cancelled = await cancelReceiptRequest(receiptId);
+    expect(cancelled.status).toBe(200);
   });
 });
 

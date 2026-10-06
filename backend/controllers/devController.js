@@ -1,4 +1,5 @@
 import { resetSaleTransactions } from "../services/saleReset.service.js";
+import { resetAllTransactions } from "../services/transactionReset.service.js";
 
 export async function resetSales(req, res) {
   if (process.env.NODE_ENV !== "development") return res.status(404).end();
@@ -13,5 +14,18 @@ export async function resetSales(req, res) {
   } catch (error) {
     if (process.env.NODE_ENV !== "test") console.error("resetSales error:", error);
     return res.status(error.statusCode || 500).json({ success: false, message: error.message || "Failed to reset Sale transactions" });
+  }
+}
+
+export async function resetAllCompanyTransactions(req, res) {
+  if (process.env.NODE_ENV !== "development") return res.status(404).end();
+  if (req.body?.confirm !== "RESET_ALL_TRANSACTIONS") {
+    return res.status(400).json({ success: false, message: "confirm must equal RESET_ALL_TRANSACTIONS" });
+  }
+  try {
+    return res.status(200).json(await resetAllTransactions({ companyId: req.companyId }));
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") console.error("resetAllCompanyTransactions error:", error);
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || "Failed to reset transactions" });
   }
 }

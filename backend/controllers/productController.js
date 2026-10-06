@@ -223,7 +223,10 @@ export const listProducts = async (req, res) => {
     const [items, total] = await Promise.all([
       Product.find(filter)
         .populate(PRODUCT_POPULATE)
-        .sort({ _id: -1 })
+        // Product lists and voucher pickers share this endpoint, so sorting
+        // here keeps every paginated list consistently A–Z.
+        .sort({ product_name: 1, _id: 1 })
+        .collation({ locale: "en", strength: 2 })
         .skip(skip)
         .limit(limitNum)
         .lean(),

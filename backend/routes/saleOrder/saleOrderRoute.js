@@ -12,6 +12,12 @@ const router = express.Router();
 // 2) `requireCompanyAccess` verifies user can operate on the selected company and sets `req.companyId`
 // 3) Controller delegates all business/database work to service layer
 router.post("/", protect, requireCompanyAccess, saleOrderController.createSaleOrder);
+router.get(
+  "/by-request-id/:requestId",
+  protect,
+  requireCompanyAccess,
+  saleOrderController.getSaleOrderByRequestId,
+);
 
 // Fetch one sale order by document id.
 // Access scope is still enforced by company and creator scoping in service layer.

@@ -2,6 +2,7 @@ import {
   cancelSaleOrder as cancelSaleOrderService,
   createSaleOrder as createSaleOrderService,
   getSaleOrderById as getSaleOrderByIdService,
+  findSaleOrderByRequestId as findSaleOrderByRequestIdService,
   updateSaleOrder as updateSaleOrderService,
 } from "../services/saleOrder.service.js";
 
@@ -14,7 +15,7 @@ export async function createSaleOrder(req, res) {
   try {
     // Incoming payload is frontend-driven; service will perform deeper checks.
     const body = req.body || {};
-    const createdSaleOrder = await createSaleOrderService(
+    const result = await createSaleOrderService(
       {
         // Company is never trusted from body; use middleware-scoped company id.
         ...body,
@@ -22,14 +23,15 @@ export async function createSaleOrder(req, res) {
         // Support both mongoose `_id` and plain `id` shapes for user object.
         userId: req.user?._id || req.user?.id || null,
       },
-      req
+      req,
     );
 
     // Standard success envelope used across backend controllers.
-    return res.status(201).json({
+    return res.status(result.isIdempotentReplay ? 200 : 201).json({
       success: true,
+      idempotent_replay: result.isIdempotentReplay,
       data: {
-        saleOrder: createdSaleOrder,
+        saleOrder: result.saleOrder,
       },
     });
   } catch (error) {
@@ -59,7 +61,7 @@ export async function getSaleOrderById(req, res) {
     const saleOrder = await getSaleOrderByIdService(
       saleOrderId,
       { cmp_id: cmpId },
-      req
+      req,
     );
 
     // Service returns `null` if record not found or not accessible in scope.
@@ -81,6 +83,38 @@ export async function getSaleOrderById(req, res) {
     return res.status(500).json({
       success: false,
       message: error.message || "Failed to fetch sale order",
+    });
+  }
+}
+
+export async function getSaleOrderByRequestId(req, res) {
+  try {
+    const saleOrder = await findSaleOrderByRequestIdService(
+      req.params.requestId,
+      { cmp_id: req.companyId },
+      req,
+    );
+    if (!saleOrder) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Sale order not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      data: {
+        exists: true,
+        transaction_type: "sale_order",
+        request_id: saleOrder.request_id,
+        id: saleOrder._id,
+        voucher_number: saleOrder.voucher_number,
+        status: saleOrder.status,
+        created_at: saleOrder.created_at,
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to find Sale Order",
     });
   }
 }
@@ -107,7 +141,7 @@ export async function updateSaleOrder(req, res) {
         cmpId,
         userId: req.user?._id || req.user?.id || null,
       },
-      req
+      req,
     );
 
     return res.status(200).json({
@@ -146,7 +180,7 @@ export async function cancelSaleOrder(req, res) {
         cmpId,
         userId: req.user?._id || req.user?.id || null,
       },
-      req
+      req,
     );
 
     // Cancellation is a status change, so we return updated document snapshot.

@@ -71,6 +71,9 @@ const SaleOrderSchema = new Schema(
     // Company
     // Multi-tenant ownership boundary: every query must include this id.
     cmp_id: { type: Schema.Types.ObjectId, ref: "Company", required: true },
+    // Create-only idempotency identity. Historical orders can omit this.
+    request_id: { type: String, trim: true, maxlength: 128, default: null },
+    request_fingerprint: { type: String, default: null },
 
     // Voucher identity
     // Stored identity fields allow deterministic reconstruction of voucher number history.
@@ -146,6 +149,13 @@ SaleOrderSchema.index({ cmp_id: 1, "items.item_id": 1, date: -1 });
 
 // Voucher number lookup + duplicate prevention (company scoped)
 SaleOrderSchema.index({ cmp_id: 1, voucher_number: 1 }, { unique: true });
+SaleOrderSchema.index(
+  { cmp_id: 1, request_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { request_id: { $type: "string" } },
+  },
+);
 SaleOrderSchema.index({ cmp_id: 1, company_level_serial_number: 1 }, { unique: true });
 SaleOrderSchema.index(
   { cmp_id: 1, created_by: 1, user_level_serial_number: 1 },

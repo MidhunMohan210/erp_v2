@@ -16,6 +16,7 @@ export const getOutstandingByParty = async (req, res) => {
       classification = "",
       isCancelled,
       positiveOnly = "",
+      excludeZero = "",
       all = "",
     } = req.query;
     const cmp_id = req.companyId;
@@ -48,6 +49,10 @@ export const getOutstandingByParty = async (req, res) => {
 
     if (String(positiveOnly).toLowerCase() === "true") {
       baseFilter.bill_pending_amt = { $gt: 0 };
+    } else if (String(excludeZero).toLowerCase() === "true") {
+      // General Outstanding must retain both DR (+) and CR (-) rows while
+      // hiding fully settled rows only.
+      baseFilter.bill_pending_amt = { $ne: 0 };
     }
 
     const itemsQuery = Outstanding.find(
@@ -63,7 +68,7 @@ export const getOutstandingByParty = async (req, res) => {
         _id: 1,
       },
     )
-      .sort({ bill_date: 1 })
+      .sort({ bill_date: -1, _id: -1 })
       .lean();
 
     // Existing callers keep their pagination limit. Receipt allocation opts

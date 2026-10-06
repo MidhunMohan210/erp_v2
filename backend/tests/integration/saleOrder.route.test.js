@@ -86,6 +86,7 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
   const finalAmount = basePrice + taxAmount;
 
   return {
+    request_id: new mongoose.Types.ObjectId().toString(),
     cmp_id: null,
     cmpId: null,
     transactionDate: "2026-06-27",
