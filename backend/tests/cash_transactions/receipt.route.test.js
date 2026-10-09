@@ -165,6 +165,24 @@ async function createOutstandingForParty({
   });
 }
 
+// This is the authoritative shape written by Sale cancellation when an active
+// Receipt still settles the Sale Outstanding. Receipt Edit must reverse only
+// that Receipt contribution before creating an advance or a new allocation.
+async function setCancelledSaleOutstandingCredit(outstanding, settledAmount) {
+  await Outstanding.updateOne(
+    { _id: outstanding._id },
+    {
+      $set: {
+        bill_amount: 0,
+        bill_pending_amt: -settledAmount,
+        classification: "cr",
+        isCancelled: false,
+        source: "sale",
+      },
+    },
+  );
+}
+
 function buildSettlement(outstanding, settledAmount, overrides = {}) {
   const previousAmount = Number(outstanding.bill_pending_amt) || 0;
 
@@ -407,6 +425,42 @@ function getReceiptEditAvailability(receiptId, token = baseContext.token) {
     .get(`/api/cash-transactions/${receiptId}/edit-allocation-availability`)
     .set("Authorization", `Bearer ${token}`)
     .set("X-Company-Id", String(baseContext.companyId));
+}
+
+async function createReceiptSnapshotScenario() {
+  const billA = await createOutstandingForParty({
+    billNo: "INV-SNAPSHOT-A",
+    billAmount: 100,
+    pendingAmount: 100,
+  });
+  const billB = await createOutstandingForParty({
+    billNo: "INV-SNAPSHOT-B",
+    billAmount: 100,
+    pendingAmount: 100,
+  });
+  const billC = await createOutstandingForParty({
+    billNo: "INV-SNAPSHOT-C",
+    billAmount: 100,
+    pendingAmount: 100,
+  });
+  const firstReceipt = await createReceiptForTest({
+    amount: 150,
+    settlement_details: [
+      buildSettlement(billA, 100),
+      buildSettlement(billB, 50),
+    ],
+  });
+  await createReceiptForTest({
+    amount: 50,
+    settlement_details: [buildSettlement(billB, 50)],
+  });
+
+  return {
+    billA,
+    billB,
+    billC,
+    firstReceiptId: firstReceipt.body.data.cashTransaction._id,
+  };
 }
 
 function getReceiptRequest(receiptId, companyId = baseContext.companyId, token = baseContext.token) {
@@ -1768,6 +1822,308 @@ describe("GET /api/cash-transactions/by-request-id/:requestId", () => {
 });
 
 describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
+  it("keeps the Receipt detail snapshot unchanged after a later Receipt settles the same bill", async () => {
+    const { firstReceiptId, billA, billB, billC } =
+      await createReceiptSnapshotScenario();
+
+    const response = await getReceiptRequest(firstReceiptId);
+    expect(response.status).toBe(200);
+
+    const details = response.body.data.cashTransaction.settlement_details;
+    expect(details).toHaveLength(2);
+    expect(details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          outstanding: String(billA._id),
+          outstanding_number: "INV-SNAPSHOT-A",
+          previous_outstanding_amount: 100,
+          settled_amount: 100,
+          remaining_outstanding_amount: 0,
+        }),
+        expect.objectContaining({
+          outstanding: String(billB._id),
+          outstanding_number: "INV-SNAPSHOT-B",
+          previous_outstanding_amount: 100,
+          settled_amount: 50,
+          remaining_outstanding_amount: 50,
+        }),
+      ]),
+    );
+    expect(
+      details.some((detail) => detail.outstanding === String(billC._id)),
+    ).toBe(false);
+  });
+
+  it("uses current pending plus this Receipt settlement for edit availability", async () => {
+    const { firstReceiptId, billA, billB, billC } =
+      await createReceiptSnapshotScenario();
+
+    const response = await getReceiptEditAvailability(firstReceiptId);
+    expect(response.status).toBe(200);
+
+    const availabilityById = new Map(
+      response.body.data.items.map((item) => [item._id, item]),
+    );
+    expect(availabilityById.get(String(billA._id))).toMatchObject({
+      current_pending: 0,
+      original_settled_amount: 100,
+      editable_available: 100,
+      originally_allocated: true,
+    });
+    expect(availabilityById.get(String(billB._id))).toMatchObject({
+      current_pending: 0,
+      original_settled_amount: 50,
+      editable_available: 50,
+      originally_allocated: true,
+    });
+    expect(availabilityById.get(String(billC._id))).toMatchObject({
+      current_pending: 100,
+      original_settled_amount: 0,
+      editable_available: 100,
+      originally_allocated: false,
+    });
+  });
+
+  it("treats a cancelled Sale credit explained by this Receipt as a reversal target", async () => {
+    const cancelledSaleBill = await createOutstandingForParty({
+      billNo: "INV-EDIT-CANCELLED-SALE",
+      billAmount: 100,
+      pendingAmount: 100,
+    });
+    const created = await createReceiptForTest({
+      amount: 60,
+      settlement_details: [buildSettlement(cancelledSaleBill, 60)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    await setCancelledSaleOutstandingCredit(cancelledSaleBill, 60);
+
+    const response = await getReceiptEditAvailability(receiptId);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.original_allocations).toEqual([
+      { outstanding: String(cancelledSaleBill._id), settled_amount: 60 },
+    ]);
+    expect(
+      response.body.data.items.some(
+        (item) => item._id === String(cancelledSaleBill._id),
+      ),
+    ).toBe(false);
+  });
+
+  it("moves a cancelled Sale settlement to one Receipt advance without duplicate credit", async () => {
+    const cancelledSaleBill = await createOutstandingForParty({
+      billNo: "INV-EDIT-CANCELLED-ADVANCE",
+      billAmount: 100,
+      pendingAmount: 100,
+    });
+    const created = await createReceiptForTest({
+      amount: 60,
+      settlement_details: [buildSettlement(cancelledSaleBill, 60)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    await setCancelledSaleOutstandingCredit(cancelledSaleBill, 60);
+
+    const edit = await editReceiptRequest(receiptId, {
+      settlement_details: [],
+    });
+    expect(edit.status).toBe(200);
+    expect(edit.body.data.cashTransaction).toMatchObject({
+      amount: 60,
+      advance_amount: 60,
+      settlement_details: [],
+    });
+
+    const [updatedSaleOutstanding, advances] = await Promise.all([
+      Outstanding.findById(cancelledSaleBill._id).lean(),
+      Outstanding.find({
+        cmp_id: baseContext.companyId,
+        billId: receiptId,
+        source: "advance_receipt",
+      }).lean(),
+    ]);
+    expect(updatedSaleOutstanding).toMatchObject({
+      bill_amount: 0,
+      bill_pending_amt: 0,
+      classification: "dr",
+      isCancelled: true,
+    });
+    expect(advances).toHaveLength(1);
+    expect(advances[0]).toMatchObject({
+      bill_amount: 60,
+      bill_pending_amt: -60,
+      classification: "cr",
+      isCancelled: false,
+    });
+  });
+
+  it("reallocates a cancelled Sale settlement to another current debit bill", async () => {
+    const cancelledSaleBill = await createOutstandingForParty({
+      billNo: "INV-EDIT-CANCELLED-REALLOCATE",
+      billAmount: 100,
+      pendingAmount: 100,
+    });
+    const activeBill = await createOutstandingForParty({
+      billNo: "INV-EDIT-ACTIVE-REALLOCATE",
+      billAmount: 100,
+      pendingAmount: 100,
+    });
+    const created = await createReceiptForTest({
+      amount: 60,
+      settlement_details: [buildSettlement(cancelledSaleBill, 60)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    await setCancelledSaleOutstandingCredit(cancelledSaleBill, 60);
+
+    const edit = await editReceiptRequest(receiptId, {
+      settlement_details: [
+        { outstanding: String(activeBill._id), settled_amount: 60 },
+      ],
+    });
+    expect(edit.status).toBe(200);
+    expect(edit.body.data.cashTransaction).toMatchObject({
+      advance_amount: 0,
+      settlement_details: [
+        expect.objectContaining({ outstanding: String(activeBill._id), settled_amount: 60 }),
+      ],
+    });
+
+    const [updatedSaleOutstanding, updatedActiveBill, advances] =
+      await Promise.all([
+        Outstanding.findById(cancelledSaleBill._id).lean(),
+        Outstanding.findById(activeBill._id).lean(),
+        Outstanding.find({
+          cmp_id: baseContext.companyId,
+          billId: receiptId,
+          source: "advance_receipt",
+        }).lean(),
+      ]);
+    expect(updatedSaleOutstanding).toMatchObject({
+      bill_pending_amt: 0,
+      classification: "dr",
+      isCancelled: true,
+    });
+    expect(updatedActiveBill).toMatchObject({
+      bill_pending_amt: 40,
+      classification: "dr",
+    });
+    expect(advances).toHaveLength(0);
+  });
+
+  it("replaces the historical settlement snapshot after a successful Edit", async () => {
+    const { firstReceiptId, billA, billB, billC } =
+      await createReceiptSnapshotScenario();
+
+    const edit = await editReceiptRequest(firstReceiptId, {
+      amount: 150,
+      settlement_details: [
+        { outstanding: String(billA._id), settled_amount: 50 },
+        { outstanding: String(billC._id), settled_amount: 100 },
+      ],
+    });
+    expect(edit.status).toBe(200);
+
+    const detailResponse = await getReceiptRequest(firstReceiptId);
+    const details = detailResponse.body.data.cashTransaction.settlement_details;
+    expect(details).toHaveLength(2);
+    expect(details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          outstanding: String(billA._id),
+          previous_outstanding_amount: 100,
+          settled_amount: 50,
+          remaining_outstanding_amount: 50,
+        }),
+        expect.objectContaining({
+          outstanding: String(billC._id),
+          previous_outstanding_amount: 100,
+          settled_amount: 100,
+          remaining_outstanding_amount: 0,
+        }),
+      ]),
+    );
+    expect(
+      details.some((detail) => detail.outstanding === String(billB._id)),
+    ).toBe(false);
+  });
+
+  it("keeps the snapshot and accounting unchanged when an Edit transaction fails", async () => {
+    const { firstReceiptId, billA, billB, billC } =
+      await createReceiptSnapshotScenario();
+    const [receiptBefore, partyLedgerBefore, cashLedgerBefore] =
+      await Promise.all([
+        Receipt.findById(firstReceiptId).lean(),
+        PartyLedger.findOne({ voucher_id: firstReceiptId }).lean(),
+        CashBankLedger.findOne({ voucher_id: firstReceiptId }).lean(),
+      ]);
+
+    vi.spyOn(voucherTimelineService, "updateVoucherTimelineEntry")
+      .mockRejectedValueOnce(new Error("Snapshot rollback test failure"));
+    const edit = await editReceiptRequest(firstReceiptId, {
+      amount: 150,
+      settlement_details: [
+        { outstanding: String(billA._id), settled_amount: 50 },
+        { outstanding: String(billC._id), settled_amount: 100 },
+      ],
+    });
+    expect(edit.status).toBe(500);
+
+    const [
+      receiptAfter,
+      partyLedgerAfter,
+      cashLedgerAfter,
+      currentA,
+      currentB,
+      currentC,
+    ] = await Promise.all([
+      Receipt.findById(firstReceiptId).lean(),
+      PartyLedger.findOne({ voucher_id: firstReceiptId }).lean(),
+      CashBankLedger.findOne({ voucher_id: firstReceiptId }).lean(),
+      Outstanding.findById(billA._id).lean(),
+      Outstanding.findById(billB._id).lean(),
+      Outstanding.findById(billC._id).lean(),
+    ]);
+    expect(receiptAfter.settlement_details).toEqual(
+      receiptBefore.settlement_details,
+    );
+    expect(receiptAfter.amount).toBe(receiptBefore.amount);
+    expect(partyLedgerAfter.amount).toBe(partyLedgerBefore.amount);
+    expect(cashLedgerAfter.amount).toBe(cashLedgerBefore.amount);
+    expect(currentA.bill_pending_amt).toBe(0);
+    expect(currentB.bill_pending_amt).toBe(0);
+    expect(currentC.bill_pending_amt).toBe(100);
+  });
+
+  it("keeps a fully settled original bill in both detail snapshot and edit availability", async () => {
+    const { firstReceiptId, billA } = await createReceiptSnapshotScenario();
+
+    const [detailResponse, availabilityResponse] = await Promise.all([
+      getReceiptRequest(firstReceiptId),
+      getReceiptEditAvailability(firstReceiptId),
+    ]);
+    const historicalBill =
+      detailResponse.body.data.cashTransaction.settlement_details.find(
+        (detail) => detail.outstanding === String(billA._id),
+      );
+    const editableBill = availabilityResponse.body.data.items.find(
+      (item) => item._id === String(billA._id),
+    );
+
+    expect(historicalBill).toMatchObject({
+      previous_outstanding_amount: 100,
+      settled_amount: 100,
+      remaining_outstanding_amount: 0,
+    });
+    expect(editableBill).toMatchObject({
+      current_pending: 0,
+      original_settled_amount: 100,
+      editable_available: 100,
+      originally_allocated: true,
+    });
+  });
+
   it("supports narration-only and no-op edits without changing voucher identity", async () => {
     const created = await createReceiptForTest({ narration: "Original" });
     const original = created.body.data.cashTransaction;

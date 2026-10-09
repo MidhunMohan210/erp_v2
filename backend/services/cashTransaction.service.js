@@ -621,10 +621,20 @@ async function loadOriginalSettlementAvailability(receipt, session) {
     const currentPending = Number(outstanding.bill_pending_amt) || 0;
     const expectedClassification = currentPending < 0 ? "cr" : "dr";
     const editableAvailable = currentPending + settledAmount;
+    // Cancelling a Sale leaves its Outstanding active while an active Receipt
+    // still references it. That row is a CR reversal target, not a new bill:
+    // removing this Receipt's own settlement must bring the row exactly to 0.
+    const isCancelledSaleReversalTarget =
+      outstanding.source === "sale" &&
+      sameAmount(outstanding.bill_amount, 0) &&
+      currentPending < 0 &&
+      sameAmount(editableAvailable, 0);
     if (
       outstanding.classification !== expectedClassification ||
-      editableAvailable <= 0 ||
-      editableAvailable - Number(outstanding.bill_amount) > MONEY_TOLERANCE
+      (!isCancelledSaleReversalTarget &&
+        (editableAvailable <= 0 ||
+          editableAvailable - Number(outstanding.bill_amount) >
+            MONEY_TOLERANCE))
     ) {
       throw createHttpError(
         "Outstanding cannot be restored safely for Receipt edit",
@@ -1190,8 +1200,18 @@ export async function updateCashTransaction(id, data = {}, req) {
       for (const [outstandingId, outstanding] of replacement.documentsById) {
         const available = replacement.availabilityById.get(outstandingId);
         const desiredAmount = replacement.desiredById.get(outstandingId) || 0;
-        outstanding.bill_pending_amt = available - desiredAmount;
-        outstanding.classification = "dr";
+        const nextPendingAmount = available - desiredAmount;
+        outstanding.bill_pending_amt = nextPendingAmount;
+        outstanding.classification = nextPendingAmount < 0 ? "cr" : "dr";
+        // Once the last Receipt reference is removed from a cancelled Sale,
+        // its zero-balance Outstanding can return to the Sale-cancelled state.
+        if (
+          outstanding.source === "sale" &&
+          sameAmount(outstanding.bill_amount, 0) &&
+          sameAmount(nextPendingAmount, 0)
+        ) {
+          outstanding.isCancelled = true;
+        }
         await outstanding.save({ session });
       }
 

@@ -182,6 +182,39 @@ current pending amount plus this Receipt's stored settlement contribution. This
 keeps fully settled original bills selectable and does not rely on stale
 remaining-balance snapshots.
 
+The normal Receipt detail response already returns each stored
+`settlement_details` row. That row is the historical display snapshot created
+by the latest successful Create or Edit and contains:
+
+- `outstanding_number` and `outstanding_date`
+- `previous_outstanding_amount` (the available amount before this Receipt)
+- `settled_amount` (the amount applied by this Receipt)
+- `remaining_outstanding_amount` (the balance immediately after this Receipt)
+
+The initial Edit screen must render only these stored rows. It must not query
+today's Outstanding values to reconstruct that historical section. A later
+Receipt settling the same bill therefore cannot change what the earlier
+Receipt displays.
+
+These snapshot values are display-only. When the user changes the Receipt
+amount or chooses to change allocations, the client must load
+`edit-allocation-availability` and use its current authoritative values. The
+backend continues to calculate:
+
+```text
+editable_available = current_pending + original_settled_amount
+```
+
+The availability response includes originally allocated bills even when their
+current pending amount is zero, plus other currently available bills for the
+stored Receipt party. Party remains immutable.
+
+After a successful Edit, `settlement_details` is replaced by a new snapshot of
+the committed allocation. If any Edit write fails, the MongoDB transaction
+rolls back the Receipt snapshot together with Outstanding, ledger, monthly
+balance, advance, and timeline changes. This is current-state history only;
+full Receipt revision history is not stored.
+
 The submitted Edit settlement list is a complete replacement. The backend
 logically restores all original settlements, validates and applies the new
 list, and recalculates `advance_amount`. A single advance Outstanding row is
