@@ -12,8 +12,6 @@
     "repair-cash-bank-sales": "node utils/repairCashBankSales.js",
     "migrate-cash-bank-ledger-sides": "node utils/migrateCashBankLedgerSides.js",
     "migrate-cash-bank-voucher-models": "node utils/migrateCashBankLedgerVoucherModels.js",
-    "indexes:check": "node utils/indexManager/cli.js check",
-    "indexes:create": "node utils/indexManager/cli.js create",
     "test": "cross-env NODE_ENV=test vitest run",
     "test:watch": "cross-env NODE_ENV=test vitest",
     "test:coverage": "cross-env NODE_ENV=test vitest run --coverage"
