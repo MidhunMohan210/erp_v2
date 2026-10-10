@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate } from "react-router-dom";
@@ -11,31 +11,28 @@ import ItemsSection from "@/components/sales/create/ItemsSection";
 import MailingNameSection from "@/components/sales/create/MailingNameSection";
 import PartySection from "@/components/sales/create/PartySection";
 import SummarySection from "@/components/sales/create/SummarySection";
+import TransactionHeader from "@/components/TransactionHeader";
 import { useCreateSaleOrder } from "@/hooks/mutations/useCreateSaleOrder";
 import { saleOrderQueryKeys } from "@/hooks/queries/saleOrderQueries";
 import { invalidateVoucherSummaryForCompany } from "@/hooks/queries/voucherQueries";
 import { voucherSeriesKeys } from "@/hooks/queries/voucherSeriesQueries";
-import TransactionHeader from "@/components/TransactionHeader";
 import { ROUTES } from "@/routes/paths";
 import { resetSaleOrderDraft, setCompany } from "@/store/slices/transactionSlice";
-import { clearSaleOrderDraftStorage } from "@/utils/transactionStorage";
 import {
-  clearPendingSubmission,
+  clearLegacyPendingSubmissions,
+  createInMemorySubmission,
   generateRequestId,
-  readPendingSubmission,
-  savePendingSubmission,
 } from "@/utils/idempotentSubmissionStorage";
+import { clearSaleOrderDraftStorage } from "@/utils/transactionStorage";
 
-// Sale-order creation page (frontend entry point).
-// This page does not do heavy calculations by itself; it orchestrates:
-// - UI sections (party/details/items/charges/summary)
-// - draft state from Redux
-// - final payload build + create mutation
+function isUncertainCreateError(error) {
+  const status = error?.response?.status;
+  return !error?.response || status === 409 || status >= 500;
+}
+
 export default function SaleOrderCreatePage() {
-  // Company id decides tenant scope for all downstream APIs.
   const cmp_id = useSelector((state) => state.company.selectedCompanyId);
   const authenticatedUser = useSelector((state) => state.auth.user);
-  // Transaction draft pieces collected from individual sections.
   const party = useSelector((state) => state.transaction.party);
   const mailingName = useSelector((state) => state.transaction.mailingName);
   const items = useSelector((state) => state.transaction.items);
@@ -50,51 +47,63 @@ export default function SaleOrderCreatePage() {
   const buildHeaderPayloadRef = useRef(null);
   const submissionInFlightRef = useRef(false);
   const pendingSubmissionRef = useRef(null);
+  const activeVisitRef = useRef(true);
+  const previousScopeRef = useRef(null);
   const [headerReady, setHeaderReady] = useState(false);
   const [pendingSubmission, setPendingSubmission] = useState(null);
   const [recoveryState, setRecoveryState] = useState("idle");
   const userId =
     authenticatedUser?._id || authenticatedUser?.id || authenticatedUser?.user_id || null;
-  const submissionScope = useMemo(
-    () =>
-      cmp_id && userId
-        ? { companyId: cmp_id, userId, module: "sale-order-create" }
-        : null,
-    [cmp_id, userId],
-  );
 
-  // Keep transaction slice company context aligned with currently selected company.
-  // This helps when user switches company and then opens create order directly.
   useEffect(() => {
-    if (!cmp_id) return;
-
-    dispatch(setCompany({ cmp_id }));
-  }, [cmp_id, dispatch]);
-
-  const completeSaleOrder = useCallback(
-    (saleOrder) => {
-      if (!saleOrder?._id) return;
-
-      try {
-        if (submissionScope) clearPendingSubmission(submissionScope);
-      } catch {
-        // A successful backend response remains authoritative even if browser
-        // storage is no longer available.
-      }
+    activeVisitRef.current = true;
+    return () => {
+      activeVisitRef.current = false;
+      submissionInFlightRef.current = false;
       pendingSubmissionRef.current = null;
-      setPendingSubmission(null);
-      setRecoveryState("idle");
-      clearSaleOrderDraftStorage(cmp_id);
+    };
+  }, []);
+
+  // Persistent recovery was intentionally retired. Remove both legacy formats
+  // without reading or reconciling either one.
+  useEffect(() => {
+    let disposed = false;
+    if (cmp_id && userId) {
+      clearLegacyPendingSubmissions({
+        companyId: cmp_id,
+        userId,
+        module: "sale-order-create",
+      });
+    }
+    pendingSubmissionRef.current = null;
+    submissionInFlightRef.current = false;
+    queueMicrotask(() => {
+      if (!disposed && activeVisitRef.current) {
+        setPendingSubmission(null);
+        setRecoveryState("idle");
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [cmp_id, userId]);
+
+  useEffect(() => {
+    const nextScope = cmp_id && userId ? { companyId: cmp_id, userId } : null;
+    const previousScope = previousScopeRef.current;
+    previousScopeRef.current = nextScope;
+
+    if (
+      previousScope &&
+      (!nextScope ||
+        previousScope.companyId !== nextScope.companyId ||
+        previousScope.userId !== nextScope.userId)
+    ) {
+      clearSaleOrderDraftStorage(previousScope.companyId);
       dispatch(resetSaleOrderDraft());
-      navigate(
-        ROUTES.transactionDetail
-          .replace(":voucherType", "saleOrder")
-          .replace(":voucherId", saleOrder._id),
-        { state: { transaction: saleOrder } },
-      );
-    },
-    [cmp_id, dispatch, navigate, submissionScope],
-  );
+    }
+    if (cmp_id) dispatch(setCompany({ cmp_id }));
+  }, [cmp_id, dispatch, userId]);
 
   const refreshRecoveredSaleOrderQueries = useCallback(async () => {
     if (!cmp_id) return;
@@ -110,30 +119,50 @@ export default function SaleOrderCreatePage() {
     ]);
   }, [cmp_id, queryClient]);
 
+  const completeSaleOrder = useCallback(
+    (saleOrder) => {
+      if (!activeVisitRef.current || !saleOrder?._id) return;
+
+      pendingSubmissionRef.current = null;
+      setPendingSubmission(null);
+      setRecoveryState("idle");
+      clearSaleOrderDraftStorage(cmp_id);
+      dispatch(resetSaleOrderDraft());
+      navigate(
+        ROUTES.transactionDetail
+          .replace(":voucherType", "saleOrder")
+          .replace(":voucherId", saleOrder._id),
+        { state: { transaction: saleOrder } },
+      );
+    },
+    [cmp_id, dispatch, navigate],
+  );
+
   const reconcilePendingSubmission = useCallback(
-    async (record, { absentState = "retryable" } = {}) => {
-      if (!record || !cmp_id) return "unresolved";
+    async (record) => {
+      if (!record || !cmp_id || !activeVisitRef.current) return;
       setRecoveryState("checking");
 
       try {
         const result = await saleOrderService.getSaleOrderByRequestId(record.requestId, {
           cmpId: cmp_id,
         });
+        if (
+          !activeVisitRef.current ||
+          pendingSubmissionRef.current?.requestId !== record.requestId
+        ) return;
         if (!result?.id) {
-          setRecoveryState("unresolved");
-          return "unresolved";
+          setRecoveryState("unconfirmed");
+          return;
         }
 
         await refreshRecoveredSaleOrderQueries();
         completeSaleOrder({ _id: result.id });
-        return "found";
-      } catch (error) {
-        if (error?.response?.status === 404) {
-          setRecoveryState(absentState);
-          return "absent";
-        }
-        setRecoveryState("unresolved");
-        return "unresolved";
+      } catch {
+        if (
+          activeVisitRef.current &&
+          pendingSubmissionRef.current?.requestId === record.requestId
+        ) setRecoveryState("unconfirmed");
       }
     },
     [cmp_id, completeSaleOrder, refreshRecoveredSaleOrderQueries],
@@ -141,107 +170,43 @@ export default function SaleOrderCreatePage() {
 
   const handleCreateError = useCallback(
     async (error, variables) => {
-      const record = pendingSubmissionRef.current?.requestId === variables?.request_id
-        ? pendingSubmissionRef.current
-        : null;
+      if (!activeVisitRef.current) return;
+      const record =
+        pendingSubmissionRef.current?.requestId === variables?.request_id
+          ? pendingSubmissionRef.current
+          : null;
       if (!record) return;
 
-      const status = error?.response?.status;
-      if (status === 400) {
-        // A 400 is definitive only after lookup confirms this request did not
-        // create a document. Keep the editable Redux form intact either way.
-        const outcome = await reconcilePendingSubmission(record);
-        if (outcome === "absent") {
-          try {
-            clearPendingSubmission(submissionScope);
-          } catch {
-            // The server confirmation is sufficient; the next submit will
-            // still be blocked if storage cannot be safely cleared.
-          }
-          pendingSubmissionRef.current = null;
-          setPendingSubmission(null);
-          setRecoveryState("idle");
-        }
+      if (!isUncertainCreateError(error)) {
+        pendingSubmissionRef.current = null;
+        setPendingSubmission(null);
+        setRecoveryState("idle");
         return;
       }
 
-      await reconcilePendingSubmission(record, {
-        absentState: status === 409 ? "conflict" : "retryable",
-      });
+      await reconcilePendingSubmission(record);
     },
-    [reconcilePendingSubmission, submissionScope],
+    [reconcilePendingSubmission],
   );
 
-  // API mutation preserves existing cache invalidation, toast, and navigation.
   const createSaleOrderMutation = useCreateSaleOrder({
     cmp_id,
-    onSuccess: (data) => completeSaleOrder(data?.data?.saleOrder),
+    onSuccess: (data, variables) => {
+      if (pendingSubmissionRef.current?.requestId !== variables?.request_id) return;
+      completeSaleOrder(data?.data?.saleOrder);
+    },
     onError: handleCreateError,
   });
 
-  // TransactionHeader exposes a callback that returns latest date/series/number payload.
-  // We store that callback in a ref so submit handler can read it synchronously.
   const handleHeaderReady = useCallback((builder) => {
     buildHeaderPayloadRef.current = builder;
     setHeaderReady(Boolean(builder));
   }, []);
 
-  // Recover a browser-refresh or uncertain-response submission. This lookup is
-  // deliberately read-only: it never auto-posts the saved payload.
-  useEffect(() => {
-    let disposed = false;
-    const updateRecoveryState = (next) => {
-      queueMicrotask(() => {
-        if (!disposed) next();
-      });
-    };
-
-    if (!submissionScope) {
-      pendingSubmissionRef.current = null;
-      updateRecoveryState(() => {
-        setPendingSubmission(null);
-        setRecoveryState("idle");
-      });
-      return () => {
-        disposed = true;
-      };
-    }
-
-    const loaded = readPendingSubmission(submissionScope);
-    if (loaded.issue) {
-      pendingSubmissionRef.current = null;
-      updateRecoveryState(() => {
-        setPendingSubmission(null);
-        setRecoveryState(loaded.issue === "malformed" ? "malformed" : "unresolved");
-      });
-      return () => {
-        disposed = true;
-      };
-    }
-    if (!loaded.record) {
-      pendingSubmissionRef.current = null;
-      updateRecoveryState(() => {
-        setPendingSubmission(null);
-        setRecoveryState("idle");
-      });
-      return () => {
-        disposed = true;
-      };
-    }
-
-    pendingSubmissionRef.current = loaded.record;
-    updateRecoveryState(() => setPendingSubmission(loaded.record));
-    updateRecoveryState(() => reconcilePendingSubmission(loaded.record));
-    return () => {
-      disposed = true;
-    };
-  }, [reconcilePendingSubmission, submissionScope]);
-
-  const submitSavedPayload = useCallback(
+  const submitFrozenPayload = useCallback(
     (record) => {
-      if (!record || submissionInFlightRef.current) return;
+      if (!record || submissionInFlightRef.current || !activeVisitRef.current) return;
       submissionInFlightRef.current = true;
-      setRecoveryState("checking");
       createSaleOrderMutation.mutate(record.payload, {
         onSettled: () => {
           submissionInFlightRef.current = false;
@@ -251,9 +216,8 @@ export default function SaleOrderCreatePage() {
     [createSaleOrderMutation],
   );
 
-  // Final "Create" action persists an immutable normalized payload before POST.
   const handleCreateSaleOrder = () => {
-    if (submissionInFlightRef.current || pendingSubmission || !submissionScope) return;
+    if (submissionInFlightRef.current || pendingSubmission || !cmp_id || !userId) return;
 
     const headerPayload = buildHeaderPayloadRef.current
       ? buildHeaderPayloadRef.current()
@@ -273,37 +237,24 @@ export default function SaleOrderCreatePage() {
         headerPayload,
         requestId,
       });
-      const record = savePendingSubmission(submissionScope, { requestId, payload });
+      const record = createInMemorySubmission(requestId, payload);
       pendingSubmissionRef.current = record;
       setPendingSubmission(record);
-      submitSavedPayload(record);
+      setRecoveryState("submitting");
+      submitFrozenPayload(record);
     } catch (error) {
-      toast.error(error?.message || "Unable to safely save this sales order request.");
+      toast.error(error?.message || "Unable to safely create this sales order request.");
     }
   };
 
   const handleRetryPending = useCallback(() => {
     if (!pendingSubmission || submissionInFlightRef.current) return;
-    if (recoveryState === "conflict") {
-      reconcilePendingSubmission(pendingSubmission, { absentState: "conflict" });
-      return;
-    }
-    submitSavedPayload(pendingSubmission);
-  }, [pendingSubmission, reconcilePendingSubmission, recoveryState, submitSavedPayload]);
-
-  const handleDiscardMalformedPending = useCallback(() => {
-    try {
-      clearPendingSubmission(submissionScope);
-      pendingSubmissionRef.current = null;
-      setRecoveryState("idle");
-    } catch (error) {
-      toast.error(error?.message || "Unable to discard the saved request.");
-    }
-  }, [submissionScope]);
+    setRecoveryState("submitting");
+    submitFrozenPayload(pendingSubmission);
+  }, [pendingSubmission, submitFrozenPayload]);
 
   const createLoading =
     createSaleOrderMutation.isPending || createSaleOrderMutation.isLoading;
-  // Guard rails for create CTA.
   const hasParty = Boolean(party?._id || party?.id);
   const hasItems = items.length > 0;
   const disableCreate = !cmp_id || !userId || !headerReady || !hasParty || !hasItems;
@@ -317,10 +268,7 @@ export default function SaleOrderCreatePage() {
         onHeaderReady={handleHeaderReady}
       />
 
-      <main
-        className="flex-1 overflow-y-auto px-1 py-4"
-        data-route-scroll-reset="true"
-      >
+      <main className="flex-1 overflow-y-auto px-1 py-4" data-route-scroll-reset="true">
         <div className="mx-auto flex max-w-5xl flex-col gap-4">
           <PartySection />
           <MailingNameSection />
@@ -335,7 +283,7 @@ export default function SaleOrderCreatePage() {
             recoveryState={recoveryState}
             pendingSubmission={pendingSubmission}
             onRetryPending={handleRetryPending}
-            onDiscardPending={handleDiscardMalformedPending}
+            onCheckPending={() => reconcilePendingSubmission(pendingSubmission)}
           />
         </div>
       </main>

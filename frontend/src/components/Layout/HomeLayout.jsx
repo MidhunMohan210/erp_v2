@@ -17,6 +17,7 @@ import {
   resetSaleOrderDraft,
 } from "@/store/slices/transactionSlice";
 import { clearSaleOrderDraftStorage } from "@/utils/transactionStorage";
+import { clearCashTransactionDraftStorage } from "@/hooks/useCashTransactionDraft";
 
 import CompanyDrawer from "./home-layout/CompanyDrawer";
 import CompanySwitchOverlay from "./home-layout/CompanySwitchOverlay";
@@ -30,8 +31,7 @@ function isSaleOrderContextPath(pathname) {
 
   return (
     pathname === ROUTES.createOrder ||
-    pathname === ROUTES.salesSelectItems ||
-    /^\/sale-orders\/[^/]+\/edit$/.test(pathname)
+    pathname === ROUTES.salesSelectItems
   );
 }
 
@@ -136,6 +136,14 @@ function useHomeLayoutState() {
     ) {
       clearSaleOrderDraftStorage(transactionCompanyId || selectedCompanyId);
       dispatch(resetSaleOrderDraft());
+    }
+
+    if (
+      previousPathname !== currentPathname &&
+      previousPathname === ROUTES.createReceipt &&
+      currentPathname !== ROUTES.createReceipt
+    ) {
+      clearCashTransactionDraftStorage(selectedCompanyId, "receipt");
     }
 
     if (

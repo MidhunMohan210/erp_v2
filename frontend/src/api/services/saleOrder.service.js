@@ -42,6 +42,8 @@ export function buildCreateSaleOrderPayload({
     voucherPrefix: normalizeOptionalVoucherPart(headerPayload?.voucherPrefix),
     voucherSuffix: normalizeOptionalVoucherPart(headerPayload?.voucherSuffix),
   };
+  delete sanitizedHeaderPayload.request_id;
+  delete sanitizedHeaderPayload.request_fingerprint;
 
   return {
     ...sanitizedHeaderPayload,
@@ -255,6 +257,7 @@ export function buildUpdateSaleOrderPayload({
   // Guard against a future caller accidentally passing a create request ID
   // through edit state. Existing edit/cancel behavior remains _id based.
   delete basePayload.request_id;
+  delete basePayload.request_fingerprint;
 
   return {
     ...basePayload,

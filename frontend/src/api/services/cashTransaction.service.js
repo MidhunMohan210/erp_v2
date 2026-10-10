@@ -29,6 +29,8 @@ export function buildCreateCashTransactionPayload({
     voucherPrefix: normalizeOptionalVoucherPart(headerPayload?.voucherPrefix),
     voucherSuffix: normalizeOptionalVoucherPart(headerPayload?.voucherSuffix),
   };
+  delete sanitizedHeaderPayload.request_id;
+  delete sanitizedHeaderPayload.request_fingerprint;
 
   return {
     ...sanitizedHeaderPayload,
@@ -84,6 +86,22 @@ export async function getCashTransactionById(id, { cmp_id, ...options } = {}) {
   return response.data?.data?.cashTransaction || null;
 }
 
+// Read-only reconciliation for an uncertain create response.
+export async function getCashTransactionByRequestId(requestId, { cmp_id, ...options } = {}) {
+  if (!requestId) return null;
+
+  const response = await api.get(
+    `/cash-transactions/by-request-id/${encodeURIComponent(requestId)}`,
+    {
+      params: cmp_id ? { cmp_id } : {},
+      skipGlobalLoader: true,
+      ...options,
+    },
+  );
+
+  return response.data?.data || null;
+}
+
 // Cancels existing transaction by id.
 export async function cancelCashTransaction(id, payload) {
   const response = await api.put(`/cash-transactions/${id}/cancel`, payload, {
@@ -116,6 +134,7 @@ export const cashTransactionService = {
   buildCreateCashTransactionPayload,
   createCashTransaction,
   getCashTransactionById,
+  getCashTransactionByRequestId,
   cancelCashTransaction,
   getCashBankLedgerBalances,
 };

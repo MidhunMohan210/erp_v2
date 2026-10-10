@@ -1,8 +1,10 @@
-const STORAGE_PREFIX = "erp:idempotent-submission:v1";
+const STORAGE_PREFIXES = [
+  "erp:idempotent-submission:v1",
+  "erp:idempotent-submission:v2",
+];
 
-// A pending submission older than this is still retained and recoverable; it is
-// merely flagged so the UI never retries it automatically.
-export const DEFAULT_PENDING_SUBMISSION_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function deepFreeze(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
@@ -10,14 +12,6 @@ function deepFreeze(value) {
     Object.freeze(value);
   }
   return value;
-}
-
-function getSessionStorage() {
-  const storage = globalThis?.sessionStorage;
-  if (!storage || typeof storage.getItem !== "function") {
-    throw new Error("Session storage is unavailable; the submission cannot be safely persisted.");
-  }
-  return storage;
 }
 
 function normalizeScope(scope) {
@@ -28,7 +22,15 @@ function normalizeScope(scope) {
   return companyId && userId && module ? { companyId, userId, module } : null;
 }
 
-function serializePayload(payload) {
+function buildStorageKey(prefix, scope) {
+  const normalizedScope = normalizeScope(scope);
+  if (!normalizedScope) return null;
+
+  const { companyId, userId, module } = normalizedScope;
+  return [prefix, companyId, userId, module].map(encodeURIComponent).join(":");
+}
+
+function clonePayload(payload) {
   let serialized;
   try {
     serialized = JSON.stringify(payload);
@@ -40,113 +42,70 @@ function serializePayload(payload) {
     throw new Error("The submission payload is not serializable.");
   }
 
-  const clonedPayload = JSON.parse(serialized);
-  if (!clonedPayload || typeof clonedPayload !== "object" || Array.isArray(clonedPayload)) {
+  const clone = JSON.parse(serialized);
+  if (!clone || typeof clone !== "object" || Array.isArray(clone)) {
     throw new Error("The submission payload must be an object.");
   }
 
-  return deepFreeze(clonedPayload);
-}
-
-function freezeRecord(record) {
-  return deepFreeze({
-    ...record,
-    payload: serializePayload(record.payload),
-  });
-}
-
-export function getIdempotentSubmissionStorageKey(scope) {
-  const normalizedScope = normalizeScope(scope);
-  if (!normalizedScope) return null;
-
-  const { companyId, userId, module } = normalizedScope;
-  return [STORAGE_PREFIX, companyId, userId, module].map(encodeURIComponent).join(":");
+  return deepFreeze(clone);
 }
 
 export function generateRequestId() {
-  const randomUUID = globalThis?.crypto?.randomUUID;
-  if (typeof randomUUID !== "function") {
-    throw new Error("Secure request ID generation is unavailable in this browser.");
+  const cryptoApi = globalThis?.crypto;
+  const randomUUID = cryptoApi?.randomUUID;
+
+  if (typeof randomUUID === "function") {
+    const requestId = randomUUID.call(cryptoApi);
+    if (UUID_V4_PATTERN.test(requestId)) return requestId;
   }
-  return randomUUID.call(globalThis.crypto);
+
+  if (typeof cryptoApi?.getRandomValues !== "function") {
+    throw new Error(
+      "Secure request ID generation is unavailable in this browser. Use a secure connection or a browser that supports secure randomness.",
+    );
+  }
+
+  const bytes = new Uint8Array(16);
+  cryptoApi.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-export function savePendingSubmission(scope, { requestId, payload, createdAt = new Date().toISOString() }) {
-  const key = getIdempotentSubmissionStorageKey(scope);
-  if (!key) {
-    throw new Error("A company, authenticated user, and module are required to persist a submission.");
-  }
+// Creates an immutable request record for the lifetime of the current page only.
+// It is deliberately never written to sessionStorage, localStorage, or IndexedDB.
+export function createInMemorySubmission(requestId, payload) {
   if (!requestId || typeof requestId !== "string") {
-    throw new Error("A request ID is required to persist a submission.");
+    throw new Error("A request ID is required to create a submission.");
   }
 
-  const frozenPayload = serializePayload(payload);
+  const frozenPayload = clonePayload(payload);
   if (frozenPayload.request_id !== requestId) {
-    throw new Error("The persisted payload request_id must match the submission request ID.");
+    throw new Error("The payload request_id must match the submission request ID.");
   }
 
-  const record = deepFreeze({
-    requestId,
-    payload: frozenPayload,
-    state: "pending",
-    createdAt,
-  });
-
-  getSessionStorage().setItem(key, JSON.stringify(record));
-  return record;
+  return deepFreeze({ requestId, payload: frozenPayload });
 }
 
-export function createPendingSubmission(scope, payload) {
-  const requestId = generateRequestId();
-  return savePendingSubmission(scope, { requestId, payload });
-}
+// Removes records produced by both persistent-recovery implementations. These
+// records are cleanup-only and are never read or restored by create pages.
+export function clearLegacyPendingSubmissions(scope) {
+  const keys = STORAGE_PREFIXES.map((prefix) => buildStorageKey(prefix, scope)).filter(Boolean);
+  if (!keys.length) return false;
 
-export function readPendingSubmission(
-  scope,
-  { maxAgeMs = DEFAULT_PENDING_SUBMISSION_MAX_AGE_MS, now = Date.now() } = {},
-) {
-  const key = getIdempotentSubmissionStorageKey(scope);
-  if (!key) return { record: null, issue: "invalid_scope", isStale: false };
+  const storage = globalThis?.sessionStorage;
+  if (!storage || typeof storage.removeItem !== "function") return false;
 
-  let rawRecord;
-  try {
-    rawRecord = getSessionStorage().getItem(key);
-  } catch {
-    return { record: null, issue: "storage_unavailable", isStale: false };
-  }
-  if (!rawRecord) return { record: null, issue: null, isStale: false };
-
-  try {
-    const parsedRecord = JSON.parse(rawRecord);
-    const createdAtMs = Date.parse(parsedRecord?.createdAt);
-    const valid =
-      parsedRecord?.state === "pending" &&
-      typeof parsedRecord?.requestId === "string" &&
-      parsedRecord.requestId.length > 0 &&
-      Number.isFinite(createdAtMs) &&
-      parsedRecord?.payload?.request_id === parsedRecord.requestId;
-
-    if (!valid) {
-      // Retain corrupt data for explicit user resolution; never treat it as a
-      // new request or silently repost it.
-      return { record: null, issue: "malformed", isStale: false };
-    }
-
-    const record = freezeRecord(parsedRecord);
-    return {
-      record,
-      issue: null,
-      isStale: now - createdAtMs > maxAgeMs,
-    };
-  } catch {
-    return { record: null, issue: "malformed", isStale: false };
-  }
-}
-
-export function clearPendingSubmission(scope) {
-  const key = getIdempotentSubmissionStorageKey(scope);
-  if (!key) return false;
-
-  getSessionStorage().removeItem(key);
+  keys.forEach((key) => storage.removeItem(key));
   return true;
+}
+
+// Retained for targeted cleanup tests and migrations; new code must not persist
+// create attempts under this key.
+export function getIdempotentSubmissionStorageKey(scope, version = "v2") {
+  return buildStorageKey(`erp:idempotent-submission:${version}`, scope);
 }
