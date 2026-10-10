@@ -1,23 +1,22 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // Company + voucher-type scoped draft key.
-function getReceiptDraftStorageKey(cmp_id, voucher_type) {
+export function getReceiptDraftStorageKey(cmp_id, voucher_type) {
   return `cash-transaction-draft-${voucher_type || "receipt"}-${cmp_id || "default"}`;
 }
 
-// One id belongs to one logical save attempt and is persisted with the draft.
-function createRequestId() {
-  if (globalThis.crypto?.randomUUID) {
-    return globalThis.crypto.randomUUID();
+export function clearCashTransactionDraftStorage(cmp_id, voucher_type = "receipt") {
+  if (!cmp_id) return;
+  try {
+    localStorage.removeItem(getReceiptDraftStorageKey(cmp_id, voucher_type));
+  } catch (error) {
+    console.error("Failed to clear cash transaction draft", error);
   }
-
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 // Creates blank draft state used for initialization/reset.
 function createDefaultDraft() {
   return {
-    requestId: createRequestId(),
     transactionDate: new Date().toISOString(),
     selectedSeries: null,
     party: null,
@@ -46,12 +45,13 @@ function createDefaultDraft() {
  * @returns {object} Draft state + setters + clearDraft.
  */
 export function useCashTransactionDraft({ cmp_id, voucher_type }) {
+  const isReceipt = voucher_type === "receipt";
+  const previousReceiptDraftKeyRef = useRef(null);
   const draftStorageKey = useMemo(
     () => getReceiptDraftStorageKey(cmp_id, voucher_type),
     [cmp_id, voucher_type],
   );
   const [hasHydrated, setHasHydrated] = useState(false);
-  const [requestId, setRequestId] = useState(() => createRequestId());
   const [transactionDate, setTransactionDate] = useState(
     () => createDefaultDraft().transactionDate,
   );
@@ -70,7 +70,6 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
   // Resets in-memory state to default values.
   const resetDraftState = useCallback(() => {
     const nextDraft = createDefaultDraft();
-    setRequestId(nextDraft.requestId);
     setTransactionDate(nextDraft.transactionDate);
     setSelectedSeries(nextDraft.selectedSeries);
     setParty(nextDraft.party);
@@ -96,7 +95,8 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
     resetDraftState();
   }, [draftStorageKey, resetDraftState]);
 
-  // Hydrates draft from localStorage whenever company/scope changes.
+  // Receipt create is intentionally visit-scoped. Delete any old local draft
+  // instead of hydrating it. Payment keeps its existing draft behavior.
   useEffect(() => {
     setHasHydrated(false);
 
@@ -107,6 +107,18 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
     }
 
     try {
+      if (isReceipt) {
+        const previousDraftKey = previousReceiptDraftKeyRef.current;
+        if (previousDraftKey && previousDraftKey !== draftStorageKey) {
+          localStorage.removeItem(previousDraftKey);
+        }
+        localStorage.removeItem(draftStorageKey);
+        previousReceiptDraftKeyRef.current = draftStorageKey;
+        resetDraftState();
+        setHasHydrated(true);
+        return;
+      }
+
       const rawDraft = localStorage.getItem(draftStorageKey);
       if (!rawDraft) {
         resetDraftState();
@@ -116,7 +128,6 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
 
       const draft = JSON.parse(rawDraft);
 
-      setRequestId(draft?.requestId || createRequestId());
       setTransactionDate(
         draft?.transactionDate || createDefaultDraft().transactionDate,
       );
@@ -139,17 +150,16 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
     } finally {
       setHasHydrated(true);
     }
-  }, [cmp_id, draftStorageKey, resetDraftState]);
+  }, [cmp_id, draftStorageKey, isReceipt, resetDraftState]);
 
   // Persists draft updates after hydration is complete.
   useEffect(() => {
-    if (!cmp_id || !hasHydrated) return;
+    if (!cmp_id || !hasHydrated || isReceipt) return;
 
     try {
       localStorage.setItem(
         draftStorageKey,
         JSON.stringify({
-          requestId,
           transactionDate,
           selectedSeries,
           party,
@@ -177,9 +187,9 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
     draftStorageKey,
     hasHydrated,
     instrumentType,
+    isReceipt,
     narration,
     party,
-    requestId,
     selectedSeries,
     settlementDetails,
     step,
@@ -187,7 +197,6 @@ export function useCashTransactionDraft({ cmp_id, voucher_type }) {
   ]);
 
   return {
-    requestId,
     transactionDate,
     setTransactionDate,
     selectedSeries,

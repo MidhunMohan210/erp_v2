@@ -11,7 +11,7 @@ import { Godown } from "../../Model/ProductSubDetails.js";
 import Sale from "../../Model/Sale.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
-import { createSale } from "../../services/sale.service.js";
+import { createSale, findSaleByRequestId } from "../../services/sale.service.js";
 import { createTestCompany } from "../helpers/company.js";
 import { createAccountGroup, createTestParty, setupIntegrationTestContext } from "../helpers/party.js";
 import { loginAndGetAuthContext } from "../helpers/user.js";
@@ -109,6 +109,30 @@ async function expectSinglePosting(setup, expectedStock) {
 }
 
 describe("Sale creation idempotency", () => {
+  it("finds a committed Sale by request ID without another accounting posting", async () => {
+    const setup = await setupSaleContext("lookup");
+    const requestId = "sale-request-lookup";
+    const created = await createSale(
+      saleRequest(setup, requestId),
+      saleContext(setup),
+    );
+
+    const found = await findSaleByRequestId(
+      requestId,
+      { cmp_id: String(setup.context.company._id) },
+      saleContext(setup),
+    );
+
+    expect(String(found._id)).toBe(String(created._id));
+    expect(found.request_id).toBe(requestId);
+    expect(await findSaleByRequestId(
+      "sale-request-missing",
+      { cmp_id: String(setup.context.company._id) },
+      saleContext(setup),
+    )).toBeNull();
+    await expectSinglePosting(setup, 7);
+  });
+
   it("enforces company-scoped request identity with a database unique index", async () => {
     await Sale.init();
     const indexes = await Sale.collection.indexes();
@@ -123,7 +147,7 @@ describe("Sale creation idempotency", () => {
   it("creates one complete posting and returns it for a sequential replay", async () => {
     const setup = await setupSaleContext("1");
     const original = await createSale(saleRequest(setup, "sale-request-abc"), saleContext(setup));
-    const replay = await createSale(saleRequest(setup, "sale-request-abc", 9), saleContext(setup));
+    const replay = await createSale(saleRequest(setup, "sale-request-abc"), saleContext(setup));
 
     expect(String(replay._id)).toBe(String(original._id));
     expect(replay.voucher_number).toBe(original.voucher_number);
@@ -131,6 +155,95 @@ describe("Sale creation idempotency", () => {
     expect(replay.current_series_number).toBe(original.current_series_number);
     expect(replay.company_level_serial_number).toBe(original.company_level_serial_number);
     expect(replay.user_level_serial_number).toBe(original.user_level_serial_number);
+    expect(replay.idempotent_replay).toBe(true);
+    await expectSinglePosting(setup, 7);
+  });
+
+  it.each([
+    ["item quantity", (request) => ({ ...request, items: [{ ...request.items[0], actualQty: 4, billedQty: 4 }] })],
+    ["rate", (request) => ({ ...request, items: [{ ...request.items[0], rate: 125 }] })],
+    ["discount", (request) => ({ ...request, items: [{ ...request.items[0], discountValue: 10 }] })],
+  ])("rejects a changed %s for the same request ID", async (_label, changeRequest) => {
+    const setup = await setupSaleContext(`changed-${_label}`);
+    const request = saleRequest(setup, "sale-request-conflict");
+    await createSale(request, saleContext(setup));
+
+    await expect(
+      createSale(changeRequest(request), saleContext(setup)),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expectSinglePosting(setup, 7);
+  });
+
+  it("rejects a changed party for the same request ID", async () => {
+    const setup = await setupSaleContext("changed-party");
+    const request = saleRequest(setup, "sale-request-party-conflict");
+    await createSale(request, saleContext(setup));
+    const otherParty = await createTestParty({
+      cmp_id: setup.context.company._id,
+      Primary_user_id: setup.context.user._id,
+      accountGroup: setup.party.accountGroup,
+      state: "Kerala",
+    });
+
+    await expect(
+      createSale({ ...request, partyId: String(otherParty._id) }, saleContext(setup)),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expectSinglePosting(setup, 7);
+  });
+
+  it("rejects a changed godown stock row for the same request ID", async () => {
+    const setup = await setupSaleContext("changed-godown");
+    const request = saleRequest(setup, "sale-request-godown-conflict");
+    await createSale(request, saleContext(setup));
+    const otherGodown = await Godown.create({
+      godown: "Other idempotency godown",
+      godown_id: "sale-idempotency-other-godown",
+      cmp_id: setup.context.company._id,
+      Primary_user_id: setup.context.user._id,
+    });
+    const otherStockRowId = new mongoose.Types.ObjectId();
+    await Product.updateOne(
+      { _id: setup.product._id },
+      {
+        $push: {
+          GodownList: {
+            _id: otherStockRowId,
+            godown: otherGodown._id,
+            balance_stock: 10,
+            batch: "OTHER-BATCH",
+          },
+        },
+      },
+    );
+
+    await expect(
+      createSale(
+        {
+          ...request,
+          items: [
+            {
+              ...request.items[0],
+              godownId: String(otherGodown._id),
+              godownStockRowId: String(otherStockRowId),
+            },
+          ],
+        },
+        saleContext(setup),
+      ),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    await expectSinglePosting(setup, 7);
+  });
+
+  it("backfills and safely replays a legacy Sale without a fingerprint", async () => {
+    const setup = await setupSaleContext("legacy");
+    const request = saleRequest(setup, "sale-request-legacy");
+    const original = await createSale(request, saleContext(setup));
+    await Sale.updateOne({ _id: original._id }, { $unset: { request_fingerprint: 1 } });
+
+    const replay = await createSale(request, saleContext(setup));
+    expect(replay.idempotent_replay).toBe(true);
+    expect(String(replay._id)).toBe(String(original._id));
+    expect((await Sale.findById(original._id).lean()).request_fingerprint).toMatch(/^[a-f0-9]{64}$/);
     await expectSinglePosting(setup, 7);
   });
 
@@ -145,6 +258,22 @@ describe("Sale creation idempotency", () => {
     expect(String(first._id)).toBe(String(second._id));
     expect(first.voucher_number).toBe(second.voucher_number);
     expect(first.current_series_number).toBe(second.current_series_number);
+    await expectSinglePosting(setup, 6);
+  });
+
+  it("allows only one concurrent Sale when bodies conflict", async () => {
+    const setup = await setupSaleContext("concurrent-conflict");
+    const firstRequest = saleRequest(setup, "sale-request-concurrent-conflict", 4);
+    const secondRequest = saleRequest(setup, "sale-request-concurrent-conflict", 3);
+    const results = await Promise.allSettled([
+      createSale(firstRequest, saleContext(setup)),
+      createSale(secondRequest, saleContext(setup)),
+    ]);
+
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected.reason).toMatchObject({ statusCode: 409 });
     await expectSinglePosting(setup, 6);
   });
 

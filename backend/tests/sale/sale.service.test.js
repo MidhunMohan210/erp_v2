@@ -1410,6 +1410,92 @@ describe("cancelSale", () => {
     ).toBe(100);
   });
 
+  it("keeps a cancelled Sale Outstanding active as CR while an active Receipt still settles it", async () => {
+    const { context, party, godown, product, rowId, seriesId } =
+      await setupSaleContext();
+    const sale = await createSale(
+      {
+        request_id: "sale-service-cancel-with-receipt",
+        selectedSeries: { _id: String(seriesId) },
+        transactionDate: "2026-07-15",
+        partyId: String(party._id),
+        items: [
+          {
+            itemId: String(product._id),
+            godownId: String(godown._id),
+            godownStockRowId: String(rowId),
+            selectedUnit: "NOS",
+            actualQty: 1,
+            billedQty: 1,
+            rate: 100,
+            taxInclusive: false,
+            discountType: "amount",
+            discountValue: 0,
+          },
+        ],
+        additionalCharges: [],
+      },
+      { companyId: String(context.company._id), user: context.user },
+    );
+    const saleOutstanding = await Outstanding.findOne({
+      billId: String(sale._id),
+      source: "sale",
+    }).lean();
+
+    await Receipt.create({
+      cmp_id: context.company._id,
+      request_id: "sale-cancel-receipt-reference",
+      request_fingerprint: "test-only-receipt-reference",
+      voucher_type: "receipt",
+      series_id: sale.series_id,
+      series_name: sale.series_name,
+      voucher_number: "RCP / TEST / 1",
+      date: sale.date,
+      party_id: party._id,
+      party_name: party.partyName,
+      cash_bank_id: party._id,
+      cash_bank_name: party.partyName,
+      cash_bank_type: "cash",
+      instrument_type: "cash",
+      amount: 60,
+      advance_amount: 0,
+      settlement_details: [
+        {
+          outstanding: saleOutstanding._id,
+          outstanding_number: saleOutstanding.bill_no,
+          outstanding_date: saleOutstanding.bill_date,
+          outstanding_type: "dr",
+          previous_outstanding_amount: saleOutstanding.bill_amount,
+          settled_amount: 60,
+          remaining_outstanding_amount: saleOutstanding.bill_amount - 60,
+          settlement_date: sale.date,
+        },
+      ],
+      status: "active",
+      created_by: context.user._id,
+      updated_by: context.user._id,
+    });
+    await Outstanding.updateOne(
+      { _id: saleOutstanding._id },
+      { $set: { bill_pending_amt: saleOutstanding.bill_amount - 60 } },
+    );
+
+    await cancelSale(
+      sale._id,
+      {},
+      { companyId: String(context.company._id), user: context.user },
+    );
+
+    expect(
+      await Outstanding.findById(saleOutstanding._id).lean(),
+    ).toMatchObject({
+      bill_amount: 0,
+      bill_pending_amt: -60,
+      classification: "cr",
+      isCancelled: false,
+    });
+  });
+
   it("rejects a Tally-accepted Sale without reversing its postings", async () => {
     const { context, party, godown, product, rowId, seriesId } =
       await setupSaleContext();

@@ -91,6 +91,7 @@ const SaleSchema = new Schema(
     // created Sale; the partial unique index leaves legacy documents that
     // predate this field indexable during rollout.
     request_id: { type: String, required: true, trim: true, maxlength: 128 },
+    request_fingerprint: { type: String, default: null },
 
     voucher_type: { type: String, default: "sale" },
     series_id: { type: Schema.Types.ObjectId, required: true },

@@ -134,7 +134,99 @@ Backend cancellation safety:
 - Any validation or write failure rolls the complete cancellation transaction
   back.
 
-## 7) Shared Schema and Cash/Bank Voucher References
+## 7) Backend Receipt Edit Contract
+
+Receipt Edit is an authenticated, company-scoped update rather than a new
+Receipt creation:
+
+```text
+PUT /api/cash-transactions/:id
+```
+
+The request supplies the complete desired mutable state plus the version read
+by the client:
+
+```js
+{
+  expected_updated_at,
+  date,
+  amount,
+  cash_bank_id,
+  cash_bank_type,
+  instrument_type,
+  settlement_details: [{ outstanding, settled_amount }],
+  narration,
+  cheque_number,
+  cheque_date
+}
+```
+
+`party_id` and `party_name` are optional compatibility fields. When present,
+they must match the stored Receipt. Party, request id/fingerprint, voucher
+identity, serial numbers, creator, creation time, status, and cancellation
+metadata cannot be changed. Only an active Receipt can be edited.
+
+`expected_updated_at` is required for optimistic concurrency. A stale version
+returns HTTP 409. The complete edit runs in one MongoDB transaction and updates
+the existing Receipt, PartyLedger, PartyMonthlyBalance, CashBankLedger,
+Outstanding rows, advance Outstanding, and VoucherTimeline projection.
+
+Allocation availability for a future Edit UI is loaded from:
+
+```text
+GET /api/cash-transactions/:id/edit-allocation-availability
+```
+
+For a bill already used by this Receipt, `editable_available` is the bill's
+current pending amount plus this Receipt's stored settlement contribution. This
+keeps fully settled original bills selectable and does not rely on stale
+remaining-balance snapshots.
+
+The normal Receipt detail response already returns each stored
+`settlement_details` row. That row is the historical display snapshot created
+by the latest successful Create or Edit and contains:
+
+- `outstanding_number` and `outstanding_date`
+- `previous_outstanding_amount` (the available amount before this Receipt)
+- `settled_amount` (the amount applied by this Receipt)
+- `remaining_outstanding_amount` (the balance immediately after this Receipt)
+
+The initial Edit screen must render only these stored rows. It must not query
+today's Outstanding values to reconstruct that historical section. A later
+Receipt settling the same bill therefore cannot change what the earlier
+Receipt displays.
+
+These snapshot values are display-only. When the user changes the Receipt
+amount or chooses to change allocations, the client must load
+`edit-allocation-availability` and use its current authoritative values. The
+backend continues to calculate:
+
+```text
+editable_available = current_pending + original_settled_amount
+```
+
+The availability response includes originally allocated bills even when their
+current pending amount is zero, plus other currently available bills for the
+stored Receipt party. Party remains immutable.
+
+After a successful Edit, `settlement_details` is replaced by a new snapshot of
+the committed allocation. If any Edit write fails, the MongoDB transaction
+rolls back the Receipt snapshot together with Outstanding, ledger, monthly
+balance, advance, and timeline changes. This is current-state history only;
+full Receipt revision history is not stored.
+
+The submitted Edit settlement list is a complete replacement. The backend
+logically restores all original settlements, validates and applies the new
+list, and recalculates `advance_amount`. A single advance Outstanding row is
+reused across edit transitions; when the final advance is zero, its historical
+row is retained as cancelled with zero pending balance.
+
+Edit does not use or modify Receipt Create's request id/fingerprint replay
+mechanism. If an update response is lost, retrying with the old
+`expected_updated_at` safely returns 409 and cannot duplicate postings. The
+native Edit UI is not implemented in this backend phase.
+
+## 8) Shared Schema and Cash/Bank Voucher References
 
 - `backend/schemas/CashTransactionSchema.js` contains the reusable Receipt and
   Payment document structure but does not register a Mongoose model.
@@ -150,7 +242,7 @@ Backend cancellation safety:
   `migrateCashBankLedgerVoucherModels.js` utility. It never guesses mappings
   for unknown voucher types.
 
-## 8) Key Guard Rules
+## 9) Key Guard Rules
 
 - Create disabled when:
   - no company
@@ -168,7 +260,7 @@ Backend cancellation safety:
   - cheque, UPI, NEFT, and RTGS require a Bank master
   - cheque requires a non-empty number and valid date
 
-## 9) Quick Example Trace
+## 10) Quick Example Trace
 
 1. User opens Create Receipt.
 2. Selects party.

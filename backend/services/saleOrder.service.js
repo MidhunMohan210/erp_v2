@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { createHash } from "node:crypto";
 
 import Company from "../Model/CompanySchema.js";
 import Party from "../Model/partySchema.js";
@@ -38,6 +39,110 @@ function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function requiredRequestId(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw createHttpError("request_id is required", 400);
+  }
+  const requestId = value.trim();
+  if (requestId.length > 128) {
+    throw createHttpError("request_id is too long", 400);
+  }
+  return requestId;
+}
+
+function canonicalId(value) {
+  if (!value || !mongoose.Types.ObjectId.isValid(value)) {
+    throw createHttpError("Sale Order request contains an invalid identifier", 400);
+  }
+  return new mongoose.Types.ObjectId(value).toString();
+}
+
+function canonicalNumber(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw createHttpError("Sale Order request contains an invalid number", 400);
+  }
+  return number;
+}
+
+function canonicalText(value) {
+  if (value == null || value === "") return null;
+  return String(value).trim() || null;
+}
+
+function canonicalDespatchDetails(value = {}) {
+  return {
+    challan_no: canonicalText(value.challanNo ?? value.challan_no),
+    container_no: canonicalText(value.containerNo ?? value.container_no),
+    despatch_through: canonicalText(
+      value.despatchThrough ?? value.despatch_through,
+    ),
+    destination: canonicalText(value.destination),
+    vehicle_no: canonicalText(value.vehicleNo ?? value.vehicle_no),
+    order_no: canonicalText(value.orderNo ?? value.order_no),
+    terms_of_pay: canonicalText(value.termsOfPay ?? value.terms_of_pay),
+    terms_of_delivery: canonicalText(
+      value.termsOfDelivery ?? value.terms_of_delivery,
+    ),
+  };
+}
+
+function buildSaleOrderRequestFingerprint(data, { cmpId, userId, partyId, selectedSeries }) {
+  const date = new Date(data.transactionDate);
+  if (Number.isNaN(date.getTime())) {
+    throw createHttpError("transactionDate must be a valid date", 400);
+  }
+  const canonicalOrder = {
+    cmp_id: canonicalId(cmpId),
+    created_by: canonicalId(userId),
+    voucher_type: "saleOrder",
+    series_id: canonicalId(selectedSeries?._id),
+    date: date.toISOString(),
+    party_id: canonicalId(partyId),
+    price_level_id: data.selectedPriceLevel?._id
+      ? canonicalId(data.selectedPriceLevel._id)
+      : null,
+    mailing_name: canonicalText(data.mailingName ?? data.mailing_name),
+    items: (data.items || []).map((item) => ({
+      item_id: canonicalId(item.id ?? item.item_id),
+      base_unit: canonicalText(item.baseUnit ?? item.base_unit ?? item.unit),
+      selected_unit: canonicalText(item.selectedUnit ?? item.selected_unit ?? item.unit),
+      actual_qty: canonicalNumber(item.actualQty ?? item.actual_qty),
+      billed_qty: canonicalNumber(item.billedQty ?? item.billed_qty),
+      rate: canonicalNumber(item.rate),
+      discount_type: item.discountType ?? item.discount_type ?? "amount",
+      discount_percentage: canonicalNumber(item.discountPercentage ?? item.discount_percentage ?? 0),
+      discount_amount: canonicalNumber(item.discountAmount ?? item.discount_amount ?? 0),
+      tax_inclusive: Boolean(item.taxInclusive ?? item.tax_inclusive),
+      price_level_id: item.price_level_id ? canonicalId(item.price_level_id) : null,
+      description: canonicalText(item.description),
+    })),
+    additional_charges: (data.additionalCharges ?? data.additional_charges ?? []).map((charge) => ({
+      charge_master_id: canonicalId(charge.additionalChargeId ?? charge.additional_charge_id),
+      action: charge.action,
+      value: canonicalNumber(charge.value),
+    })),
+    despatch_details: canonicalDespatchDetails(
+      data.despatchDetails ?? data.despatch_details,
+    ),
+  };
+  return createHash("sha256").update(JSON.stringify(canonicalOrder)).digest("hex");
+}
+
+function assertMatchingSaleOrderReplay(saleOrder, requestFingerprint) {
+  if (saleOrder.request_fingerprint !== requestFingerprint) {
+    throw createHttpError(
+      "This request ID has already been used for a different Sale Order payload.",
+      409,
+    );
+  }
+}
+
+function isRequestIdDuplicateKeyError(error) {
+  return error?.code === 11000 &&
+    (error?.keyPattern?.request_id || error?.keyValue?.request_id);
 }
 
 function resolveTaxType(company, party) {
@@ -324,20 +429,44 @@ async function enrichSaleOrderItemsWithLatestProducts(saleOrder = null) {
 // 4) Build normalized sale order payload
 // 5) Insert sale order and create timeline entry in the same transaction
 export async function createSaleOrder(data = {}, req) {
+  const cmpId = data.cmpId || data.cmp_id;
+  const selectedSeries = normalizeSelectedSeries(data);
+  const userId = data.userId || req.user?._id || req.user?.id || null;
+  const partyId = data.party?._id || data.party?.id || data.party_id || null;
+  const request_id = requiredRequestId(data.request_id ?? data.requestId);
+  if (!selectedSeries?._id) {
+    throw createHttpError("Series id is required for voucher identity", 400);
+  }
+  const request_fingerprint = buildSaleOrderRequestFingerprint(data, {
+    cmpId,
+    userId,
+    partyId,
+    selectedSeries,
+  });
+  const existingSaleOrder = await SaleOrder.findOne({ cmp_id: cmpId, request_id }).lean();
+  if (existingSaleOrder) {
+    assertMatchingSaleOrderReplay(existingSaleOrder, request_fingerprint);
+    return { saleOrder: addLegacySaleOrderUnitFields(existingSaleOrder), isIdempotentReplay: true };
+  }
   const session = await mongoose.startSession();
 
   try {
     let createdSaleOrder = null;
-    // Accept both camelCase and snake_case payload variants from different callers.
-    const cmpId = data.cmpId || data.cmp_id;
-    const selectedSeries = normalizeSelectedSeries(data);
-    const userId = data.userId || data.created_by || req.user?._id || req.user?.id || null;
-    const partyId = data.party?._id || data.party?.id || data.party_id || null;
+    let isIdempotentReplay = false;
 
     // Observability-only check: does not block save, only logs large client/server mismatch.
     logSaleOrderTotalsMismatch(data);
 
     await session.withTransaction(async () => {
+      const replay = await SaleOrder.findOne({ cmp_id: cmpId, request_id })
+        .session(session)
+        .lean();
+      if (replay) {
+        assertMatchingSaleOrderReplay(replay, request_fingerprint);
+        createdSaleOrder = replay;
+        isIdempotentReplay = true;
+        return;
+      }
       // Ownership guardrail: sale order cannot reference party from another company.
       const [company, party] = await Promise.all([
         Company.findById(cmpId).session(session).lean(),
@@ -382,6 +511,8 @@ export async function createSaleOrder(data = {}, req) {
         {
           ...data,
           cmpId,
+          request_id,
+          request_fingerprint,
           party: buildPartySelection(party),
           tax_type: resolveTaxType(company, party),
           items,
@@ -401,7 +532,19 @@ export async function createSaleOrder(data = {}, req) {
       await createVoucherTimelineEntry(buildVoucherTimelinePayload(created), session);
     });
 
-    return addLegacySaleOrderUnitFields(createdSaleOrder);
+    return {
+      saleOrder: addLegacySaleOrderUnitFields(createdSaleOrder),
+      isIdempotentReplay,
+    };
+  } catch (error) {
+    if (isRequestIdDuplicateKeyError(error)) {
+      const replay = await SaleOrder.findOne({ cmp_id: cmpId, request_id }).lean();
+      if (replay) {
+        assertMatchingSaleOrderReplay(replay, request_fingerprint);
+        return { saleOrder: addLegacySaleOrderUnitFields(replay), isIdempotentReplay: true };
+      }
+    }
+    throw error;
   } finally {
     // Always release session even when transaction throws.
     await session.endSession();
@@ -421,6 +564,18 @@ export async function getSaleOrderById(id, { cmp_id } = {}, req) {
   const enrichedSaleOrder = await enrichSaleOrderItemsWithLatestProducts(saleOrder);
 
   return addLegacySaleOrderUnitFields(enrichedSaleOrder);
+}
+
+export async function findSaleOrderByRequestId(
+  requestId,
+  { cmp_id } = {},
+  req,
+) {
+  const request_id = requiredRequestId(requestId);
+  const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
+  return SaleOrder.findOne(filter)
+    .select("_id request_id voucher_number status created_at")
+    .lean();
 }
 
 // Update flow summary:

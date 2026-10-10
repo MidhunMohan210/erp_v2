@@ -111,6 +111,7 @@ function buildValidSaleOrderPayload(partyId, seriesId, overrides = {}) {
   };
 
   return {
+    request_id: new mongoose.Types.ObjectId().toString(),
     cmp_id: String(baseContext.companyId),
     mailingName: baseContext.party.partyName,
     transactionDate: "2026-06-29T00:00:00.000Z",
@@ -246,6 +247,13 @@ async function postSaleOrder(token, body) {
     .post("/api/sale-orders")
     .set("Authorization", `Bearer ${token}`)
     .send(body);
+}
+
+function getSaleOrderByRequestId(requestId) {
+  return request(app)
+    .get(`/api/sale-orders/by-request-id/${requestId}`)
+    .set("Authorization", `Bearer ${baseContext.token}`)
+    .query({ cmp_id: String(baseContext.companyId) });
 }
 
 async function createSaleOrderForTest(overrides = {}) {
@@ -446,6 +454,88 @@ describe("POST /api/sale-orders — Auth & middleware", () => {
 });
 
 describe("POST /api/sale-orders — Business logic", () => {
+  it("finds a committed Sale Order by request ID without creating another order", async () => {
+    const requestId = "sale-order-request-lookup";
+    const created = await createSaleOrderForTest({ request_id: requestId });
+    const beforeCount = await SaleOrder.countDocuments();
+
+    const response = await getSaleOrderByRequestId(requestId);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      exists: true,
+      transaction_type: "sale_order",
+      request_id: requestId,
+      id: created.body.data.saleOrder._id,
+    });
+    expect(await SaleOrder.countDocuments()).toBe(beforeCount);
+    expect((await getSaleOrderByRequestId("sale-order-request-missing")).status).toBe(404);
+  });
+
+  it("replays an identical request ID without another Sale Order or timeline", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: "sale-order-idempotent-replay" },
+    );
+    const first = await postSaleOrder(baseContext.token, payload);
+    const replay = await postSaleOrder(baseContext.token, payload);
+
+    expect(first.status).toBe(201);
+    expect(first.body.idempotent_replay).toBe(false);
+    expect(replay.status).toBe(200);
+    expect(replay.body.idempotent_replay).toBe(true);
+    expect(replay.body.data.saleOrder._id).toBe(first.body.data.saleOrder._id);
+    expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+    expect(await VoucherTimeline.countDocuments({ voucher_id: first.body.data.saleOrder._id })).toBe(1);
+  });
+
+  it.each([
+    ["quantity", (payload) => ({ ...payload, items: [{ ...payload.items[0], actualQty: 3, billedQty: 3 }] })],
+    ["rate", (payload) => ({ ...payload, items: [{ ...payload.items[0], rate: 125 }] })],
+    ["discount", (payload) => ({ ...payload, items: [{ ...payload.items[0], discountAmount: 10 }] })],
+    ["party", (payload) => ({ ...payload, party: { ...payload.party, _id: String(new mongoose.Types.ObjectId()) } })],
+  ])("rejects a changed %s for the same request ID", async (_label, change) => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: `sale-order-conflict-${_label}` },
+    );
+    const first = await postSaleOrder(baseContext.token, payload);
+    const changed = await postSaleOrder(baseContext.token, change(payload));
+
+    expect(first.status).toBe(201);
+    expect(changed.status).toBe(409);
+    expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+  });
+
+  it("requires request_id for Sale Order Create", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+    );
+    delete payload.request_id;
+
+    const response = await postSaleOrder(baseContext.token, payload);
+    expect(response.status).toBe(400);
+    expect(response.body.message).toBe("request_id is required");
+  });
+
+  it("creates exactly one Sale Order for concurrent identical requests", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: "sale-order-concurrent-replay" },
+    );
+    const responses = await Promise.all([
+      postSaleOrder(baseContext.token, payload),
+      postSaleOrder(baseContext.token, payload),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 201]);
+    expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+  });
+
   it("rejects an unknown additional-charge master ID", async () => {
     const res = await postSaleOrder(
       baseContext.token,

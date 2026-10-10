@@ -7,6 +7,7 @@ import Party from "../Model/partySchema.js";
 import PartyLedger from "../Model/PartyLedger.js";
 import PartyMonthlyBalance from "../Model/PartyMonthlyBalance.js";
 import Receipt from "../Model/Receipt.js";
+import VoucherTimeline from "../Model/VoucherTimeline.js";
 import {
   createVoucherTimelineEntry,
   updateVoucherTimelineEntry,
@@ -60,6 +61,14 @@ function sameId(left, right) {
 
 function sameAmount(left, right) {
   return Math.abs(Number(left) - Number(right)) <= MONEY_TOLERANCE;
+}
+
+function sameDate(left, right) {
+  return new Date(left).getTime() === new Date(right).getTime();
+}
+
+function sameNullableText(left, right) {
+  return String(left || "") === String(right || "");
 }
 
 function normalizeFingerprintDate(value, fieldName) {
@@ -451,7 +460,10 @@ async function cancelAdvanceReceiptOutstanding({
   }).session(session);
 
   if (Number(advance_amount) <= 0) {
-    if (advances.length > 0) {
+    const hasInvalidHistoricalAdvance = advances.some(
+      (advance) => !advance.isCancelled || !sameAmount(advance.bill_pending_amt, 0),
+    );
+    if (advances.length > 1 || hasInvalidHistoricalAdvance) {
       throw createHttpError(
         "Receipt advance relationship is inconsistent",
         409,
@@ -484,6 +496,376 @@ async function cancelAdvanceReceiptOutstanding({
   advance.bill_pending_amt = 0;
   advance.isCancelled = true;
   await advance.save({ session });
+}
+
+function parseExpectedReceiptVersion(value) {
+  const expectedVersion = new Date(value);
+  if (!value || Number.isNaN(expectedVersion.getTime())) {
+    throw createHttpError("expected_updated_at must be a valid date", 400);
+  }
+  return expectedVersion;
+}
+
+function validateReceiptEditIdentity(receipt, data) {
+  if (data.voucher_type !== undefined && data.voucher_type !== "receipt") {
+    throw createHttpError("Only receipt is supported right now", 400);
+  }
+
+  if (data.party_id !== undefined && !sameId(data.party_id, receipt.party_id)) {
+    throw createHttpError("Receipt party cannot be changed", 400);
+  }
+  if (
+    data.party_name !== undefined &&
+    String(data.party_name).trim() !== String(receipt.party_name).trim()
+  ) {
+    throw createHttpError("Receipt party name cannot be changed", 400);
+  }
+
+  const immutable = data.immutable_fields || {};
+  const immutableChecks = [
+    ["_id", receipt._id],
+    ["request_id", receipt.request_id],
+    ["request_fingerprint", receipt.request_fingerprint],
+    ["series_id", receipt.series_id],
+    ["series_name", receipt.series_name],
+    ["voucher_number", receipt.voucher_number],
+    ["company_level_serial_number", receipt.company_level_serial_number],
+    ["user_level_serial_number", receipt.user_level_serial_number],
+    ["created_by", receipt.created_by],
+    ["status", receipt.status],
+    ["cancelled_by", receipt.cancelled_by],
+    ["cancellation_reason", receipt.cancellation_reason],
+  ];
+
+  for (const [field, storedValue] of immutableChecks) {
+    const submittedValue = immutable[field];
+    if (submittedValue === undefined) continue;
+
+    const matches = field.endsWith("_id") || field === "_id" || field === "created_by" || field === "cancelled_by"
+      ? sameId(submittedValue, storedValue)
+      : String(submittedValue ?? "") === String(storedValue ?? "");
+    if (!matches) {
+      throw createHttpError(`${field} cannot be changed`, 400);
+    }
+  }
+
+  for (const field of ["created_at", "cancelled_at"]) {
+    const submittedValue = immutable[field];
+    const storedValue = receipt[field];
+    if (
+      submittedValue !== undefined &&
+      (
+        (submittedValue === null) !== (storedValue === null) ||
+        (submittedValue != null &&
+          storedValue != null &&
+          !sameDate(submittedValue, storedValue))
+      )
+    ) {
+      throw createHttpError(`${field} cannot be changed`, 400);
+    }
+  }
+}
+
+function validateReceiptEditDate(value) {
+  const date = new Date(value);
+  if (!value || Number.isNaN(date.getTime())) {
+    throw createHttpError("Receipt date must be a valid date", 400);
+  }
+  return date;
+}
+
+async function loadOriginalSettlementAvailability(receipt, session) {
+  const originalById = new Map();
+
+  for (const detail of receipt.settlement_details || []) {
+    const outstandingId = String(detail?.outstanding || "");
+    const settledAmount = Number(detail?.settled_amount);
+    if (
+      !mongoose.Types.ObjectId.isValid(outstandingId) ||
+      !Number.isFinite(settledAmount) ||
+      settledAmount <= 0 ||
+      originalById.has(outstandingId)
+    ) {
+      throw createHttpError(
+        "Receipt settlement history cannot be edited safely",
+        409,
+      );
+    }
+
+    const outstanding = await Outstanding.findOne({
+      _id: outstandingId,
+      cmp_id: receipt.cmp_id,
+      party_id: receipt.party_id,
+      isCancelled: false,
+    }).session(session);
+    if (!outstanding) {
+      throw createHttpError(
+        "Expected active Outstanding is missing for Receipt edit",
+        409,
+      );
+    }
+
+    if (
+      detail.outstanding_type !== "dr" ||
+      !sameAmount(
+        Number(detail.previous_outstanding_amount) - settledAmount,
+        detail.remaining_outstanding_amount,
+      )
+    ) {
+      throw createHttpError(
+        "Receipt settlement snapshot does not match its Outstanding",
+        409,
+      );
+    }
+
+    const currentPending = Number(outstanding.bill_pending_amt) || 0;
+    const expectedClassification = currentPending < 0 ? "cr" : "dr";
+    const editableAvailable = currentPending + settledAmount;
+    // Cancelling a Sale leaves its Outstanding active while an active Receipt
+    // still references it. That row is a CR reversal target, not a new bill:
+    // removing this Receipt's own settlement must bring the row exactly to 0.
+    const isCancelledSaleReversalTarget =
+      outstanding.source === "sale" &&
+      sameAmount(outstanding.bill_amount, 0) &&
+      currentPending < 0 &&
+      sameAmount(editableAvailable, 0);
+    if (
+      outstanding.classification !== expectedClassification ||
+      (!isCancelledSaleReversalTarget &&
+        (editableAvailable <= 0 ||
+          editableAvailable - Number(outstanding.bill_amount) >
+            MONEY_TOLERANCE))
+    ) {
+      throw createHttpError(
+        "Outstanding cannot be restored safely for Receipt edit",
+        409,
+      );
+    }
+
+    originalById.set(outstandingId, {
+      outstanding,
+      originalSettledAmount: settledAmount,
+      currentPending,
+      editableAvailable,
+    });
+  }
+
+  return originalById;
+}
+
+async function loadAndValidateReceiptEditState(receipt, session) {
+  const { partyLedger, cashBankLedger } = await validateReceiptLedgers(
+    receipt,
+    session,
+  );
+
+  if (
+    partyLedger.voucher_number !== receipt.voucher_number ||
+    !sameDate(partyLedger.date, receipt.date) ||
+    partyLedger.party_name !== receipt.party_name ||
+    cashBankLedger.voucher_number !== receipt.voucher_number ||
+    !sameDate(cashBankLedger.date, receipt.date) ||
+    cashBankLedger.cash_bank_name !== receipt.cash_bank_name ||
+    cashBankLedger.party_name !== receipt.party_name ||
+    cashBankLedger.instrument_type !== receipt.instrument_type ||
+    !sameNullableText(cashBankLedger.narration, receipt.narration)
+  ) {
+    throw createHttpError(
+      "Receipt linked ledgers do not match the original posting",
+      409,
+    );
+  }
+
+  const monthlyBalance = await PartyMonthlyBalance.findOne({
+    cmp_id: receipt.cmp_id,
+    party_id: receipt.party_id,
+    month_key: formatMonthKey(receipt.date),
+  }).session(session);
+  if (
+    !monthlyBalance ||
+    Number(monthlyBalance.total_credit) + MONEY_TOLERANCE < Number(receipt.amount) ||
+    Number(monthlyBalance.transaction_count) < 1
+  ) {
+    throw createHttpError(
+      "PartyMonthlyBalance cannot be reversed safely for Receipt edit",
+      409,
+    );
+  }
+
+  const originalSettlements = await loadOriginalSettlementAvailability(
+    receipt,
+    session,
+  );
+  const advanceRows = await Outstanding.find({
+    cmp_id: receipt.cmp_id,
+    billId: String(receipt._id),
+    source: "advance_receipt",
+  }).session(session);
+  const activeAdvanceRows = advanceRows.filter((row) => !row.isCancelled);
+
+  if (Number(receipt.advance_amount) > 0) {
+    if (
+      advanceRows.length !== 1 ||
+      activeAdvanceRows.length !== 1 ||
+      !sameId(advanceRows[0].party_id, receipt.party_id) ||
+      advanceRows[0].party_name !== receipt.party_name ||
+      advanceRows[0].bill_no !== receipt.voucher_number ||
+      !sameDate(advanceRows[0].bill_date, receipt.date) ||
+      advanceRows[0].classification !== "cr" ||
+      !sameAmount(advanceRows[0].bill_amount, receipt.advance_amount) ||
+      !sameAmount(advanceRows[0].bill_pending_amt, -Number(receipt.advance_amount))
+    ) {
+      throw createHttpError(
+        "Advance Outstanding does not match the original Receipt credit",
+        409,
+      );
+    }
+  } else if (
+    advanceRows.length > 1 ||
+    activeAdvanceRows.length > 0 ||
+    advanceRows.some((row) => !sameAmount(row.bill_pending_amt, 0))
+  ) {
+    throw createHttpError("Receipt advance relationship is inconsistent", 409);
+  }
+
+  const timelines = await VoucherTimeline.find({
+    cmp_id: receipt.cmp_id,
+    voucher_id: receipt._id,
+    voucher_type: receipt.voucher_type,
+  }).session(session);
+  if (timelines.length !== 1) {
+    throw createHttpError("Expected VoucherTimeline entry is missing or duplicated", 409);
+  }
+  const timeline = timelines[0];
+  if (
+    !sameId(timeline.party_id, receipt.party_id) ||
+    timeline.party_name !== receipt.party_name ||
+    timeline.voucher_number !== receipt.voucher_number ||
+    !sameAmount(timeline.amount, receipt.amount) ||
+    !sameDate(timeline.date, receipt.date) ||
+    timeline.status !== receipt.status
+  ) {
+    throw createHttpError("VoucherTimeline does not match the original Receipt", 409);
+  }
+
+  return {
+    partyLedger,
+    cashBankLedger,
+    originalSettlements,
+    advanceRows,
+  };
+}
+
+async function resolveEditedSettlements({
+  submittedSettlements,
+  receipt,
+  originalSettlements,
+  settlementDate,
+  session,
+}) {
+  const desiredById = new Map();
+  const documentsById = new Map();
+  const availabilityById = new Map();
+
+  for (const [outstandingId, original] of originalSettlements) {
+    documentsById.set(outstandingId, original.outstanding);
+    availabilityById.set(outstandingId, original.editableAvailable);
+  }
+
+  for (const item of submittedSettlements) {
+    let outstanding = documentsById.get(item.outstandingId);
+    let editableAvailable = availabilityById.get(item.outstandingId);
+
+    if (!outstanding) {
+      outstanding = await Outstanding.findOne({
+        _id: item.outstandingId,
+        cmp_id: receipt.cmp_id,
+        party_id: receipt.party_id,
+        isCancelled: false,
+        classification: "dr",
+        bill_pending_amt: { $gt: 0 },
+      }).session(session);
+      if (!outstanding) {
+        throw createHttpError(
+          "Outstanding bill not found for the selected company and party",
+          400,
+        );
+      }
+      editableAvailable = Number(outstanding.bill_pending_amt) || 0;
+      documentsById.set(item.outstandingId, outstanding);
+      availabilityById.set(item.outstandingId, editableAvailable);
+    }
+
+    if (item.settledAmount - editableAvailable > MONEY_TOLERANCE) {
+      throw createHttpError(
+        "Settled amount cannot exceed the editable available amount",
+        400,
+      );
+    }
+    desiredById.set(item.outstandingId, item.settledAmount);
+  }
+
+  const details = submittedSettlements.map((item) => {
+    const outstanding = documentsById.get(item.outstandingId);
+    const editableAvailable = availabilityById.get(item.outstandingId);
+    const authoritativeOutstanding = {
+      ...outstanding.toObject(),
+      bill_pending_amt: editableAvailable,
+    };
+    return buildAuthoritativeSettlementDetail(
+      authoritativeOutstanding,
+      item.settledAmount,
+      settlementDate,
+    );
+  });
+
+  return { details, desiredById, documentsById, availabilityById };
+}
+
+async function applyEditedAdvanceOutstanding({
+  receipt,
+  advanceRows,
+  newAdvanceAmount,
+  newDate,
+  updatedBy,
+  session,
+}) {
+  const existingAdvance = advanceRows[0] || null;
+
+  if (newAdvanceAmount <= 0) {
+    if (existingAdvance) {
+      existingAdvance.bill_pending_amt = 0;
+      existingAdvance.isCancelled = true;
+      await existingAdvance.save({ session });
+    }
+    return;
+  }
+
+  if (!existingAdvance) {
+    await createAdvanceReceiptOutstanding({
+      cmp_id: receipt.cmp_id,
+      party_id: receipt.party_id,
+      party_name: receipt.party_name,
+      receipt_id: receipt._id,
+      voucher_number: receipt.voucher_number,
+      date: newDate,
+      advance_amount: newAdvanceAmount,
+      created_by: updatedBy || receipt.created_by,
+      session,
+    });
+    return;
+  }
+
+  existingAdvance.party_id = receipt.party_id;
+  existingAdvance.party_name = receipt.party_name;
+  existingAdvance.bill_date = newDate;
+  existingAdvance.bill_due_date = newDate;
+  existingAdvance.bill_no = receipt.voucher_number;
+  existingAdvance.bill_amount = newAdvanceAmount;
+  existingAdvance.bill_pending_amt = -newAdvanceAmount;
+  existingAdvance.classification = "cr";
+  existingAdvance.isCancelled = false;
+  await existingAdvance.save({ session });
 }
 
 // Receipt creation service (transactional).
@@ -721,6 +1103,277 @@ export async function createCashTransaction(data = {}, req) {
   } finally {
     await session.endSession();
   }
+}
+
+// Receipt edit is a complete replacement of mutable fields. The transaction
+// first reconstructs balances without this Receipt, then applies the desired
+// settlement set so later transactions on the same bills remain intact.
+export async function updateCashTransaction(id, data = {}, req) {
+  const expectedVersion = parseExpectedReceiptVersion(data.expected_updated_at);
+  const session = await mongoose.startSession();
+
+  try {
+    let updatedCashTransaction = null;
+
+    await session.withTransaction(async () => {
+      const accessFilter = applyTransactionCreatorScope(req, {
+        _id: id,
+        cmp_id: data.cmp_id,
+      });
+      const receipt = await Receipt.findOne(accessFilter).session(session);
+
+      if (!receipt) {
+        throw createHttpError("Cash transaction not found", 404);
+      }
+      if (receipt.voucher_type !== "receipt") {
+        throw createHttpError("Only receipt is supported right now", 400);
+      }
+      if (receipt.status !== "active") {
+        throw createHttpError("Cancelled receipt cannot be edited", 400);
+      }
+      if (!sameDate(receipt.updated_at, expectedVersion)) {
+        throw createHttpError(
+          "Receipt was modified by another operation. Reload before editing",
+          409,
+        );
+      }
+
+      validateReceiptEditIdentity(receipt, data);
+      const date = validateReceiptEditDate(data.date);
+      const submittedSettlements = validateSubmittedSettlements(
+        data.settlement_details,
+        data.amount,
+      );
+
+      const [party, cashBank] = await Promise.all([
+        Party.findOne({
+          _id: receipt.party_id,
+          cmp_id: receipt.cmp_id,
+        }).session(session).lean(),
+        Party.findOne({
+          _id: data.cash_bank_id,
+          cmp_id: receipt.cmp_id,
+        }).session(session).lean(),
+      ]);
+      if (!party) {
+        throw createHttpError("Original Receipt party was not found", 409);
+      }
+      validateReceiptParty(party);
+      if (!cashBank) {
+        throw createHttpError(
+          "Selected cash/bank ledger does not belong to this company",
+          400,
+        );
+      }
+
+      const validatedData = buildValidatedReceiptData(
+        {
+          ...data,
+          cmp_id: receipt.cmp_id,
+          voucher_type: receipt.voucher_type,
+          party_id: receipt.party_id,
+          party_name: receipt.party_name,
+          created_by: receipt.created_by,
+        },
+        party,
+        cashBank,
+      );
+      const originalState = await loadAndValidateReceiptEditState(
+        receipt,
+        session,
+      );
+      const replacement = await resolveEditedSettlements({
+        submittedSettlements,
+        receipt,
+        originalSettlements: originalState.originalSettlements,
+        settlementDate: date,
+        session,
+      });
+      const totalSettled = replacement.details.reduce(
+        (total, detail) => total + Number(detail.settled_amount || 0),
+        0,
+      );
+      const advanceAmount = Number(validatedData.amount) - totalSettled;
+
+      // Restore each old contribution and apply the complete desired set in one
+      // save per bill. The transaction keeps this intermediate state private.
+      for (const [outstandingId, outstanding] of replacement.documentsById) {
+        const available = replacement.availabilityById.get(outstandingId);
+        const desiredAmount = replacement.desiredById.get(outstandingId) || 0;
+        const nextPendingAmount = available - desiredAmount;
+        outstanding.bill_pending_amt = nextPendingAmount;
+        outstanding.classification = nextPendingAmount < 0 ? "cr" : "dr";
+        // Once the last Receipt reference is removed from a cancelled Sale,
+        // its zero-balance Outstanding can return to the Sale-cancelled state.
+        if (
+          outstanding.source === "sale" &&
+          sameAmount(outstanding.bill_amount, 0) &&
+          sameAmount(nextPendingAmount, 0)
+        ) {
+          outstanding.isCancelled = true;
+        }
+        await outstanding.save({ session });
+      }
+
+      await reversePartyMonthlyBalance({
+        cmp_id: receipt.cmp_id,
+        party_id: receipt.party_id,
+        date: receipt.date,
+        amount: receipt.amount,
+        session,
+      });
+      await updatePartyMonthlyBalance({
+        cmp_id: receipt.cmp_id,
+        party_id: receipt.party_id,
+        date,
+        amount: validatedData.amount,
+        session,
+      });
+
+      await applyEditedAdvanceOutstanding({
+        receipt,
+        advanceRows: originalState.advanceRows,
+        newAdvanceAmount: advanceAmount,
+        newDate: date,
+        updatedBy: validatedData.updated_by,
+        session,
+      });
+
+      const partyLedger = originalState.partyLedger;
+      partyLedger.date = date;
+      partyLedger.amount = Number(validatedData.amount);
+      partyLedger.against_id = validatedData.cash_bank_id;
+      await partyLedger.save({ session });
+
+      const cashBankLedger = originalState.cashBankLedger;
+      cashBankLedger.date = date;
+      cashBankLedger.cash_bank_id = validatedData.cash_bank_id;
+      cashBankLedger.cash_bank_name = validatedData.cash_bank_name;
+      cashBankLedger.cash_bank_type = validatedData.cash_bank_type;
+      cashBankLedger.amount = Number(validatedData.amount);
+      cashBankLedger.instrument_type = validatedData.instrument_type;
+      cashBankLedger.narration = validatedData.narration;
+      await cashBankLedger.save({ session });
+
+      const transaction = await Receipt.findOneAndUpdate(
+        {
+          ...accessFilter,
+          status: "active",
+          updated_at: receipt.updated_at,
+        },
+        {
+          $set: {
+            date,
+            cash_bank_id: validatedData.cash_bank_id,
+            cash_bank_name: validatedData.cash_bank_name,
+            cash_bank_type: validatedData.cash_bank_type,
+            instrument_type: validatedData.instrument_type,
+            amount: Number(validatedData.amount),
+            advance_amount: advanceAmount,
+            settlement_details: replacement.details,
+            narration: validatedData.narration,
+            cheque_number:
+              validatedData.instrument_type === "cheque"
+                ? validatedData.cheque_number
+                : null,
+            cheque_date:
+              validatedData.instrument_type === "cheque"
+                ? validatedData.cheque_date
+                : null,
+            updated_by: validatedData.updated_by,
+          },
+        },
+        { returnDocument: "after", session, runValidators: true },
+      );
+      if (!transaction) {
+        throw createHttpError(
+          "Receipt was modified by another operation. Reload before editing",
+          409,
+        );
+      }
+
+      const timeline = await updateVoucherTimelineEntry(
+        {
+          voucher_id: transaction._id,
+          voucher_type: transaction.voucher_type,
+        },
+        buildVoucherTimelineUpdatePayload(transaction),
+        session,
+      );
+      if (!timeline) {
+        throw createHttpError("Expected VoucherTimeline entry is missing", 409);
+      }
+
+      updatedCashTransaction = transaction.toObject();
+    });
+
+    return updatedCashTransaction;
+  } finally {
+    await session.endSession();
+  }
+}
+
+// Returns bills as they would look after removing only this Receipt's current
+// settlement. Fully settled original bills are therefore still selectable.
+export async function getReceiptEditAllocationAvailability(
+  id,
+  { cmp_id } = {},
+  req,
+) {
+  const accessFilter = applyTransactionCreatorScope(req, { _id: id, cmp_id });
+  const receipt = await Receipt.findOne(accessFilter).lean();
+  if (!receipt) {
+    throw createHttpError("Cash transaction not found", 404);
+  }
+  if (receipt.voucher_type !== "receipt") {
+    throw createHttpError("Only receipt is supported right now", 400);
+  }
+  if (receipt.status !== "active") {
+    throw createHttpError("Cancelled receipt cannot be edited", 400);
+  }
+
+  const originalSettlements = await loadOriginalSettlementAvailability(
+    receipt,
+    null,
+  );
+  const originalIds = Array.from(originalSettlements.keys());
+  const bills = await Outstanding.find({
+    cmp_id: receipt.cmp_id,
+    party_id: receipt.party_id,
+    isCancelled: false,
+    classification: "dr",
+    $or: [
+      { bill_pending_amt: { $gt: 0 } },
+      ...(originalIds.length ? [{ _id: { $in: originalIds } }] : []),
+    ],
+  })
+    .sort({ bill_date: 1, _id: 1 })
+    .lean();
+
+  const items = bills.map((bill) => {
+    const original = originalSettlements.get(String(bill._id));
+    const currentPending = Number(bill.bill_pending_amt) || 0;
+    const originalSettledAmount = original?.originalSettledAmount || 0;
+    return {
+      ...bill,
+      current_pending: currentPending,
+      original_settled_amount: originalSettledAmount,
+      editable_available: currentPending + originalSettledAmount,
+      originally_allocated: originalSettledAmount > 0,
+    };
+  });
+
+  return {
+    receipt_id: String(receipt._id),
+    party_id: String(receipt.party_id),
+    party_name: receipt.party_name,
+    expected_updated_at: receipt.updated_at,
+    original_allocations: (receipt.settlement_details || []).map((detail) => ({
+      outstanding: String(detail.outstanding),
+      settled_amount: Number(detail.settled_amount),
+    })),
+    items,
+  };
 }
 
 async function validateReceiptLedgers(transaction, session) {
@@ -962,6 +1615,17 @@ export async function getCashTransactionById(id, { cmp_id } = {}, req) {
   return Receipt.findOne(filter).lean();
 }
 
+export async function findReceiptByRequestId(requestId, { cmp_id } = {}, req) {
+  const request_id = String(requestId || "").trim();
+  if (!request_id || request_id.length > 128) {
+    throw createHttpError("A valid request_id is required", 400);
+  }
+  const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
+  return Receipt.findOne(filter)
+    .select("_id request_id voucher_number status created_at")
+    .lean();
+}
+
 // List receipts with filter support and creator/company scoping.
 export async function getCashTransactions(filters = {}, req) {
   const { cmp_id, voucher_type, party_id, status, from, to } = filters;
@@ -1179,6 +1843,9 @@ export async function getCashBankLedgerTransactions(filters = {}, req) {
       },
     },
     ...(Object.keys(detailMatch).length > 0 ? [{ $match: detailMatch }] : []),
+    // Calculate running balance in chronological order above, then present the
+    // newest ledger entries first without changing those balance values.
+    { $sort: { date: -1, _id: -1 } },
     { $skip: (pageNum - 1) * limitNum },
     { $limit: limitNum },
     {
@@ -1260,8 +1927,11 @@ export async function getCashBankLedgerTransactions(filters = {}, req) {
 
 export default {
   createCashTransaction,
+  updateCashTransaction,
   cancelCashTransaction,
   getCashTransactionById,
+  getReceiptEditAllocationAvailability,
+  findReceiptByRequestId,
   getCashTransactions,
   getCashBankLedgerBalances,
   getCashBankLedgerTransactions,

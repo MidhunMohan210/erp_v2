@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { createHash } from "node:crypto";
 
 import { getCashBankVoucherModel } from "../utils/cashBankVoucherModel.js";
 
@@ -82,6 +83,129 @@ function normalizeDate(value) {
     throw createSaleValidationError("transactionDate must be a valid date");
   }
   return date;
+}
+
+function canonicalObjectId(value) {
+  return new mongoose.Types.ObjectId(value).toString();
+}
+
+function buildSaleRequestFingerprint(input) {
+  const {
+    cmp_id,
+    userId,
+    series_id,
+    date,
+    party_id,
+    price_level_id,
+    normalized,
+    despatch_details,
+    narration,
+  } = input;
+  // Preserve line order: it is part of the saved voucher and duplicates are valid.
+  const canonicalSale = {
+    cmp_id: canonicalObjectId(cmp_id),
+    created_by: canonicalObjectId(userId),
+    voucher_type: "sale",
+    series_id: canonicalObjectId(series_id),
+    date: date.toISOString(),
+    party_id: canonicalObjectId(party_id),
+    price_level_id: price_level_id ? canonicalObjectId(price_level_id) : null,
+    items: normalized.items.map((item) => ({
+      item_id: canonicalObjectId(item.item_id),
+      godown_id: canonicalObjectId(item.godown_id),
+      godown_stock_row_id: canonicalObjectId(item.godown_stock_row_id),
+      selected_unit: item.selected_unit,
+      actual_qty: Number(item.actual_qty),
+      billed_qty: Number(item.billed_qty),
+      rate: Number(item.rate),
+      price_level_id: item.price_level_id
+        ? canonicalObjectId(item.price_level_id)
+        : null,
+      tax_inclusive: item.tax_inclusive,
+      discount_type: item.discount_type,
+      discount_value: Number(item.discount_value),
+      description: item.description,
+      warranty_card_id: item.warranty_card_id
+        ? canonicalObjectId(item.warranty_card_id)
+        : null,
+      initial_price_source: item.initial_price_source,
+    })),
+    additional_charges: normalized.additional_charges.map((charge) => ({
+      charge_master_id: canonicalObjectId(charge.charge_master_id),
+      action: charge.action,
+      value: Number(charge.value),
+    })),
+    despatch_details,
+    narration,
+  };
+  return createHash("sha256").update(JSON.stringify(canonicalSale)).digest("hex");
+}
+
+function buildLegacySaleRequestFingerprint(sale) {
+  const normalized = normalizeSaleInput({
+    items: (sale.items || []).map((item) => ({
+      item_id: item.item_id,
+      godown_id: item.godown_id,
+      godown_stock_row_id: item.godown_stock_row_id,
+      selected_unit: item.selected_unit,
+      actual_qty: item.actual_qty,
+      billed_qty: item.billed_qty,
+      rate: item.rate,
+      price_level_id: item.price_level_id,
+      tax_inclusive: item.tax_inclusive,
+      discount_type: item.discount_type,
+      discount_value: item.discount_type === "percentage" ? item.discount_percentage : item.discount_amount,
+      description: item.description,
+      warranty_card_id: item.warranty_card_id,
+      initial_price_source: item.initial_price_source,
+    })),
+    additional_charges: (sale.additional_charges || []).map((charge) => ({
+      additional_charge_id: charge.additional_charge_id,
+      action: charge.action,
+      value: charge.value,
+    })),
+  });
+  return buildSaleRequestFingerprint({
+    cmp_id: sale.cmp_id,
+    userId: sale.created_by,
+    series_id: sale.series_id,
+    date: normalizeDate(sale.date),
+    party_id: sale.party_id,
+    price_level_id: sale.price_level_id,
+    normalized,
+    despatch_details: mapDespatchDetails(sale.despatch_details),
+    narration: normalizedText(sale.narration),
+  });
+}
+
+function createSaleIdempotencyConflict() {
+  const error = new Error(
+    "This request ID has already been used for a different Sale payload.",
+  );
+  error.name = "SaleIdempotencyConflictError";
+  error.statusCode = 409;
+  return error;
+}
+
+async function resolveExistingSaleReplay(existingSale, requestFingerprint) {
+  let existingFingerprint = existingSale.request_fingerprint;
+  if (!existingFingerprint) {
+    try {
+      existingFingerprint = buildLegacySaleRequestFingerprint(existingSale);
+    } catch {
+      throw createSaleIdempotencyConflict();
+    }
+  }
+  if (existingFingerprint !== requestFingerprint) {
+    throw createSaleIdempotencyConflict();
+  }
+  if (!existingSale.request_fingerprint) {
+    await Sale.updateOne(
+      { _id: existingSale._id, request_fingerprint: null },
+      { $set: { request_fingerprint: existingFingerprint } },
+    );
+  }
+  return { ...existingSale, idempotent_replay: true };
 }
 
 function formatMonthKey(date) {
@@ -827,10 +951,6 @@ export async function createSale(data = {}, req = {}) {
   const userId = requiredObjectId(req.user?._id || req.user?.id, "userId");
   const request_id = normalizeRequestId(data.request_id ?? data.requestId);
 
-  /// if multiple requests with the same request_id are received concurrently, only one will succeed and the others will return the same Sale document. so we can prevent multiple postings for the same sale request.
-  const existingSale = await Sale.findOne({ cmp_id, request_id }).lean();
-  if (existingSale) return existingSale;
-
   const party_id = requiredObjectId(data.partyId ?? data.party_id, "partyId");
   const series_id = requiredObjectId(
     data.selectedSeries?._id ?? data.series_id,
@@ -843,10 +963,30 @@ export async function createSale(data = {}, req = {}) {
       : requiredObjectId(priceLevelValue, "priceLevelId");
   const date = normalizeDate(data.transactionDate ?? data.date);
   const normalized = normalizeSaleInput(data);
+  const despatch_details = mapDespatchDetails(
+    data.despatchDetails ?? data.despatch_details,
+  );
+  const narration = normalizedText(data.narration);
+  const request_fingerprint = buildSaleRequestFingerprint({
+    cmp_id,
+    userId,
+    series_id,
+    date,
+    party_id,
+    price_level_id,
+    normalized,
+    despatch_details,
+    narration,
+  });
+  const existingSale = await Sale.findOne({ cmp_id, request_id }).lean();
+  if (existingSale) {
+    return resolveExistingSaleReplay(existingSale, request_fingerprint);
+  }
   const session = await mongoose.startSession();
 
   try {
     let createdSale;
+    let isIdempotentReplay = false;
     await session.withTransaction(async () => {
       //But imagine 2 requests come almost at the same time:Both may  get passed the first check.Before actually creating everything, check one more time. Maybe another request already created it.
 
@@ -854,7 +994,8 @@ export async function createSale(data = {}, req = {}) {
         .session(session)
         .lean();
       if (replay) {
-        createdSale = replay;
+        createdSale = await resolveExistingSaleReplay(replay, request_fingerprint);
+        isIdempotentReplay = true;
         return;
       }
 
@@ -909,6 +1050,7 @@ export async function createSale(data = {}, req = {}) {
           {
             cmp_id,
             request_id,
+            request_fingerprint,
             voucher_type: "sale",
             series_id,
             series_name: voucherIdentity.series.seriesName,
@@ -933,10 +1075,8 @@ export async function createSale(data = {}, req = {}) {
             price_level_name: priceLevel?.pricelevel || null,
             items: mapSaleItems(calculated.items),
             additional_charges: mapCharges(calculated.additional_charges),
-            despatch_details: mapDespatchDetails(
-              data.despatchDetails ?? data.despatch_details,
-            ),
-            narration: normalizedText(data.narration),
+            despatch_details,
+            narration,
             totals: calculated.totals,
             status: getInitialTransactionStatus("sale"),
             tally_status: getInitialTransactionTallyStatus("sale"),
@@ -1027,14 +1167,14 @@ export async function createSale(data = {}, req = {}) {
       );
       createdSale = sale.toObject();
     });
-    return createdSale;
+    return { ...createdSale, idempotent_replay: isIdempotentReplay };
   } catch (error) {
     // The unique index is the final guard when two transactions begin before
     // either can observe the other's Sale. The losing transaction has already
     // rolled back its voucher/counter and posting writes at this point.
     if (isRequestIdDuplicateKeyError(error)) {
       const replay = await Sale.findOne({ cmp_id, request_id }).lean();
-      if (replay) return replay;
+      if (replay) return resolveExistingSaleReplay(replay, request_fingerprint);
     }
     throw error;
   } finally {
@@ -1052,6 +1192,14 @@ export async function getSaleById(id, { cmp_id } = {}, req = {}) {
   if (cmp_id) filter.cmp_id = cmp_id;
 
   return Sale.findOne(filter).lean();
+}
+
+export async function findSaleByRequestId(requestId, { cmp_id } = {}, req = {}) {
+  const request_id = normalizeRequestId(requestId);
+  const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
+  return Sale.findOne(filter)
+    .select("_id request_id voucher_number status created_at")
+    .lean();
 }
 
 /**
@@ -1189,4 +1337,4 @@ export async function cancelSale(id, data = {}, req = {}) {
 }
 
 export { buildSaleCashBankLedger, isCashBankParty };
-export default { createSale, getSaleById, updateSale, cancelSale };
+export default { createSale, getSaleById, findSaleByRequestId, updateSale, cancelSale };

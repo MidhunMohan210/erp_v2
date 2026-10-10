@@ -12,6 +12,7 @@ import {
   Building2,
   CreditCard,
   Landmark,
+  LoaderCircle,
   ReceiptText,
   User2,
 } from "lucide-react";
@@ -32,6 +33,11 @@ import useCashTransactionDraft from "@/hooks/useCashTransactionDraft";
 import { ROUTES } from "@/routes/paths";
 import calculateAutoSettlement from "@/utils/calculateAutoSettlement";
 import { useMobileHeader } from "@/components/Layout/HomeLayout";
+import {
+  clearLegacyPendingSubmissions,
+  createInMemorySubmission,
+  generateRequestId,
+} from "@/utils/idempotentSubmissionStorage";
 
 /**
  * Formats amount into rupee display text.
@@ -414,14 +420,18 @@ function AmountSettlementStep({
  */
 export default function CashTransactionScreen({ voucher_type = "receipt" }) {
   const cmp_id = useSelector((state) => state.company.selectedCompanyId);
+  const authenticatedUser = useSelector((state) => state.auth.user);
   const navigate = useNavigate();
   const { setHeaderOptions, resetHeaderOptions } = useMobileHeader();
   const buildHeaderPayloadRef = useRef(null);
+  const submissionInFlightRef = useRef(false);
+  const pendingSubmissionRef = useRef(null);
+  const activeVisitRef = useRef(true);
+  const previousReceiptScopeRef = useRef(null);
   const [headerReady, setHeaderReady] = useState(false);
   const [partySheetOpen, setPartySheetOpen] = useState(false);
   const [cashBankSheetOpen, setCashBankSheetOpen] = useState(false);
   const {
-    requestId,
     transactionDate,
     setTransactionDate,
     selectedSeries,
@@ -448,6 +458,49 @@ export default function CashTransactionScreen({ voucher_type = "receipt" }) {
     setStep,
     clearDraft,
   } = useCashTransactionDraft({ cmp_id, voucher_type });
+  const [pendingSubmission, setPendingSubmission] = useState(null);
+  const [recoveryState, setRecoveryState] = useState("idle");
+  const userId =
+    authenticatedUser?._id || authenticatedUser?.id || authenticatedUser?.user_id || null;
+  const submissionScope = useMemo(
+    () =>
+      voucher_type === "receipt" && cmp_id && userId
+        ? { companyId: cmp_id, userId, module: "receipt-create" }
+        : null,
+    [cmp_id, userId, voucher_type],
+  );
+
+  useEffect(() => {
+    activeVisitRef.current = true;
+    return () => {
+      activeVisitRef.current = false;
+      submissionInFlightRef.current = false;
+      pendingSubmissionRef.current = null;
+    };
+  }, []);
+
+  // Never restore old receipt submissions. Clear both retired session formats
+  // and keep the retry record only in this mounted page instance.
+  useEffect(() => {
+    let disposed = false;
+    const nextScopeKey =
+      voucher_type === "receipt" ? `${cmp_id || ""}:${userId || ""}` : null;
+    const previousScopeKey = previousReceiptScopeRef.current;
+    previousReceiptScopeRef.current = nextScopeKey;
+    if (submissionScope) clearLegacyPendingSubmissions(submissionScope);
+    pendingSubmissionRef.current = null;
+    submissionInFlightRef.current = false;
+    queueMicrotask(() => {
+      if (!disposed && activeVisitRef.current) {
+        if (previousScopeKey && previousScopeKey !== nextScopeKey) clearDraft();
+        setPendingSubmission(null);
+        setRecoveryState("idle");
+      }
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [clearDraft, cmp_id, submissionScope, userId, voucher_type]);
 
   // Receives header payload builder from TransactionHeader.
   const handleHeaderReady = useCallback((builder) => {
@@ -494,28 +547,88 @@ export default function CashTransactionScreen({ voucher_type = "receipt" }) {
     setBills(calculateAutoSettlement(amount, outstandingQuery.data.items));
   }, [amount, outstandingQuery.data, setBills]);
 
+  const openCashTransaction = useCallback(
+    (cashTransaction) => {
+      if (!activeVisitRef.current || !cashTransaction?._id) return;
+      pendingSubmissionRef.current = null;
+      setPendingSubmission(null);
+      setRecoveryState("idle");
+      clearDraft();
+      navigate(
+        ROUTES.transactionDetail
+          .replace(":voucherType", voucher_type)
+          .replace(":voucherId", cashTransaction._id),
+        {
+          state: { transaction: cashTransaction, voucherType: voucher_type },
+        },
+      );
+    },
+    [clearDraft, navigate, voucher_type],
+  );
+
+  const reconcileCurrentSubmission = useCallback(
+    async (record) => {
+      if (!record || !cmp_id || !activeVisitRef.current) return;
+      setRecoveryState("checking");
+      try {
+        const result = await cashTransactionService.getCashTransactionByRequestId(
+          record.requestId,
+          { cmp_id },
+        );
+        if (
+          !activeVisitRef.current ||
+          pendingSubmissionRef.current?.requestId !== record.requestId
+        ) return;
+        if (!result?.id) {
+          setRecoveryState("unconfirmed");
+          return;
+        }
+        openCashTransaction({ _id: result.id });
+      } catch {
+        if (
+          activeVisitRef.current &&
+          pendingSubmissionRef.current?.requestId === record.requestId
+        ) setRecoveryState("unconfirmed");
+      }
+    },
+    [cmp_id, openCashTransaction],
+  );
+
+  const handleCreateError = useCallback(
+    async (error, variables) => {
+      if (!activeVisitRef.current) return;
+      const record = pendingSubmissionRef.current?.requestId === variables?.request_id
+        ? pendingSubmissionRef.current
+        : null;
+      if (!record) return;
+      const status = error?.response?.status;
+      const isUncertain = !error?.response || status === 409 || status >= 500;
+      if (!isUncertain) {
+        pendingSubmissionRef.current = null;
+        setPendingSubmission(null);
+        setRecoveryState("idle");
+        return;
+      }
+      await reconcileCurrentSubmission(record);
+    },
+    [reconcileCurrentSubmission],
+  );
+
   const createCashTransactionMutation = useCreateCashTransaction({
     cmp_id,
     voucher_type,
-    onSuccess: async (data) => {
+    onSuccess: async (data, variables) => {
       const cashTransaction = data?.data?.cashTransaction;
-
       if (cashTransaction?._id) {
-        clearDraft();
-
-        navigate(
-          ROUTES.transactionDetail
-            .replace(":voucherType", voucher_type)
-            .replace(":voucherId", cashTransaction._id),
-          {
-            state: {
-              transaction: cashTransaction,
-              voucherType: voucher_type,
-            },
-          }
-        );
+        if (
+          voucher_type !== "receipt" ||
+          pendingSubmissionRef.current?.requestId === variables?.request_id
+        ) {
+          openCashTransaction(cashTransaction);
+        }
       }
     },
+    onError: handleCreateError,
   });
 
   const selectedSettlementCount = settlementDetails.length;
@@ -535,14 +648,30 @@ export default function CashTransactionScreen({ voucher_type = "receipt" }) {
     createCashTransactionMutation.isPending || createCashTransactionMutation.isLoading;
   const disableCreate =
     !cmp_id ||
+    (voucher_type === "receipt" && !userId) ||
     !headerReady ||
     !party?._id ||
     !cashBank?._id ||
     (Number(amount) || 0) <= 0 ||
-    (instrumentType === "cheque" && (!chequeNumber || !chequeDate));
+    (instrumentType === "cheque" && (!chequeNumber || !chequeDate)) ||
+    Boolean(pendingSubmission);
+
+  const submitFrozenPayload = useCallback(
+    (record) => {
+      if (!record || submissionInFlightRef.current || !activeVisitRef.current) return;
+      submissionInFlightRef.current = true;
+      createCashTransactionMutation.mutate(record.payload, {
+        onSettled: () => {
+          submissionInFlightRef.current = false;
+        },
+      });
+    },
+    [createCashTransactionMutation],
+  );
 
   // Final create action.
   const handleCreate = () => {
+    if (submissionInFlightRef.current || pendingSubmission) return;
     const totalSettled = settlementDetails.reduce(
       (total, item) => total + (Number(item?.settled_amount) || 0),
       0,
@@ -556,23 +685,44 @@ export default function CashTransactionScreen({ voucher_type = "receipt" }) {
     const headerPayload = buildHeaderPayloadRef.current
       ? buildHeaderPayloadRef.current()
       : {};
-    const payload = cashTransactionService.buildCreateCashTransactionPayload({
-      cmp_id,
-      requestId,
-      voucher_type,
-      party,
-      cashBank,
-      instrumentType,
-      amount,
-      settlementDetails,
-      narration,
-      chequeNumber,
-      chequeDate: chequeDate ? chequeDate.toISOString() : null,
-      headerPayload,
-    });
-
-    createCashTransactionMutation.mutate(payload);
+    try {
+      const requestId = generateRequestId();
+      const payload = cashTransactionService.buildCreateCashTransactionPayload({
+        cmp_id,
+        requestId,
+        voucher_type,
+        party,
+        cashBank,
+        instrumentType,
+        amount,
+        settlementDetails,
+        narration,
+        chequeNumber,
+        chequeDate: chequeDate ? chequeDate.toISOString() : null,
+        headerPayload,
+      });
+      if (voucher_type !== "receipt") {
+        createCashTransactionMutation.mutate(payload);
+        return;
+      }
+      const record = createInMemorySubmission(requestId, payload);
+      pendingSubmissionRef.current = record;
+      setPendingSubmission(record);
+      setRecoveryState("submitting");
+      submitFrozenPayload(record);
+    } catch (error) {
+      toast.error(error?.message || "Unable to safely save this receipt request.");
+    }
   };
+
+  const handleRetryPending = useCallback(() => {
+    if (!pendingSubmission || submissionInFlightRef.current) return;
+    setRecoveryState("submitting");
+    submitFrozenPayload(pendingSubmission);
+  }, [pendingSubmission, submitFrozenPayload]);
+
+  const hasCurrentRecovery = Boolean(pendingSubmission) && !createLoading;
+  const isCheckingCurrentStatus = hasCurrentRecovery && recoveryState === "checking";
 
   if (step === "settlement") {
     return (
@@ -768,14 +918,57 @@ export default function CashTransactionScreen({ voucher_type = "receipt" }) {
           </DetailCard>
 
           <div className="sticky bottom-0 z-10 -mx-3 border-t border-slate-200 bg-white px-3 py-3">
-           
-            <Button
-              onClick={handleCreate}
-              disabled={disableCreate || createLoading}
-              className="h-11 w-full rounded-xl bg-sky-500 text-sm font-semibold text-white shadow-md shadow-sky-200 hover:bg-sky-600"
-            >
-              {createLoading ? "Saving..." : actionLabel}
-            </Button>
+            {createLoading ? (
+              <Button disabled className="h-11 w-full rounded-xl bg-sky-500 text-sm font-semibold text-white opacity-70">
+                Creating {voucher_type === "payment" ? "Payment" : "Receipt"}...
+              </Button>
+            ) : hasCurrentRecovery ? (
+              <div className="space-y-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3">
+                <div className="flex items-start gap-2 text-xs text-slate-700">
+                  <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                  <div>
+                    <p className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                      {isCheckingCurrentStatus ? (
+                        <LoaderCircle className="h-3.5 w-3.5 animate-spin" />
+                      ) : null}
+                      {isCheckingCurrentStatus
+                        ? "Checking receipt status"
+                        : "Receipt not confirmed"}
+                    </p>
+                    <p className="mt-1">
+                      {isCheckingCurrentStatus
+                        ? "Please wait while we check whether it was saved."
+                        : "We couldn't confirm whether your receipt was saved."}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  onClick={handleRetryPending}
+                  disabled={isCheckingCurrentStatus}
+                  className="h-11 w-full rounded-xl bg-sky-500 text-sm font-semibold text-white shadow-md shadow-sky-200 hover:bg-sky-600"
+                >
+                  Retry Receipt
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => reconcileCurrentSubmission(pendingSubmission)}
+                  disabled={isCheckingCurrentStatus}
+                  className="h-11 w-full rounded-xl"
+                >
+                  Check Status
+                </Button>
+              </div>
+            ) : (
+              <Button
+                onClick={handleCreate}
+                disabled={disableCreate}
+                className="h-11 w-full rounded-xl bg-sky-500 text-sm font-semibold text-white shadow-md shadow-sky-200 hover:bg-sky-600"
+              >
+                {actionLabel}
+              </Button>
+            )}
           </div>
         </div>
       </main>

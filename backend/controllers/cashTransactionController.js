@@ -3,11 +3,15 @@ import mongoose from "mongoose";
 import {
   cancelCashTransaction as cancelCashTransactionService,
   createCashTransaction as createCashTransactionService,
+  getReceiptEditAllocationAvailability as getReceiptEditAllocationAvailabilityService,
   getCashBankLedgerBalances as getCashBankLedgerBalancesService,
   getCashBankLedgerTransactions as getCashBankLedgerTransactionsService,
   getCashTransactionById as getCashTransactionByIdService,
+  findReceiptByRequestId as findReceiptByRequestIdService,
   getCashTransactions as getCashTransactionsService,
+  updateCashTransaction as updateCashTransactionService,
 } from "../services/cashTransaction.service.js";
+import { auditReceipt as auditReceiptService } from "../services/receiptAudit.service.js";
 
 // Utility: returns first non-undefined value among candidates.
 function firstDefined(...values) {
@@ -53,8 +57,54 @@ function buildCashTransactionPayload(body = {}, userId = null) {
     narration: body.narration || null,
     cheque_number: body.cheque_number || body.chequeNumber || null,
     cheque_date: body.cheque_date || body.chequeDate || null,
-    created_by: body.created_by || userId || null,
-    updated_by: body.updated_by || userId || null,
+    created_by:  userId || null,
+    updated_by:  userId || null,
+  };
+}
+
+// Edit is a complete replacement of the mutable Receipt fields. Optional party
+// and identity values are retained only so the service can reject changes.
+function buildCashTransactionEditPayload(body = {}, userId = null) {
+  return {
+    expected_updated_at:
+      body.expected_updated_at || body.expectedUpdatedAt || null,
+    voucher_type: body.voucher_type,
+    date: body.date || body.transactionDate,
+    party_id: body.party_id || body.party?._id || body.party?.id,
+    party_name:
+      body.party_name !== undefined
+        ? body.party_name
+        : body.party?.partyName,
+    cash_bank_id:
+      body.cash_bank_id || body.cash_bank?._id || body.cash_bank?.id,
+    cash_bank_type:
+      body.cash_bank_type ||
+      firstDefined(body.cash_bank?.partyType, body.cashBankType),
+    instrument_type: body.instrument_type || body.instrumentType,
+    amount: Number(body.amount),
+    settlement_details: normalizeSettlementDetails(
+      Array.isArray(body.settlement_details) ? body.settlement_details : [],
+    ),
+    narration: body.narration || null,
+    cheque_number: body.cheque_number || body.chequeNumber || null,
+    cheque_date: body.cheque_date || body.chequeDate || null,
+    updated_by: userId || null,
+    immutable_fields: {
+      _id: body._id,
+      request_id: body.request_id ?? body.requestId,
+      request_fingerprint: body.request_fingerprint,
+      series_id: body.series_id,
+      series_name: body.series_name,
+      voucher_number: body.voucher_number,
+      company_level_serial_number: body.company_level_serial_number,
+      user_level_serial_number: body.user_level_serial_number,
+      created_by: body.created_by,
+      created_at: body.created_at,
+      status: body.status,
+      cancelled_at: body.cancelled_at,
+      cancelled_by: body.cancelled_by,
+      cancellation_reason: body.cancellation_reason,
+    },
   };
 }
 
@@ -64,6 +114,15 @@ function buildCashTransactionPayload(body = {}, userId = null) {
 // - enforce current product scope (`receipt` only)
 // - delegate transactional writes to service layer
 export async function createCashTransaction(req, res) {
+  // return res.status(503).json({
+  //   success: false,
+  //   message: "TEST: Forced Receipt creation failure",
+  // });
+  //   return res.status(400).json({
+  //   success: false,
+  //   message: "TEST: definite rejection",
+  // });
+
   try {
     const body = req.body || {};
     const userId = req.user?._id || req.user?.id || null;
@@ -111,6 +170,8 @@ export async function createCashTransaction(req, res) {
     const { cashTransaction, isIdempotentReplay } =
       await createCashTransactionService(payload, req);
 
+    // await new Promise((resolve) => setTimeout(resolve, 15000));
+
     return res.status(isIdempotentReplay ? 200 : 201).json({
       success: true,
       idempotent_replay: isIdempotentReplay,
@@ -125,6 +186,92 @@ export async function createCashTransaction(req, res) {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to create cash transaction",
+    });
+  }
+}
+
+// Controller: replace the mutable fields of one active Receipt.
+export async function updateCashTransaction(req, res) {
+  try {
+    const id = req.params.id;
+    const body = req.body || {};
+    const userId = req.user?._id || req.user?.id || null;
+
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+    if (!body.expected_updated_at && !body.expectedUpdatedAt) {
+      return res.status(400).json({
+        success: false,
+        message: "expected_updated_at is required",
+      });
+    }
+    if (!Array.isArray(body.settlement_details)) {
+      return res.status(400).json({
+        success: false,
+        message: "settlement_details must be an array",
+      });
+    }
+
+    const payload = buildCashTransactionEditPayload(body, userId);
+    if (
+      !payload.date ||
+      !payload.cash_bank_id ||
+      !payload.cash_bank_type ||
+      !payload.instrument_type ||
+      !Number.isFinite(payload.amount) ||
+      payload.amount <= 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing or invalid Receipt edit fields",
+      });
+    }
+
+    const cashTransaction = await updateCashTransactionService(
+      id,
+      { ...payload, cmp_id: req.companyId },
+      req,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Receipt updated successfully",
+      data: { cashTransaction },
+    });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("updateCashTransaction error:", error);
+    }
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to update cash transaction",
+    });
+  }
+}
+
+// Controller: authoritative Outstanding availability for one Receipt edit.
+export async function getReceiptEditAllocationAvailability(req, res) {
+  try {
+    const id = req.params.id;
+    if (!id || !mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id" });
+    }
+
+    const data = await getReceiptEditAllocationAvailabilityService(
+      id,
+      { cmp_id: req.companyId },
+      req,
+    );
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("getReceiptEditAllocationAvailability error:", error);
+    }
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message:
+        error.message || "Failed to fetch Receipt edit allocation availability",
     });
   }
 }
@@ -176,6 +323,7 @@ export async function cancelCashTransaction(req, res) {
 
 // Controller: fetch one receipt by id.
 export async function getCashTransactionById(req, res) {
+
   try {
     const { id } = req.params;
     const cmp_id = req.companyId;
@@ -219,6 +367,50 @@ export async function getCashTransactionById(req, res) {
       success: false,
       message: error.message || "Failed to fetch cash transaction",
     });
+  }
+}
+
+export async function getReceiptByRequestId(req, res) {
+
+  try {
+    const receipt = await findReceiptByRequestIdService(
+      req.params.requestId,
+      { cmp_id: req.companyId },
+      req,
+    );
+    if (!receipt) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Receipt not found" });
+    }
+    return res.status(200).json({
+      success: true,
+      data: {
+        exists: true,
+        transaction_type: "receipt",
+        request_id: receipt.request_id,
+        id: receipt._id,
+        voucher_number: receipt.voucher_number,
+        status: receipt.status,
+        created_at: receipt.created_at,
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to find Receipt",
+    });
+  }
+}
+
+// Development-only route registration controls access; this controller only reads.
+export async function auditReceipt(req, res) {
+  try {
+    const data = await auditReceiptService({ receiptId: req.params.receiptId, companyId: req.companyId });
+    return res.status(200).json({ success: true, data });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") console.error("auditReceipt error:", error);
+    return res.status(error.statusCode || 500).json({ success: false, message: error.message || "Failed to audit Receipt" });
   }
 }
 
@@ -301,17 +493,35 @@ export async function getCashBankLedgerTransactions(req, res) {
     const cmp_id = req.companyId;
 
     if (!mongoose.Types.ObjectId.isValid(cashBankId)) {
-      return res.status(400).json({ success: false, message: "Invalid cash/bank account id" });
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid cash/bank account id" });
     }
     if (direction && !["in", "out"].includes(String(direction))) {
-      return res.status(400).json({ success: false, message: "direction must be in or out" });
+      return res
+        .status(400)
+        .json({ success: false, message: "direction must be in or out" });
     }
-    if (voucher_type && !["sale", "receipt", "payment"].includes(String(voucher_type))) {
-      return res.status(400).json({ success: false, message: "Invalid voucher_type" });
+    if (
+      voucher_type &&
+      !["sale", "receipt", "payment"].includes(String(voucher_type))
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Invalid voucher_type" });
     }
 
     const history = await getCashBankLedgerTransactionsService(
-      { cmp_id, cash_bank_id: cashBankId, page, limit, from, to, voucher_type, direction },
+      {
+        cmp_id,
+        cash_bank_id: cashBankId,
+        page,
+        limit,
+        from,
+        to,
+        voucher_type,
+        direction,
+      },
       req,
     );
     return res.status(200).json({ success: true, data: history });
@@ -325,8 +535,12 @@ export async function getCashBankLedgerTransactions(req, res) {
 
 export default {
   createCashTransaction,
+  updateCashTransaction,
   cancelCashTransaction,
   getCashTransactionById,
+  getReceiptEditAllocationAvailability,
+  getReceiptByRequestId,
+  auditReceipt,
   getCashTransactions,
   getCashBankLedgerBalances,
   getCashBankLedgerTransactions,

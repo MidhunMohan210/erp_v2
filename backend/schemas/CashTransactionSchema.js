@@ -104,5 +104,11 @@ CashTransactionSchema.index(
   },
 );
 
+CashTransactionSchema.index({
+  cmp_id: 1,
+  "settlement_details.outstanding": 1,
+  status: 1,
+});
+
 export { CashTransactionSchema, SettlementDetailSchema };
 export default CashTransactionSchema;
