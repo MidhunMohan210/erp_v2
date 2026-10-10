@@ -3058,7 +3058,7 @@ describe("GET /api/cash-transactions/cash-bank/:cashBankId/transactions", () => 
     expect(res.body.data.hasMore).toBe(false);
   });
 
-  it("returns each receipt ledger posting with the authoritative balance, direction and running balance", async () => {
+  it("returns each receipt ledger posting newest first with the authoritative balance, direction and running balance", async () => {
     const first = await createReceiptForTest({ amount: 100, transactionDate: "2026-06-28T00:00:00.000Z" });
     const second = await createReceiptForTest({ amount: 100, transactionDate: "2026-06-29T00:00:00.000Z" });
     const res = await getCashBankHistory(baseContext.cashAccount._id);
@@ -3067,11 +3067,11 @@ describe("GET /api/cash-transactions/cash-bank/:cashBankId/transactions", () => 
     expect(res.body.data.summary).toMatchObject({ balance: 200, totalIn: 200, totalOut: 0 });
     expect(res.body.data.items).toHaveLength(2);
     expect(res.body.data.items.map((item) => item.voucher_id)).toEqual([
-      String(first.body.data.cashTransaction._id),
       String(second.body.data.cashTransaction._id),
+      String(first.body.data.cashTransaction._id),
     ]);
     expect(res.body.data.items.map((item) => item.direction)).toEqual(["in", "in"]);
-    expect(res.body.data.items.map((item) => item.running_balance)).toEqual([100, 200]);
+    expect(res.body.data.items.map((item) => item.running_balance)).toEqual([200, 100]);
   });
 
   it("applies date, direction and pagination filters without changing the matching summary", async () => {
@@ -3120,8 +3120,8 @@ describe("GET /api/cash-transactions/cash-bank/:cashBankId/transactions", () => 
       .query({ cmp_id: String(baseContext.companyId), cash_bank_type: "cash" });
 
     expect(history.body.data.summary).toMatchObject({ balance: 250, totalIn: 300, totalOut: 50 });
-    expect(history.body.data.items.map((item) => item.direction)).toEqual(["in", "in", "out"]);
-    expect(history.body.data.items.map((item) => item.running_balance)).toEqual([100, 300, 250]);
+    expect(history.body.data.items.map((item) => item.direction)).toEqual(["out", "in", "in"]);
+    expect(history.body.data.items.map((item) => item.running_balance)).toEqual([250, 300, 100]);
     expect(balances.body.data.balances[0].current_balance).toBe(250);
   });
 
