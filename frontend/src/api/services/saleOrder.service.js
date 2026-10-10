@@ -34,6 +34,7 @@ export function buildCreateSaleOrderPayload({
   totals,
   selectedPriceLevel,
   headerPayload = {},
+  requestId,
 }) {
   // Header payload comes from `TransactionHeader` (date, voucher series, etc.).
   const sanitizedHeaderPayload = {
@@ -44,6 +45,8 @@ export function buildCreateSaleOrderPayload({
 
   return {
     ...sanitizedHeaderPayload,
+    // Idempotency applies to create only. Update payloads intentionally omit it.
+    ...(requestId ? { request_id: requestId } : {}),
     // Keep both naming conventions for compatibility across backend mappers.
     cmp_id,
     cmpId: cmp_id,
@@ -249,6 +252,10 @@ export function buildUpdateSaleOrderPayload({
     headerPayload,
   });
 
+  // Guard against a future caller accidentally passing a create request ID
+  // through edit state. Existing edit/cancel behavior remains _id based.
+  delete basePayload.request_id;
+
   return {
     ...basePayload,
     selectedSeries: selectedSeries
@@ -284,6 +291,21 @@ export async function getSaleOrderById(saleOrderId, { cmpId, ...options } = {}) 
   return response.data?.data?.saleOrder || null;
 }
 
+export async function getSaleOrderByRequestId(requestId, { cmpId, ...options } = {}) {
+  if (!requestId) return null;
+
+  const response = await api.get(
+    `/sale-orders/by-request-id/${encodeURIComponent(requestId)}`,
+    {
+      params: cmpId ? { cmpId } : {},
+      skipGlobalLoader: true,
+      ...options,
+    },
+  );
+
+  return response.data?.data || null;
+}
+
 export async function updateSaleOrder(saleOrderId, payload) {
   // Update mutable fields of existing sale order.
   const response = await api.put(`/sale-orders/${saleOrderId}`, payload, {
@@ -309,6 +331,7 @@ export const saleOrderService = {
   buildUpdateSaleOrderPayload,
   createSaleOrder,
   getSaleOrderById,
+  getSaleOrderByRequestId,
   updateSaleOrder,
   cancelSaleOrder,
 };

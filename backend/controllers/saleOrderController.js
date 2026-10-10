@@ -12,6 +12,11 @@ import {
 // - Call service functions that contain transactional business logic
 // - Convert thrown service errors into consistent HTTP responses
 export async function createSaleOrder(req, res) {
+
+  return res.status(503).json({
+    success: false,
+    message: "Sale order creation is temporarily disabled",
+  });
   try {
     // Incoming payload is frontend-driven; service will perform deeper checks.
     const body = req.body || {};

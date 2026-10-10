@@ -57,8 +57,8 @@ function buildCashTransactionPayload(body = {}, userId = null) {
     narration: body.narration || null,
     cheque_number: body.cheque_number || body.chequeNumber || null,
     cheque_date: body.cheque_date || body.chequeDate || null,
-    created_by: body.created_by || userId || null,
-    updated_by: body.updated_by || userId || null,
+    created_by:  userId || null,
+    updated_by:  userId || null,
   };
 }
 
