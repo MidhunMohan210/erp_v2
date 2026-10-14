@@ -1250,6 +1250,12 @@ describe("POST /api/cash-transactions - DB side effects (no settlements)", () =>
 
     expect(timelineEntry).not.toBeNull();
     expect(String(timelineEntry.voucher_id)).toBe(res.body.data.cashTransaction._id);
+    expect(res.body.data.cashTransaction.tally_ref).toMatchObject({
+      tally_status: "pending",
+      tally_accepted_at: null,
+      tally_voucher_id: null,
+    });
+    expect(timelineEntry.tally_status).toBe("pending");
   });
 
   it("VoucherSeries currentNumber incremented by 1", async () => {
@@ -2556,6 +2562,26 @@ describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
     const cancelledEdit = await editReceiptRequest(receiptId);
     expect(cancelledEdit.status).toBe(400);
     expect(cancelledEdit.body.message).toBe("Cancelled receipt cannot be edited");
+  });
+
+  it("rejects editing and cancelling a Tally-accepted receipt", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    await Receipt.updateOne(
+      { _id: receiptId },
+      { $set: { "tally_ref.tally_status": "accepted", "tally_ref.tally_accepted_at": new Date() } },
+    );
+
+    const [edit, cancellation] = await Promise.all([
+      editReceiptRequest(receiptId),
+      cancelReceiptRequest(receiptId),
+    ]);
+
+    expect(edit.status).toBe(409);
+    expect(edit.body.message).toBe("Tally-accepted Receipt cannot be edited");
+    expect(cancellation.status).toBe(409);
+    expect(cancellation.body.message).toBe("Tally-accepted Receipt cannot be cancelled");
+    expect((await Receipt.findById(receiptId).lean()).status).toBe("active");
   });
 
   it("allows only one of two edits using the same version to win", async () => {

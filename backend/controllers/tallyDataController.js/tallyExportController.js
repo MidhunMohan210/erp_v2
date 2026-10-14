@@ -6,6 +6,7 @@ import SaleOrder from "../../Model/SaleOrder.js";
 import { buildBulkResponse } from "../../helpers/tallyDataHelpers.js";
 import { acknowledgeSaleOrderFromTally } from "../../services/saleOrderTallyAcknowledgement.service.js";
 import { acknowledgeSaleFromTally } from "../../services/saleTallyAcknowledgement.service.js";
+import { acknowledgeReceiptFromTally } from "../../services/receiptTallyAcknowledgement.service.js";
 import { getApiLogs } from "../../utils/logs.js";
 
 const flattenSaleOrderTotalsIntoPartySnapshot = (doc) => {
@@ -336,5 +337,62 @@ export const markSalesAcceptedFromTally = async (req, res) => {
   } catch (error) {
     console.error("markSalesAcceptedFromTally error:", error);
     return res.status(500).json({ status: "failure", message: "Failed to acknowledge sales" });
+  }
+};
+
+export const markReceiptsAcceptedFromTally = async (req, res) => {
+  try {
+    const receiptsToMark = req?.body?.data;
+    const cmpId = req.tally_cmp_id || req.headers?.cmp_id || null;
+    if (!Array.isArray(receiptsToMark) || receiptsToMark.length === 0) return res.status(400).json({ status: "failure", message: "No receipt acknowledgement data provided" });
+    if (!cmpId || !mongoose.Types.ObjectId.isValid(cmpId)) return res.status(400).json({ status: "failure", message: "Valid cmp_id is required" });
+
+    const skippedItems = [];
+    const items = [];
+    const uniqueReceiptIds = new Map();
+    for (let i = 0; i < receiptsToMark.length; i++) {
+      const item = receiptsToMark[i];
+      const itemIndex = i + 1;
+      const receiptId = String(item?.receipt_id || "").trim();
+      const tallyVoucherId = item?.tally_voucher_id;
+      if (!receiptId || !mongoose.Types.ObjectId.isValid(receiptId)) {
+        skippedItems.push({ item: itemIndex, reason: "Invalid receipt_id", data: { receipt_id: item?.receipt_id || null } });
+        items.push({ item: itemIndex, receipt_id: item?.receipt_id || null, outcome: "invalid_id" });
+        continue;
+      }
+      if (tallyVoucherId !== undefined && (typeof tallyVoucherId !== "string" || !tallyVoucherId.trim())) {
+        skippedItems.push({ item: itemIndex, reason: "tally_voucher_id must be a non-empty string when supplied", data: { receipt_id: receiptId } });
+        items.push({ item: itemIndex, receipt_id: receiptId, outcome: "invalid_tally_voucher_id" });
+        continue;
+      }
+      if (uniqueReceiptIds.has(receiptId)) {
+        skippedItems.push({ item: itemIndex, reason: "Duplicate in request", data: { receipt_id: receiptId } });
+        items.push({ item: itemIndex, receipt_id: receiptId, outcome: "duplicate_in_request" });
+        continue;
+      }
+      uniqueReceiptIds.set(receiptId, { itemIndex, tallyVoucherId: tallyVoucherId?.trim() || null });
+    }
+
+    let updatedCount = 0;
+    let unchangedCount = 0;
+    for (const [receiptId, { itemIndex, tallyVoucherId }] of uniqueReceiptIds) {
+      try {
+        const acknowledgement = await acknowledgeReceiptFromTally({ receiptId, cmpId, tallyVoucherId });
+        items.push({ item: itemIndex, ...acknowledgement });
+        if (acknowledgement.outcome === "accepted") updatedCount += 1;
+        else if (acknowledgement.outcome === "already_accepted") unchangedCount += 1;
+        else skippedItems.push({ item: itemIndex, reason: acknowledgement.reason || `Receipt acknowledgement outcome: ${acknowledgement.outcome}`, data: { receipt_id: receiptId, outcome: acknowledgement.outcome } });
+      } catch (error) {
+        items.push({ item: itemIndex, receipt_id: receiptId, outcome: "failed" });
+        skippedItems.push({ item: itemIndex, reason: `Processing error: ${error.message}`, data: { receipt_id: receiptId, outcome: "failed" } });
+      }
+    }
+
+    const response = buildBulkResponse({ entityName: "Receipt acknowledgement", totalReceived: receiptsToMark.length, insertedCount: 0, updatedCount, unchangedCount, skippedItems, items: items.sort((left, right) => left.item - right.item) });
+    const httpStatus = response.status === "failure" ? 400 : response.status === "partial_success" ? 207 : 200;
+    return res.status(httpStatus).json(response);
+  } catch (error) {
+    console.error("markReceiptsAcceptedFromTally error:", error);
+    return res.status(500).json({ status: "failure", message: "Failed to acknowledge receipts" });
   }
 };

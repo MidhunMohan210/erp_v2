@@ -1,5 +1,7 @@
 import mongoose from "mongoose";
 
+import TallyRefSchema from "../Model/TallyRefSchema.js";
+
 const { Schema } = mongoose;
 
 // Per-bill settlement detail attached to Receipt or Payment transactions.
@@ -66,6 +68,12 @@ const CashTransactionSchema = new Schema(
       type: String,
       enum: ["active", "cancelled"],
       default: "active",
+    },
+    tally_ref: {
+      type: TallyRefSchema,
+      default: function receiptTallyRefDefault() {
+        return this.voucher_type === "receipt" ? {} : undefined;
+      },
     },
     cancelled_at: { type: Date, default: null },
     cancelled_by: { type: Schema.Types.ObjectId, ref: "User", default: null },

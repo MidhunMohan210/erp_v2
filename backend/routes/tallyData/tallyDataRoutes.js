@@ -18,6 +18,7 @@ import {
   getSalesForTally,
   getSaleOrdersForTally,
   markSalesAcceptedFromTally,
+  markReceiptsAcceptedFromTally,
   markSaleOrdersConvertedFromTally,
 } from "../../controllers/tallyDataController.js/tallyExportController.js";
 
@@ -60,6 +61,7 @@ router.get("/get-sale-orders/:cmp_id/:sno", getSaleOrdersForTally);
 router.get("/get-sales/:cmp_id/:sno", getSalesForTally);
 router.get("/get-receipts/:cmp_id/:sno", getReceiptsForTally);
 router.post("/sale-orders/mark-converted", markSaleOrdersConvertedFromTally);
-router.post("/sales/mark-accepted", markSalesAcceptedFromTally);
+router.post("/sale/mark-accepted", markSalesAcceptedFromTally);
+router.post("/receipts/mark-accepted", markReceiptsAcceptedFromTally);
 
 export default router;
