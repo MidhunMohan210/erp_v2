@@ -5,6 +5,7 @@ import {
   PartySnapshotSchema,
   TotalsSchema,
 } from "./TransactionSharedSchemas.js";
+import { TALLY_STATUS, TALLY_STATUS_VALUES } from "../constants/tallyStatus.js";
 
 const { Schema, model, models } = mongoose;
 
@@ -125,8 +126,8 @@ const SaleSchema = new Schema(
 
     tally_status: {
       type: String,
-      enum: ["pending", "accepted"],
-      default: "pending",
+      enum: TALLY_STATUS_VALUES,
+      default: TALLY_STATUS.PENDING,
     },
     status: {
       type: String,

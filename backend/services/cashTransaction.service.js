@@ -1861,7 +1861,6 @@ export async function getCashBankLedgerTransactions(filters = {}, req) {
         amount: 1,
         direction: 1,
         running_balance: 1,
-        tally_status: 1,
       },
     },
   ]),

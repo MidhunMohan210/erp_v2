@@ -63,13 +63,6 @@ const CashBankLedgerSchema = new Schema(
       enum: ["active", "cancelled"],
       default: "active",
     },
-    // Sales participate in the same pending/accepted lifecycle as the other
-    // voucher-ledger entries.  Older receipt/payment rows remain compatible.
-    tally_status: {
-      type: String,
-      enum: ["pending", "accepted"],
-      default: "pending",
-    },
     created_by: { type: Schema.Types.ObjectId, ref: "User", default: null },
   },
   {

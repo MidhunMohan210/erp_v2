@@ -106,7 +106,6 @@ async function createSaleOrderForTally(context, overrides = {}) {
       final_amount: 2400,
     },
     status: overrides.status || "open",
-    tally_ref: overrides.tally_ref ?? null,
     created_by: overrides.created_by || context.user._id,
     updated_by: overrides.updated_by || context.user._id,
   });
@@ -328,7 +327,6 @@ describe("GET /api/tally/get-sale-orders/:cmp_id/:sno", () => {
         final_amount: 500,
       },
       status: "open",
-      tally_ref: null,
       created_at: new Date(),
       updated_at: new Date(),
     });

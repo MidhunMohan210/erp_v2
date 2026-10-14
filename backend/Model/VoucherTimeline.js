@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { TALLY_STATUS, TALLY_STATUS_VALUES } from "../constants/tallyStatus.js";
 
 const { Schema, model, models } = mongoose;
 
@@ -45,6 +46,11 @@ const VoucherTimelineSchema = new Schema(
       type: String,
       default: null,
       trim: true,
+    },
+    tally_status: {
+      type: String,
+      enum: TALLY_STATUS_VALUES,
+      default: TALLY_STATUS.PENDING,
     },
   },
   {

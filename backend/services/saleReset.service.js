@@ -72,16 +72,14 @@ async function rebuildItemBalances({ cmpId, affectedKeys, session }) {
     const key = itemBalanceKey(ledger.item_id, formatMonthKey(ledger.date));
     if (!affectedKeys.has(key)) continue;
     const current = totals.get(key) || {
-      total_inward_qty: 0, total_outward_qty: 0, accepted_inward_qty: 0, accepted_outward_qty: 0,
+      total_inward_qty: 0, total_outward_qty: 0,
       voucher_ids: new Set(),
     };
     const quantity = Number(ledger.base_quantity) || 0;
     if (ledger.movement_type === "IN") {
       current.total_inward_qty += quantity;
-      if (ledger.tally_status === "accepted") current.accepted_inward_qty += quantity;
     } else if (ledger.movement_type === "OUT") {
       current.total_outward_qty += quantity;
-      if (ledger.tally_status === "accepted") current.accepted_outward_qty += quantity;
     }
     // Multiple lines for the same voucher contribute one transaction to a
     // monthly item balance. This is especially important for duplicate Sale
@@ -125,15 +123,13 @@ async function rebuildPartyBalances({ cmpId, affectedKeys, session }) {
     const key = partyBalanceKey(ledger.party_id, formatMonthKey(ledger.date));
     if (!affectedKeys.has(key)) continue;
     const current = totals.get(key) || {
-      total_debit: 0, total_credit: 0, accepted_debit: 0, accepted_credit: 0, transaction_count: 0,
+      total_debit: 0, total_credit: 0, transaction_count: 0,
     };
     const amount = Number(ledger.amount) || 0;
     if (ledger.ledger_side === "debit") {
       current.total_debit += amount;
-      if (ledger.tally_status === "accepted") current.accepted_debit += amount;
     } else if (ledger.ledger_side === "credit") {
       current.total_credit += amount;
-      if (ledger.tally_status === "accepted") current.accepted_credit += amount;
     }
     current.transaction_count += 1;
     totals.set(key, current);

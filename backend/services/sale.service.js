@@ -368,7 +368,6 @@ function buildSaleCashBankLedger({ sale, party, amount, userId }) {
     instrument_type: party.partyType === "bank" ? "neft" : "cash",
     narration: sale.narration || null,
     status: sale.status,
-    tally_status: sale.tally_status,
     created_by: userId,
   };
 }
@@ -462,7 +461,6 @@ function mapSaleItemLedger({ sale, item, userId }) {
     amount: item.total_amount,
     movement_type: "OUT",
     status: "active",
-    tally_status: "pending",
     created_by: userId,
   };
 }
@@ -803,7 +801,7 @@ export async function updateSale(id, data = {}, req = {}) {
           continue;
         }
         existingLedgerUpdates.push(ItemLedger.updateOne(
-          { _id: ledger._id, status: "active", tally_status: "pending" },
+          { _id: ledger._id, status: "active" },
           { $set: mapSaleItemLedger({ sale, item: newItem, userId }) },
           { session, runValidators: true },
         ));
@@ -815,7 +813,7 @@ export async function updateSale(id, data = {}, req = {}) {
       }
       if (removedLedgerIds.length) {
         const result = await ItemLedger.updateMany(
-          { _id: { $in: removedLedgerIds }, status: "active", tally_status: "pending" },
+          { _id: { $in: removedLedgerIds }, status: "active" },
           { $set: { status: "cancelled" } },
           { session },
         );
@@ -846,10 +844,6 @@ export async function updateSale(id, data = {}, req = {}) {
         oldIsCashBank && newIsCashBank && !sameId(oldSale.party_id, party._id);
 
       if (!oldIsCashBank) {
-        const oldPartyLedger = oldPartyLedgers[0];
-        if (oldPartyLedger.tally_status !== "pending") {
-          throw createSaleValidationError("Accepted Sale cannot be edited.");
-        }
         await reversePartyMonthlyBalance({
           cmp_id, party_id: oldSale.party_id, date: oldSale.date,
           amount: oldSale.totals.final_amount, session,
@@ -895,7 +889,7 @@ export async function updateSale(id, data = {}, req = {}) {
             voucher_number: sale.voucher_number, date: sale.date,
             party_id: party._id, party_name: party.partyName,
             amount: sale.totals.final_amount, ledger_side: "debit", against_id: null,
-            status: "active", tally_status: "pending", created_by: userId,
+            status: "active", created_by: userId,
           }], { session });
         } else {
           // Same accounting identity: the current posting remains mutable.
@@ -905,7 +899,7 @@ export async function updateSale(id, data = {}, req = {}) {
             voucher_number: sale.voucher_number, date: sale.date,
             party_id: party._id, party_name: party.partyName,
             amount: sale.totals.final_amount, ledger_side: "debit",
-            status: "active", tally_status: "pending",
+            status: "active",
           });
           await oldPartyLedgers[0].save({ session });
         }
@@ -1122,7 +1116,6 @@ export async function createSale(data = {}, req = {}) {
               ledger_side: "debit",
               against_id: null,
               status: getInitialTransactionStatus("sale"),
-              tally_status: getInitialTransactionTallyStatus("sale"),
               created_by: userId,
             },
           ],
@@ -1263,7 +1256,6 @@ export async function cancelSale(id, data = {}, req = {}) {
         ledgerItemIds.add(String(ledger.voucher_item_id));
         if (
           ledger.status !== "active" ||
-          ledger.tally_status !== "pending" ||
           ledger.movement_type !== "OUT" ||
           !sameId(ledger.item_id, item.item_id) ||
           !sameId(ledger.godown_id, item.godown_id) ||
@@ -1277,7 +1269,7 @@ export async function cancelSale(id, data = {}, req = {}) {
 
       await reverseSaleStock(itemLedgers, cmp_id, session);
       const itemLedgerUpdate = await ItemLedger.updateMany(
-        { _id: { $in: itemLedgers.map((ledger) => ledger._id) }, status: "active", tally_status: "pending" },
+        { _id: { $in: itemLedgers.map((ledger) => ledger._id) }, status: "active" },
         { $set: { status: "cancelled" } },
         { session },
       );
@@ -1294,7 +1286,6 @@ export async function cancelSale(id, data = {}, req = {}) {
           voucher_type: "sale",
           voucher_id: sale._id,
           status: "active",
-          tally_status: "pending",
         }).session(session);
         if (cashBankLedgers.length !== 1) throw createCancellationError("Expected Cash/Bank ledger is missing or duplicated");
         const cashBankLedger = cashBankLedgers[0];
@@ -1306,7 +1297,6 @@ export async function cancelSale(id, data = {}, req = {}) {
           voucher_type: "sale",
           voucher_id: sale._id,
           status: "active",
-          tally_status: "pending",
         }).session(session);
         if (partyLedgers.length !== 1) throw createCancellationError("Expected PartyLedger is missing or duplicated");
         const partyLedger = partyLedgers[0];

@@ -152,7 +152,6 @@ function cashBankLedgerAudit(sale, party, ledgers) {
     if (ledger.direction !== "in") issues.push(`CashBankLedger direction is ${ledger.direction}, expected in`);
     if (!sameNumber(ledger.amount, sale.totals.final_amount)) issues.push(`CashBankLedger amount ${ledger.amount} does not match Sale final_amount ${sale.totals.final_amount}`);
     if (ledger.status !== sale.status) issues.push(`CashBankLedger status does not match Sale ${id(sale._id)}`);
-    if (ledger.tally_status !== sale.tally_status) issues.push(`CashBankLedger tally_status does not match Sale ${id(sale._id)}`);
   }
   return {
     ...checkResult(issues, 1, activeLedgers.length),

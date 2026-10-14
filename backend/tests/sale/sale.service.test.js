@@ -72,7 +72,6 @@ async function assertItemPosting({
     expect(ledger.base_unit).toBe("NOS");
     expect(ledger.movement_type).toBe("OUT");
     expect(ledger.status).toBe("active");
-    expect(ledger.tally_status).toBe("pending");
     expect(sale.items.map((item) => String(item._id))).toContain(
       String(ledger.voucher_item_id),
     );
@@ -88,8 +87,6 @@ async function assertItemPosting({
   expect(monthly).toMatchObject({
     month_key: EXPECTED_MONTH,
     total_inward_qty: 0,
-    accepted_inward_qty: 0,
-    accepted_outward_qty: 0,
     transaction_count: 1,
   });
   const ledgerOutward = ledgers
@@ -134,7 +131,6 @@ async function assertCreditAccounting({ sale, party, context, expectedFinal }) {
     ledger_side: "debit",
     against_id: null,
     status: "active",
-    tally_status: "pending",
   });
   expectDate(ledger.date, sale.date);
   expect(ledger.amount).toBeCloseTo(expectedFinal, 2);
@@ -146,8 +142,6 @@ async function assertCreditAccounting({ sale, party, context, expectedFinal }) {
   expect(monthly).toMatchObject({
     month_key: EXPECTED_MONTH,
     total_credit: 0,
-    accepted_debit: 0,
-    accepted_credit: 0,
     transaction_count: 1,
   });
   const debitSum = (
@@ -208,7 +202,6 @@ async function assertCashBankAccounting({
     party_name: party.partyName,
     direction: "in",
     status: "active",
-    tally_status: "pending",
     created_by: context.user._id,
   });
   expectDate(ledger.date, sale.date);
@@ -575,7 +568,6 @@ describe("createSale", () => {
         amount: sale.totals.final_amount,
         direction: "in",
         status: "active",
-        tally_status: "pending",
       });
       assertSaleTotals(sale, {
         sub_total: 100,
@@ -673,7 +665,6 @@ describe("createSale", () => {
       amount: sale.totals.final_amount,
       ledger_side: "debit",
       status: "active",
-      tally_status: "pending",
       created_by: context.user._id,
     });
     await PartyMonthlyBalance.create({
@@ -1051,7 +1042,6 @@ describe("updateSale", () => {
     expect(activeLedger).toMatchObject({
       party_id: secondParty._id, party_name: secondParty.partyName,
       amount: updated.totals.final_amount, ledger_side: "debit", status: "active",
-      tally_status: "pending",
     });
     expect(String(activeLedger._id)).not.toBe(String(oldLedger._id));
 
@@ -1369,7 +1359,6 @@ describe("cancelSale", () => {
       voucher_number: sale.voucher_number,
       request_id: sale.request_id,
       status: "cancelled",
-      tally_status: "pending",
       cancellation_reason: "Customer requested cancellation",
     });
     expect(

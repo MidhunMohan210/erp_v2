@@ -3,6 +3,7 @@
 // if master data (party/product/price level names) changes later.
 
 import mongoose from "mongoose";
+import { TALLY_STATUS, TALLY_STATUS_VALUES } from "../constants/tallyStatus.js";
 import {
   AdditionalChargeSchema,
   DespatchSchema,
@@ -116,7 +117,11 @@ const SaleOrderSchema = new Schema(
       enum: ["open", "converted", "cancelled"],
       default: "open",
     },
-    tally_ref: { type: Schema.Types.Mixed, default: null },
+    tally_status: {
+      type: String,
+      enum: TALLY_STATUS_VALUES,
+      default: TALLY_STATUS.PENDING,
+    },
 
     // Misc
     narration: { type: String, default: null },

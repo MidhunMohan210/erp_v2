@@ -77,12 +77,6 @@ const PartyLedgerSchema = new Schema(
       default: "active",
     },
 
-    tally_status: {
-      type: String,
-      enum: ["pending", "accepted"],
-      default: "pending",
-    },
-
     created_by: {
       type: Schema.Types.ObjectId,
       ref: "User",

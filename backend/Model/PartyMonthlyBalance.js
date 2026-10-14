@@ -32,16 +32,6 @@ const PartyMonthlyBalanceSchema = new Schema(
       default: 0,
     },
 
-    accepted_debit: {
-      type: Number,
-      default: 0,
-    },
-
-    accepted_credit: {
-      type: Number,
-      default: 0,
-    },
-
     transaction_count: {
       type: Number,
       default: 0,

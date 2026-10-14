@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { createHash } from "node:crypto";
 
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
 import Company from "../Model/CompanySchema.js";
 import Party from "../Model/partySchema.js";
 import Product from "../Model/ProductSchema.js";
@@ -39,6 +40,15 @@ function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function assertSaleOrderNotTallyAccepted(saleOrder) {
+  if (saleOrder?.tally_status === TALLY_STATUS.ACCEPTED) {
+    throw createHttpError(
+      "Tally-accepted Sale Order cannot be edited or cancelled",
+      409,
+    );
+  }
 }
 
 function requiredRequestId(value) {
@@ -607,6 +617,7 @@ export async function updateSaleOrder(id, data = {}, req) {
         throw createHttpError("Sale order not found", 404);
       }
 
+      assertSaleOrderNotTallyAccepted(saleOrder);
       // Prevent updates on states like `cancelled` / non-editable statuses.
       assertTransactionEditable("saleOrder", saleOrder.status);
 
@@ -718,6 +729,7 @@ export async function cancelSaleOrder(id, data = {}, req) {
         throw createHttpError("Sale order not found", 404);
       }
 
+      assertSaleOrderNotTallyAccepted(saleOrder);
       // Guard cancellation so converted/cancelled orders cannot be cancelled again.
       assertTransactionNotAlreadyCancelled("saleOrder", saleOrder.status);
       assertTransactionCancellable("saleOrder", saleOrder.status);
