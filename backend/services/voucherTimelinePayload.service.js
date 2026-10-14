@@ -1,3 +1,5 @@
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
+
 export function buildVoucherTimelinePayload(doc = {}, overrides = {}) {
   return {
     cmp_id: doc.cmp_id,
@@ -14,6 +16,8 @@ export function buildVoucherTimelinePayload(doc = {}, overrides = {}) {
           doc.amount
       ) || 0,
     status: overrides.status ?? doc.status ?? null,
+    tally_status:
+      overrides.tally_status ?? doc.tally_ref?.tally_status ?? TALLY_STATUS.PENDING,
     ...overrides,
   };
 }

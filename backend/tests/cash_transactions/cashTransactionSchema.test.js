@@ -86,7 +86,13 @@ describe("CashTransaction shared schema registration", () => {
     expect(receipt.collection.collectionName).toBe("receipts");
     expect(payment.collection.collectionName).toBe("payments");
     expect(receipt.request_id).toBe("request-R-SHARED-1");
+    expect(receipt.tally_ref).toMatchObject({
+      tally_status: "pending",
+      tally_accepted_at: null,
+      tally_voucher_id: null,
+    });
     expect(payment.voucher_type).toBe("payment");
+    expect(payment.tally_ref).toBeUndefined();
     expect(receiptIndexes).toEqual(paymentIndexes);
     expect(receiptIndexes).toContainEqual([
       { cmp_id: 1, request_id: 1 },

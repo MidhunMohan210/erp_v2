@@ -116,17 +116,14 @@ export async function repairCashBankSales({ dryRun = false } = {}) {
         }
         const totals = rows.reduce((acc, row) => {
           const amount = Number(row.amount) || 0;
-          const accepted = row.tally_status === "accepted";
           if (row.ledger_side === "debit") {
             acc.total_debit += amount;
-            if (accepted) acc.accepted_debit += amount;
           } else {
             acc.total_credit += amount;
-            if (accepted) acc.accepted_credit += amount;
           }
           acc.transaction_count += 1;
           return acc;
-        }, { total_debit: 0, total_credit: 0, accepted_debit: 0, accepted_credit: 0, transaction_count: 0 });
+        }, { total_debit: 0, total_credit: 0, transaction_count: 0 });
         await PartyMonthlyBalance.findOneAndUpdate(bucket, { $set: totals }, { upsert: true, session, runValidators: true });
       }
     });

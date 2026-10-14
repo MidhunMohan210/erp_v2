@@ -472,6 +472,18 @@ describe("POST /api/sale-orders — Business logic", () => {
     expect((await getSaleOrderByRequestId("sale-order-request-missing")).status).toBe(404);
   });
 
+  it("creates a Sale Order and timeline with pending Tally status", async () => {
+    const created = await createSaleOrderForTest();
+    const saleOrder = await SaleOrder.findById(created.body.data.saleOrder._id).lean();
+    const timeline = await VoucherTimeline.findOne({
+      voucher_id: saleOrder._id,
+      voucher_type: "saleOrder",
+    }).lean();
+
+    expect(saleOrder).toMatchObject({ status: "open", tally_ref: { tally_status: "pending", tally_accepted_at: null, tally_voucher_id: null } });
+    expect(timeline).toMatchObject({ status: "open", tally_status: "pending" });
+  });
+
   it("replays an identical request ID without another Sale Order or timeline", async () => {
     const payload = buildValidSaleOrderPayload(
       baseContext.party._id,
@@ -797,13 +809,12 @@ describe("POST /api/sale-orders — DB side effects (assert after valid create)"
     expect(String(userCounter.user_id)).toBe(String(baseContext.userId));
   });
 
-  it('status is "open", tally_ref is null, created_by equals userId from token', async () => {
+  it('status is "open" and created_by equals userId from token', async () => {
     const res = await createSaleOrderForTest();
 
     const saleOrder = await SaleOrder.findById(res.body.data.saleOrder._id).lean();
 
     expect(saleOrder.status).toBe("open");
-    expect(saleOrder.tally_ref).toBeNull();
     expect(String(saleOrder.created_by)).toBe(String(baseContext.userId));
   });
 });
@@ -1732,6 +1743,37 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
     expect(res.status).toBe(400);
     expect(res.body.message).toBe("Cannot edit a converted saleOrder");
   });
+
+  it("rejects editing a Tally-accepted open order with 409", async () => {
+    const createRes = await createSaleOrderForTest();
+    const saleOrderId = createRes.body.data.saleOrder._id;
+    await SaleOrder.findByIdAndUpdate(createRes.body.data.saleOrder._id, {
+      "tally_ref.tally_status": "accepted",
+    });
+    const beforeOrder = await SaleOrder.findById(saleOrderId).lean();
+    const beforeTimeline = await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean();
+
+    const res = await updateSaleOrderRequest(saleOrderId, {
+      transactionDate: "2026-07-03T00:00:00.000Z",
+      items: [],
+      additionalCharges: [],
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe(
+      "Tally-accepted Sale Order cannot be edited or cancelled",
+    );
+    expect(await SaleOrder.findById(saleOrderId).lean()).toEqual(beforeOrder);
+    expect(await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean()).toEqual(beforeTimeline);
+  });
 });
 
 describe("PUT /api/sale-orders/:saleOrderId/cancel", () => {
@@ -1768,6 +1810,33 @@ describe("PUT /api/sale-orders/:saleOrderId/cancel", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.message).toBe("Cannot cancel a converted saleOrder");
+  });
+
+  it("rejects cancelling a Tally-accepted open order with 409", async () => {
+    const createRes = await createSaleOrderForTest();
+    const saleOrderId = createRes.body.data.saleOrder._id;
+    await SaleOrder.findByIdAndUpdate(createRes.body.data.saleOrder._id, {
+      "tally_ref.tally_status": "accepted",
+    });
+    const beforeOrder = await SaleOrder.findById(saleOrderId).lean();
+    const beforeTimeline = await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean();
+
+    const res = await cancelSaleOrderRequest(saleOrderId);
+
+    expect(res.status).toBe(409);
+    expect(res.body.message).toBe(
+      "Tally-accepted Sale Order cannot be edited or cancelled",
+    );
+    expect(await SaleOrder.findById(saleOrderId).lean()).toEqual(beforeOrder);
+    expect(await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean()).toEqual(beforeTimeline);
   });
 });
 

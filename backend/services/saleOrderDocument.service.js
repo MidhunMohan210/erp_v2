@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 
 import { calculateSaleOrderTotals } from "./calculation.service.js";
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
 import { getInitialTransactionStatus } from "./transactionState.service.js";
 import { convertBaseQtyToAlternate } from "../utils/unitConversion.js";
 
@@ -753,7 +754,11 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
     totals: buildSaleOrderTotals(body),
     // Lifecycle + external sync placeholders
     status: getInitialTransactionStatus("saleOrder"),
-    tally_ref: null,
+    tally_ref: {
+      tally_status: TALLY_STATUS.PENDING,
+      tally_accepted_at: null,
+      tally_voucher_id: null,
+    },
     narration: null,
     // Audit
     created_by: userId || null,

@@ -21,6 +21,7 @@ import {
 import {
   getCancelledTransactionStatus,
 } from "./transactionState.service.js";
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
 import { issueVoucherIdentity } from "./voucherIdentity.service.js";
 import {
   buildVoucherTimelinePayload,
@@ -1131,6 +1132,9 @@ export async function updateCashTransaction(id, data = {}, req) {
       if (receipt.status !== "active") {
         throw createHttpError("Cancelled receipt cannot be edited", 400);
       }
+      if (receipt.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+        throw createHttpError("Tally-accepted Receipt cannot be edited", 409);
+      }
       if (!sameDate(receipt.updated_at, expectedVersion)) {
         throw createHttpError(
           "Receipt was modified by another operation. Reload before editing",
@@ -1259,6 +1263,7 @@ export async function updateCashTransaction(id, data = {}, req) {
         {
           ...accessFilter,
           status: "active",
+          "tally_ref.tally_status": TALLY_STATUS.PENDING,
           updated_at: receipt.updated_at,
         },
         {
@@ -1528,9 +1533,12 @@ export async function cancelCashTransaction(id, data = {}, req) {
       if (visibleReceipt.status === "cancelled") {
         throw createHttpError("receipt is already cancelled", 400);
       }
+      if (visibleReceipt.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+        throw createHttpError("Tally-accepted Receipt cannot be cancelled", 409);
+      }
 
       const transaction = await Receipt.findOneAndUpdate(
-        { ...accessFilter, status: "active" },
+        { ...accessFilter, status: "active", "tally_ref.tally_status": TALLY_STATUS.PENDING },
         {
           $set: {
             status: getCancelledTransactionStatus("receipt"),
@@ -1861,7 +1869,6 @@ export async function getCashBankLedgerTransactions(filters = {}, req) {
         amount: 1,
         direction: 1,
         running_balance: 1,
-        tally_status: 1,
       },
     },
   ]),

@@ -38,6 +38,31 @@ function expectDate(actual, expected) {
   expect(new Date(actual).toISOString()).toBe(new Date(expected).toISOString());
 }
 
+async function snapshotSaleEffects({ cmpId, saleId, productId }) {
+  const [sale, timeline, product, itemLedgers, partyLedgers, cashBankLedgers, itemMonthlyBalances, partyMonthlyBalances, outstanding] = await Promise.all([
+    Sale.findById(saleId).lean(),
+    VoucherTimeline.findOne({ cmp_id: cmpId, voucher_id: saleId, voucher_type: "sale" }).lean(),
+    Product.findById(productId).lean(),
+    ItemLedger.find({ cmp_id: cmpId, voucher_id: saleId }).sort({ _id: 1 }).lean(),
+    PartyLedger.find({ cmp_id: cmpId, voucher_id: saleId }).sort({ _id: 1 }).lean(),
+    CashBankLedger.find({ cmp_id: cmpId, voucher_id: saleId }).sort({ _id: 1 }).lean(),
+    ItemMonthlyBalance.find({ cmp_id: cmpId }).sort({ _id: 1 }).lean(),
+    PartyMonthlyBalance.find({ cmp_id: cmpId }).sort({ _id: 1 }).lean(),
+    Outstanding.find({ cmp_id: cmpId, source: "sale", billId: String(saleId) }).sort({ _id: 1 }).lean(),
+  ]);
+  return JSON.stringify({
+    sale,
+    timeline,
+    product,
+    itemLedgers,
+    partyLedgers,
+    cashBankLedgers,
+    itemMonthlyBalances,
+    partyMonthlyBalances,
+    outstanding,
+  });
+}
+
 function assertSaleTotals(sale, expected) {
   for (const [field, value] of Object.entries(expected)) {
     expect(sale.totals[field]).toBeCloseTo(value, 2);
@@ -72,7 +97,6 @@ async function assertItemPosting({
     expect(ledger.base_unit).toBe("NOS");
     expect(ledger.movement_type).toBe("OUT");
     expect(ledger.status).toBe("active");
-    expect(ledger.tally_status).toBe("pending");
     expect(sale.items.map((item) => String(item._id))).toContain(
       String(ledger.voucher_item_id),
     );
@@ -88,8 +112,6 @@ async function assertItemPosting({
   expect(monthly).toMatchObject({
     month_key: EXPECTED_MONTH,
     total_inward_qty: 0,
-    accepted_inward_qty: 0,
-    accepted_outward_qty: 0,
     transaction_count: 1,
   });
   const ledgerOutward = ledgers
@@ -134,7 +156,6 @@ async function assertCreditAccounting({ sale, party, context, expectedFinal }) {
     ledger_side: "debit",
     against_id: null,
     status: "active",
-    tally_status: "pending",
   });
   expectDate(ledger.date, sale.date);
   expect(ledger.amount).toBeCloseTo(expectedFinal, 2);
@@ -146,8 +167,6 @@ async function assertCreditAccounting({ sale, party, context, expectedFinal }) {
   expect(monthly).toMatchObject({
     month_key: EXPECTED_MONTH,
     total_credit: 0,
-    accepted_debit: 0,
-    accepted_credit: 0,
     transaction_count: 1,
   });
   const debitSum = (
@@ -208,7 +227,6 @@ async function assertCashBankAccounting({
     party_name: party.partyName,
     direction: "in",
     status: "active",
-    tally_status: "pending",
     created_by: context.user._id,
   });
   expectDate(ledger.date, sale.date);
@@ -392,7 +410,7 @@ describe("createSale", () => {
     expect(sale).toMatchObject({
       voucher_type: "sale",
       status: "active",
-      tally_status: "pending",
+      tally_ref: { tally_status: "pending", tally_accepted_at: null, tally_voucher_id: null },
       narration: "July sale",
     });
     expectId(sale.cmp_id, context.company._id);
@@ -575,7 +593,6 @@ describe("createSale", () => {
         amount: sale.totals.final_amount,
         direction: "in",
         status: "active",
-        tally_status: "pending",
       });
       assertSaleTotals(sale, {
         sub_total: 100,
@@ -673,7 +690,6 @@ describe("createSale", () => {
       amount: sale.totals.final_amount,
       ledger_side: "debit",
       status: "active",
-      tally_status: "pending",
       created_by: context.user._id,
     });
     await PartyMonthlyBalance.create({
@@ -1051,7 +1067,6 @@ describe("updateSale", () => {
     expect(activeLedger).toMatchObject({
       party_id: secondParty._id, party_name: secondParty.partyName,
       amount: updated.totals.final_amount, ledger_side: "debit", status: "active",
-      tally_status: "pending",
     });
     expect(String(activeLedger._id)).not.toBe(String(oldLedger._id));
 
@@ -1216,12 +1231,25 @@ describe("updateSale", () => {
       transactionDate: "2026-07-15", partyId: String(party._id),
       items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 5, billedQty: 5, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
     }, { companyId: String(context.company._id), user: context.user });
-    await Sale.updateOne({ _id: sale._id }, { $set: { tally_status: "accepted" } });
+    await Sale.updateOne({ _id: sale._id }, { $set: { "tally_ref.tally_status": "accepted" } });
+    const before = await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    });
     await expect(updateSale(sale._id, {
       transactionDate: "2026-07-15", partyId: String(party._id),
       items: [{ ...sale.items[0].toObject?.() }],
-    }, { companyId: String(context.company._id), user: context.user })).rejects.toThrow("Accepted Sale cannot be edited.");
+    }, { companyId: String(context.company._id), user: context.user })).rejects.toMatchObject({
+      message: "Accepted Sale cannot be edited.",
+      statusCode: 409,
+    });
     expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
+    expect(await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    })).toBe(before);
   });
 });
 
@@ -1369,7 +1397,6 @@ describe("cancelSale", () => {
       voucher_number: sale.voucher_number,
       request_id: sale.request_id,
       status: "cancelled",
-      tally_status: "pending",
       cancellation_reason: "Customer requested cancellation",
     });
     expect(
@@ -1510,14 +1537,27 @@ describe("cancelSale", () => {
       },
       { companyId: String(context.company._id), user: context.user },
     );
-    await Sale.updateOne({ _id: sale._id }, { $set: { tally_status: "accepted" } });
+    await Sale.updateOne({ _id: sale._id }, { $set: { "tally_ref.tally_status": "accepted" } });
+    const before = await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    });
 
     await expect(
       cancelSale(sale._id, {}, { companyId: String(context.company._id), user: context.user }),
-    ).rejects.toThrow("accepted by Tally");
+    ).rejects.toMatchObject({
+      message: "Sale already accepted by Tally cannot be cancelled",
+      statusCode: 409,
+    });
     expect((await Sale.findById(sale._id)).status).toBe("active");
     expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
     expect(await ItemLedger.countDocuments({ voucher_id: sale._id, status: "active" })).toBe(1);
+    expect(await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    })).toBe(before);
   });
 
   it("cancels a Cash Sale without creating customer financial reversals", async () => {
@@ -1734,5 +1774,70 @@ describe("getVouchers", () => {
       to: "2026-09-30",
     });
     expect(voucherDates(explicitRange)).toEqual(["2026-09-21"]);
+  });
+
+  it("serializes pending, accepted, and missing Tally states without deriving them from business status", async () => {
+    const { context } = await setupSaleContext();
+    const [pendingId, acceptedId, missingId] = [
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId(),
+    ];
+
+    const timelines = await VoucherTimeline.create([
+      {
+        _id: new mongoose.Types.ObjectId(),
+        cmp_id: context.company._id,
+        voucher_type: "saleOrder",
+        voucher_id: pendingId,
+        date: new Date("2026-10-01T00:00:00.000Z"),
+        voucher_number: "SO-PENDING",
+        party_name: "Pending customer",
+        amount: 10,
+        status: "open",
+        tally_status: "pending",
+      },
+      {
+        _id: new mongoose.Types.ObjectId(),
+        cmp_id: context.company._id,
+        voucher_type: "sale",
+        voucher_id: acceptedId,
+        date: new Date("2026-10-02T00:00:00.000Z"),
+        voucher_number: "SALE-ACCEPTED",
+        party_name: "Accepted customer",
+        amount: 20,
+        status: "active",
+        tally_status: "accepted",
+      },
+      {
+        _id: new mongoose.Types.ObjectId(),
+        cmp_id: context.company._id,
+        voucher_type: "receipt",
+        voucher_id: missingId,
+        date: new Date("2026-10-03T00:00:00.000Z"),
+        voucher_number: "RCP-MISSING",
+        party_name: "Legacy customer",
+        amount: 30,
+        status: "active",
+      },
+    ]);
+    await VoucherTimeline.collection.updateOne(
+      { _id: timelines[2]._id },
+      { $unset: { tally_status: "" } },
+    );
+
+    const result = await getVouchers({
+      cmpId: String(context.company._id),
+      voucherType: "all",
+    }, { user: { id: String(context.user._id), role: "admin" } });
+    const tallyStatusByVoucherNumber = Object.fromEntries(
+      result.vouchers.map((voucher) => [voucher.voucher_number, voucher.tally_status]),
+    );
+
+    expect(tallyStatusByVoucherNumber).toMatchObject({
+      "SO-PENDING": "pending",
+      "SALE-ACCEPTED": "accepted",
+      "RCP-MISSING": null,
+    });
   });
 });

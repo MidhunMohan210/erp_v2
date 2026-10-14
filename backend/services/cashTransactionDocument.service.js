@@ -1,5 +1,6 @@
 import { getInitialTransactionStatus } from "./transactionState.service.js";
 import { getCashBankVoucherModel } from "../utils/cashBankVoucherModel.js";
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
 
 // Builds the stored settlement snapshot from the current Outstanding record.
 // Client-provided bill labels and balances are intentionally not used here.
@@ -56,6 +57,15 @@ export function buildCashTransactionDocument(
     cheque_number: data.cheque_number || null,
     cheque_date: data.cheque_date ? new Date(data.cheque_date) : null,
     status: getInitialTransactionStatus(data.voucher_type),
+    ...(data.voucher_type === "receipt"
+      ? {
+          tally_ref: {
+            tally_status: TALLY_STATUS.PENDING,
+            tally_accepted_at: null,
+            tally_voucher_id: null,
+          },
+        }
+      : {}),
     created_by: data.created_by || null,
     updated_by: data.updated_by || data.created_by || null,
   };

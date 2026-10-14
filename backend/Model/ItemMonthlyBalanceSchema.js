@@ -32,16 +32,6 @@ const ItemMonthlyBalanceSchema = new Schema(
       default: 0,
     },
 
-    accepted_inward_qty: {
-      type: Number,
-      default: 0,
-    },
-
-    accepted_outward_qty: {
-      type: Number,
-      default: 0,
-    },
-
     transaction_count: {
       type: Number,
       default: 0,

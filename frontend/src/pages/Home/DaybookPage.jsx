@@ -12,6 +12,7 @@ import { DEFAULT_DAYBOOK_VOUCHER_TYPES } from "@/components/filters/daybookFilte
 import { useUserOptionsQuery } from "@/hooks/queries/userQueries";
 import { ROUTES } from "@/routes/paths";
 import { setSavedDaybookFilters } from "@/store/slices/transactionSlice";
+import { getTallyStatus, getTallyStatusLabel } from "@/utils/tallyVoucherStatus";
 import {
   buildDateRangePresetOptions,
   formatDateDisplay,
@@ -90,6 +91,24 @@ function StatusBadge({ status, voucherType }) {
   }
 
   return null;
+}
+
+function TallyStatusBadge({ voucherType, tallyStatus }) {
+  if (!["saleOrder", "sale", "receipt"].includes(voucherType)) return null;
+
+  const status = getTallyStatus({ tally_status: tallyStatus });
+  const styles = status === "accepted"
+    ? "bg-violet-50 text-violet-700 ring-violet-200"
+    : status === "pending"
+      ? "bg-sky-50 text-sky-700 ring-sky-200"
+      : "bg-slate-100 text-slate-500 ring-slate-200";
+  const label = getTallyStatusLabel({ tally_status: tallyStatus });
+
+  return (
+    <span className={`rounded-full px-2.5 py-0.5 text-[10px] font-semibold ring-1 ${styles}`}>
+      {label}
+    </span>
+  );
 }
 
 export default function DaybookPage({
@@ -365,6 +384,10 @@ export default function DaybookPage({
                       <StatusBadge
                         status={voucher.status}
                         voucherType={voucher.voucher_type}
+                      />
+                      <TallyStatusBadge
+                        voucherType={voucher.voucher_type}
+                        tallyStatus={voucher.tally_status}
                       />
                     </div>
                   </div>

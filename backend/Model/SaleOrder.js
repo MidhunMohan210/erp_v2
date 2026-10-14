@@ -3,6 +3,7 @@
 // if master data (party/product/price level names) changes later.
 
 import mongoose from "mongoose";
+import TallyRefSchema from "./TallyRefSchema.js";
 import {
   AdditionalChargeSchema,
   DespatchSchema,
@@ -116,7 +117,7 @@ const SaleOrderSchema = new Schema(
       enum: ["open", "converted", "cancelled"],
       default: "open",
     },
-    tally_ref: { type: Schema.Types.Mixed, default: null },
+    tally_ref: { type: TallyRefSchema, default: () => ({}) },
 
     // Misc
     narration: { type: String, default: null },

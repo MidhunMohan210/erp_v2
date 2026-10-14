@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { createHash } from "node:crypto";
 
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
 import Company from "../Model/CompanySchema.js";
 import Party from "../Model/partySchema.js";
 import Product from "../Model/ProductSchema.js";
@@ -39,6 +40,15 @@ function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function assertSaleOrderNotTallyAccepted(saleOrder) {
+  if (saleOrder?.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+    throw createHttpError(
+      "Tally-accepted Sale Order cannot be edited or cancelled",
+      409,
+    );
+  }
 }
 
 function requiredRequestId(value) {
@@ -596,19 +606,44 @@ export async function updateSaleOrder(id, data = {}, req) {
     logSaleOrderTotalsMismatch(data);
 
     await session.withTransaction(async () => {
-      const saleOrder = await SaleOrder.findOne(
-        applyTransactionCreatorScope(req, {
-          _id: id,
-          cmp_id: cmpId,
-        })
-      ).session(session);
+      const accessFilter = applyTransactionCreatorScope(req, {
+        _id: id,
+        cmp_id: cmpId,
+      });
+      let saleOrder = await SaleOrder.findOne(accessFilter).session(session);
 
       if (!saleOrder) {
         throw createHttpError("Sale order not found", 404);
       }
 
+      assertSaleOrderNotTallyAccepted(saleOrder);
       // Prevent updates on states like `cancelled` / non-editable statuses.
       assertTransactionEditable("saleOrder", saleOrder.status);
+
+      // Claim the pending, editable order before changing its details. This
+      // prevents an acknowledgement that wins the race from being followed by
+      // an edit in this transaction.
+      const claimedSaleOrder = await SaleOrder.findOneAndUpdate(
+        {
+          ...accessFilter,
+          status: "open",
+          "tally_ref.tally_status": TALLY_STATUS.PENDING,
+        },
+        { $set: { updated_by: userId || null } },
+        { returnDocument: "after", runValidators: true, session },
+      );
+      if (!claimedSaleOrder) {
+        const currentSaleOrder = await SaleOrder.findOne(accessFilter)
+          .session(session)
+          .lean();
+        if (currentSaleOrder?.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+          assertSaleOrderNotTallyAccepted(currentSaleOrder);
+        }
+        if (!currentSaleOrder) throw createHttpError("Sale order not found", 404);
+        assertTransactionEditable("saleOrder", currentSaleOrder.status);
+        throw createHttpError("Sale order is no longer available for editing", 409);
+      }
+      saleOrder = claimedSaleOrder;
 
       const requestedPartyId =
         data.party?._id || data.party?.id || data.party_id || null;
@@ -707,20 +742,45 @@ export async function cancelSaleOrder(id, data = {}, req) {
     let cancelledSaleOrder = null;
 
     await session.withTransaction(async () => {
-      const saleOrder = await SaleOrder.findOne(
-        applyTransactionCreatorScope(req, {
-          _id: id,
-          cmp_id: cmpId,
-        })
-      ).session(session);
+      const accessFilter = applyTransactionCreatorScope(req, {
+        _id: id,
+        cmp_id: cmpId,
+      });
+      let saleOrder = await SaleOrder.findOne(accessFilter).session(session);
 
       if (!saleOrder) {
         throw createHttpError("Sale order not found", 404);
       }
 
+      assertSaleOrderNotTallyAccepted(saleOrder);
       // Guard cancellation so converted/cancelled orders cannot be cancelled again.
       assertTransactionNotAlreadyCancelled("saleOrder", saleOrder.status);
       assertTransactionCancellable("saleOrder", saleOrder.status);
+
+      // Claim the pending, cancellable order before mutating its business
+      // status, so acknowledgement and cancellation cannot both succeed.
+      const claimedSaleOrder = await SaleOrder.findOneAndUpdate(
+        {
+          ...accessFilter,
+          status: "open",
+          "tally_ref.tally_status": TALLY_STATUS.PENDING,
+        },
+        { $set: { updated_by: userId || null } },
+        { returnDocument: "after", runValidators: true, session },
+      );
+      if (!claimedSaleOrder) {
+        const currentSaleOrder = await SaleOrder.findOne(accessFilter)
+          .session(session)
+          .lean();
+        if (currentSaleOrder?.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+          assertSaleOrderNotTallyAccepted(currentSaleOrder);
+        }
+        if (!currentSaleOrder) throw createHttpError("Sale order not found", 404);
+        assertTransactionNotAlreadyCancelled("saleOrder", currentSaleOrder.status);
+        assertTransactionCancellable("saleOrder", currentSaleOrder.status);
+        throw createHttpError("Sale order is no longer available for cancellation", 409);
+      }
+      saleOrder = claimedSaleOrder;
 
       // Central helper keeps transaction status behavior consistent across voucher types.
       markTransactionCancelled(saleOrder, "saleOrder");

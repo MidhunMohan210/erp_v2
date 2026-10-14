@@ -5,6 +5,7 @@ import {
   PartySnapshotSchema,
   TotalsSchema,
 } from "./TransactionSharedSchemas.js";
+import TallyRefSchema from "./TallyRefSchema.js";
 
 const { Schema, model, models } = mongoose;
 
@@ -123,11 +124,7 @@ const SaleSchema = new Schema(
 
     narration: { type: String, default: null },
 
-    tally_status: {
-      type: String,
-      enum: ["pending", "accepted"],
-      default: "pending",
-    },
+    tally_ref: { type: TallyRefSchema, default: () => ({}) },
     status: {
       type: String,
       enum: ["active", "cancelled"],
@@ -163,7 +160,7 @@ SaleSchema.index(
   { unique: true },
 );
 SaleSchema.index({ cmp_id: 1, party_id: 1, date: 1 });
-SaleSchema.index({ cmp_id: 1, tally_status: 1, status: 1 });
+SaleSchema.index({ cmp_id: 1, "tally_ref.tally_status": 1, status: 1 });
 
 const Sale = models.Sale || model("Sale", SaleSchema);
 

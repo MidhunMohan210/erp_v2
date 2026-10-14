@@ -476,14 +476,13 @@ describe("3. POST /api/sale-orders — DB side effects (assert after valid creat
     expect(userCounter.sequence_value).toBe(1);
   });
 
-  it('status is "open", tally_ref is null, created_by equals userId from token', async () => {
+  it('status is "open" and created_by equals userId from token', async () => {
     const context = await createOwnedContext();
 
     const response = await postSaleOrder(context);
     const saleOrder = await SaleOrder.findById(response.body.data.saleOrder._id).lean();
 
     expect(saleOrder.status).toBe("open");
-    expect(saleOrder.tally_ref).toBeNull();
     expect(String(saleOrder.created_by)).toBe(String(context.user._id));
   });
 });

@@ -5,7 +5,9 @@ export const buildBulkResponse = ({
   totalReceived,
   insertedCount,
   updatedCount,
+  unchangedCount,
   skippedItems,
+  items,
 }) => {
   if (process.env.NODE_ENV !== "test") {
     console.log({
@@ -17,7 +19,8 @@ export const buildBulkResponse = ({
     });
   }
 
-  const successCount = insertedCount + updatedCount;
+  const normalizedUnchangedCount = Number(unchangedCount) || 0;
+  const successCount = insertedCount + updatedCount + normalizedUnchangedCount;
   const skippedCount = skippedItems.length;
 
   let status = "success";
@@ -28,6 +31,9 @@ export const buildBulkResponse = ({
     totalReceived,
     insertedCount,
     updatedCount,
+    ...(unchangedCount === undefined
+      ? {}
+      : { unchangedCount: normalizedUnchangedCount }),
     successCount,
     skippedCount,
   };
@@ -52,5 +58,6 @@ export const buildBulkResponse = ({
     message: `${entityName} processing completed`,
     summary,
     ...(skippedItems.length > 0 && { skippedItems, skippedReasons }),
+    ...(Array.isArray(items) && { items }),
   };
 };

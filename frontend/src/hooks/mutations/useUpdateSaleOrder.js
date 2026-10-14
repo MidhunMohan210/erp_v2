@@ -8,6 +8,8 @@ import { saleOrderQueryKeys } from "@/hooks/queries/saleOrderQueries";
 import { ROUTES } from "@/routes/paths";
 import { resetSaleOrderDraft } from "@/store/slices/transactionSlice";
 import { clearSaleOrderDraftStorage } from "@/utils/transactionStorage";
+import { invalidateVoucherSummaryForCompany } from "@/hooks/queries/voucherQueries";
+import { isTallyAcceptedConflict } from "@/utils/tallyVoucherStatus";
 
 /**
  * Mutation hook for updating an existing sale order.
@@ -26,7 +28,13 @@ import { clearSaleOrderDraftStorage } from "@/utils/transactionStorage";
  * @returns {import("@tanstack/react-query").UseMutationResult}
  */
 export function useUpdateSaleOrder(options = {}) {
-  const { cmp_id = "", onSuccess, onError, ...mutationOptions } = options;
+  const {
+    cmp_id = "",
+    onSuccess,
+    onError,
+    onTallyConflict,
+    ...mutationOptions
+  } = options;
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -70,6 +78,29 @@ export function useUpdateSaleOrder(options = {}) {
         "Failed to update sales order";
 
       toast.error(message);
+
+      if (isTallyAcceptedConflict(error)) {
+        const saleOrderId = variables?.id || "";
+        const resolvedCmpId =
+          cmp_id || variables?.payload?.cmpId || variables?.payload?.cmp_id || "";
+        await Promise.all([
+          saleOrderId
+            ? queryClient.invalidateQueries({
+              queryKey: saleOrderQueryKeys.detail(saleOrderId, resolvedCmpId),
+              refetchType: "all",
+            })
+            : Promise.resolve(),
+          queryClient.invalidateQueries({ queryKey: saleOrderQueryKeys.all }),
+          queryClient.invalidateQueries({ queryKey: ["daybook"], exact: false }),
+          resolvedCmpId
+            ? invalidateVoucherSummaryForCompany(queryClient, resolvedCmpId)
+            : Promise.resolve(),
+        ]);
+
+        if (onTallyConflict) {
+          await onTallyConflict(error, variables, context);
+        }
+      }
 
       if (onError) {
         await onError(error, variables, context);

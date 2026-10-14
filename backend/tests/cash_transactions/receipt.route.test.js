@@ -1250,6 +1250,12 @@ describe("POST /api/cash-transactions - DB side effects (no settlements)", () =>
 
     expect(timelineEntry).not.toBeNull();
     expect(String(timelineEntry.voucher_id)).toBe(res.body.data.cashTransaction._id);
+    expect(res.body.data.cashTransaction.tally_ref).toMatchObject({
+      tally_status: "pending",
+      tally_accepted_at: null,
+      tally_voucher_id: null,
+    });
+    expect(timelineEntry.tally_status).toBe("pending");
   });
 
   it("VoucherSeries currentNumber incremented by 1", async () => {
@@ -2556,6 +2562,50 @@ describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
     const cancelledEdit = await editReceiptRequest(receiptId);
     expect(cancelledEdit.status).toBe(400);
     expect(cancelledEdit.body.message).toBe("Cancelled receipt cannot be edited");
+  });
+
+  it("rejects editing and cancelling a Tally-accepted receipt", async () => {
+    const created = await createReceiptForTest();
+    const receiptId = created.body.data.cashTransaction._id;
+    await Receipt.updateOne(
+      { _id: receiptId },
+      { $set: { "tally_ref.tally_status": "accepted", "tally_ref.tally_accepted_at": new Date() } },
+    );
+    const snapshot = async () => JSON.stringify({
+      receipt: await Receipt.findById(receiptId).lean(),
+      timeline: await VoucherTimeline.findOne({
+        cmp_id: baseContext.companyId,
+        voucher_id: receiptId,
+        voucher_type: "receipt",
+      }).lean(),
+      partyLedgers: await PartyLedger.find({
+        cmp_id: baseContext.companyId,
+        voucher_id: receiptId,
+      }).sort({ _id: 1 }).lean(),
+      cashBankLedgers: await CashBankLedger.find({
+        cmp_id: baseContext.companyId,
+        voucher_id: receiptId,
+      }).sort({ _id: 1 }).lean(),
+      partyMonthlyBalances: await PartyMonthlyBalance.find({
+        cmp_id: baseContext.companyId,
+      }).sort({ _id: 1 }).lean(),
+      outstanding: await Outstanding.find({
+        cmp_id: baseContext.companyId,
+      }).sort({ _id: 1 }).lean(),
+    });
+    const before = await snapshot();
+
+    const [edit, cancellation] = await Promise.all([
+      editReceiptRequest(receiptId),
+      cancelReceiptRequest(receiptId),
+    ]);
+
+    expect(edit.status).toBe(409);
+    expect(edit.body.message).toBe("Tally-accepted Receipt cannot be edited");
+    expect(cancellation.status).toBe(409);
+    expect(cancellation.body.message).toBe("Tally-accepted Receipt cannot be cancelled");
+    expect((await Receipt.findById(receiptId).lean()).status).toBe("active");
+    expect(await snapshot()).toBe(before);
   });
 
   it("allows only one of two edits using the same version to win", async () => {
