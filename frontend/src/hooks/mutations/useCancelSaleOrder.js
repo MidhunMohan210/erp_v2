@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { saleOrderService } from "@/api/services/saleOrder.service";
 import { saleOrderQueryKeys } from "@/hooks/queries/saleOrderQueries";
 import { invalidateVoucherSummaryForCompany } from "@/hooks/queries/voucherQueries";
+import { isTallyAcceptedConflict } from "@/utils/tallyVoucherStatus";
 
 /**
  * Mutation hook for soft-cancelling a sale order.
@@ -61,6 +62,25 @@ export function useCancelSaleOrder(options = {}) {
         "Failed to cancel sale order";
 
       toast.error(message);
+
+      if (isTallyAcceptedConflict(error)) {
+        const saleOrderId = variables?.id || "";
+        const resolvedCmpId =
+          cmp_id || variables?.payload?.cmpId || variables?.payload?.cmp_id || "";
+        await Promise.all([
+          saleOrderId
+            ? queryClient.invalidateQueries({
+              queryKey: saleOrderQueryKeys.detail(saleOrderId, resolvedCmpId),
+              refetchType: "all",
+            })
+            : Promise.resolve(),
+          queryClient.invalidateQueries({ queryKey: saleOrderQueryKeys.all }),
+          queryClient.invalidateQueries({ queryKey: ["daybook"], exact: false }),
+          resolvedCmpId
+            ? invalidateVoucherSummaryForCompany(queryClient, resolvedCmpId)
+            : Promise.resolve(),
+        ]);
+      }
 
       if (onError) {
         await onError(error, variables, context);

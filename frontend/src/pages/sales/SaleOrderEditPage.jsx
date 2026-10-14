@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useDispatch, useSelector } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
+import { toast } from "sonner";
 
 import { saleOrderService } from "@/api/services/saleOrder.service";
 import TransactionHeader from "@/components/TransactionHeader";
@@ -18,6 +19,10 @@ import {
   loadSaleOrderForEdit,
   setCompany,
 } from "@/store/slices/transactionSlice";
+import {
+  canModifyTallyVoucher,
+  getTallyModificationMessage,
+} from "@/utils/tallyVoucherStatus";
 
 // Sale-order edit page.
 // Flow:
@@ -77,11 +82,34 @@ export default function SaleOrderEditPage() {
 
   const updateSaleOrderMutation = useUpdateSaleOrder({
     cmp_id: effectiveCmpId,
+    onTallyConflict: () =>
+      navigate(
+        ROUTES.saleOrderDetail.replace(":saleOrderId", saleOrder?._id || id),
+      ),
   });
 
   // Build update payload using the same mapper used in create flow.
-  const handleUpdateSaleOrder = () => {
+  const handleUpdateSaleOrder = async () => {
     if (!saleOrder?._id) return;
+
+    const refreshed = await saleOrderQuery.refetch();
+    const freshSaleOrder = refreshed.data;
+    if (refreshed.error || !freshSaleOrder) {
+      toast.error(
+        refreshed.error?.response?.data?.message ||
+          refreshed.error?.message ||
+          "Could not refresh the sale order before updating it.",
+      );
+      return;
+    }
+
+    if (!canModifyTallyVoucher(freshSaleOrder)) {
+      toast.error(getTallyModificationMessage(freshSaleOrder));
+      navigate(
+        ROUTES.saleOrderDetail.replace(":saleOrderId", freshSaleOrder._id),
+      );
+      return;
+    }
 
     const headerPayload = buildHeaderPayloadRef.current
       ? buildHeaderPayloadRef.current()
@@ -111,7 +139,12 @@ export default function SaleOrderEditPage() {
   // Prevent invalid submit until core prerequisites exist.
   const hasParty = Boolean(party?._id || party?.id);
   const hasItems = items.length > 0;
-  const disableUpdate = !effectiveCmpId || !headerReady || !hasParty || !hasItems;
+  const disableUpdate =
+    !effectiveCmpId ||
+    !headerReady ||
+    !hasParty ||
+    !hasItems ||
+    saleOrderQuery.isFetching;
   const isHydratingDraft =
     saleOrderQuery.isLoading ||
     (!saleOrderQuery.isError && !saleOrderQuery.isFetched && !saleOrder);
@@ -149,12 +182,14 @@ export default function SaleOrderEditPage() {
     );
   }
 
-  if (saleOrder.status !== "open") {
+  if (saleOrder.status !== "open" || !canModifyTallyVoucher(saleOrder)) {
     return (
       <div className="flex h-full items-center justify-center px-4">
         <div className="w-full max-w-md rounded-xl border border-amber-200 bg-white p-6 text-center">
           <p className="text-sm font-semibold text-slate-900">
-            Cannot edit a {saleOrder.status} sale order.
+            {saleOrder.status !== "open"
+              ? `Cannot edit a ${saleOrder.status} sale order.`
+              : getTallyModificationMessage(saleOrder)}
           </p>
           <button
             type="button"

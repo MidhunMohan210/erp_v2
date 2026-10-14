@@ -1775,4 +1775,69 @@ describe("getVouchers", () => {
     });
     expect(voucherDates(explicitRange)).toEqual(["2026-09-21"]);
   });
+
+  it("serializes pending, accepted, and missing Tally states without deriving them from business status", async () => {
+    const { context } = await setupSaleContext();
+    const [pendingId, acceptedId, missingId] = [
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId(),
+      new mongoose.Types.ObjectId(),
+    ];
+
+    const timelines = await VoucherTimeline.create([
+      {
+        _id: new mongoose.Types.ObjectId(),
+        cmp_id: context.company._id,
+        voucher_type: "saleOrder",
+        voucher_id: pendingId,
+        date: new Date("2026-10-01T00:00:00.000Z"),
+        voucher_number: "SO-PENDING",
+        party_name: "Pending customer",
+        amount: 10,
+        status: "open",
+        tally_status: "pending",
+      },
+      {
+        _id: new mongoose.Types.ObjectId(),
+        cmp_id: context.company._id,
+        voucher_type: "sale",
+        voucher_id: acceptedId,
+        date: new Date("2026-10-02T00:00:00.000Z"),
+        voucher_number: "SALE-ACCEPTED",
+        party_name: "Accepted customer",
+        amount: 20,
+        status: "active",
+        tally_status: "accepted",
+      },
+      {
+        _id: new mongoose.Types.ObjectId(),
+        cmp_id: context.company._id,
+        voucher_type: "receipt",
+        voucher_id: missingId,
+        date: new Date("2026-10-03T00:00:00.000Z"),
+        voucher_number: "RCP-MISSING",
+        party_name: "Legacy customer",
+        amount: 30,
+        status: "active",
+      },
+    ]);
+    await VoucherTimeline.collection.updateOne(
+      { _id: timelines[2]._id },
+      { $unset: { tally_status: "" } },
+    );
+
+    const result = await getVouchers({
+      cmpId: String(context.company._id),
+      voucherType: "all",
+    }, { user: { id: String(context.user._id), role: "admin" } });
+    const tallyStatusByVoucherNumber = Object.fromEntries(
+      result.vouchers.map((voucher) => [voucher.voucher_number, voucher.tally_status]),
+    );
+
+    expect(tallyStatusByVoucherNumber).toMatchObject({
+      "SO-PENDING": "pending",
+      "SALE-ACCEPTED": "accepted",
+      "RCP-MISSING": null,
+    });
+  });
 });

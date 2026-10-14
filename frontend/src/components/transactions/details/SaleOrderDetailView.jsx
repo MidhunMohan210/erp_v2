@@ -5,17 +5,20 @@ import {
   Pencil,
   Printer,
   ReceiptText,
-  Share2,
   Truck,
   User2,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { toast } from "sonner";
 
 import CancelVoucherDialog from "@/components/transactions/details/CancelVoucherDialog";
 import { Button } from "@/components/ui/button";
 import { generateSaleOrderPdf } from "@/utils/pdf/generateSaleOrderPdf";
 import { getSaleOrderQuantityParts } from "@/utils/saleOrderQuantityDisplay";
+import {
+  canModifyTallyVoucher,
+  getTallyModificationMessage,
+  getTallyStatus,
+} from "@/utils/tallyVoucherStatus";
 
 /**
  * Formats backend date value into UI-friendly `DD Mon YYYY`.
@@ -183,6 +186,7 @@ function ProductItemCard({ item, taxType }) {
  *   bankDetails?: object,
  *   companySettings?: object,
  *   onCancel?: () => void,
+ *   onEdit?: () => void,
  *   isCancelling?: boolean
  * }} props
  * @returns {JSX.Element}
@@ -194,6 +198,7 @@ export default function SaleOrderDetailView({
   bankDetails,
   companySettings,
   onCancel,
+  onEdit,
   isCancelling = false,
 }) {
   const navigate = useNavigate();
@@ -204,6 +209,9 @@ export default function SaleOrderDetailView({
     saleOrder?.mailing_name || saleOrder?.party_snapshot?.name || "--";
   const isCancelled = saleOrder?.status === "cancelled";
   const isOpen = saleOrder?.status === "open";
+  const tallyStatus = getTallyStatus(saleOrder);
+  const canModify = canModifyTallyVoucher(saleOrder);
+  const tallyModificationMessage = getTallyModificationMessage(saleOrder);
   const statusTone =
     saleOrder?.status === "converted"
       ? "bg-amber-100 text-amber-800"
@@ -284,33 +292,6 @@ export default function SaleOrderDetailView({
     });
   };
 
-  const handleShare = async () => {
-    const shareText = [
-      `Sale order: ${saleOrder?.voucher_number || "--"}`,
-      `Date: ${formatDate(saleOrder?.date)}`,
-      `Customer: ${saleOrder?.party_snapshot?.name || "No customer"}`,
-      `Status: ${saleOrder?.status || "open"}`,
-      `Final amount: ${formatAmount(totals.final_amount)}`,
-    ].join("\n");
-
-    try {
-      if (navigator.share) {
-        await navigator.share({
-          title: `Sale order ${saleOrder?.voucher_number || ""}`.trim(),
-          text: shareText,
-        });
-        return;
-      }
-
-      await navigator.clipboard.writeText(shareText);
-      toast.success("Sale order details copied");
-    } catch (error) {
-      if (error?.name !== "AbortError") {
-        toast.error("Could not share sale order");
-      }
-    }
-  };
-
   return (
     <div className="mx-auto flex w-full flex-col gap-3 px-1 py-4">
       <section className="overflow-hidden rounded-[15px] bg-[#3e5c76] p-4 text-white shadow-sm">
@@ -350,13 +331,14 @@ export default function SaleOrderDetailView({
         </div>
       </section>
 
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <Button
           type="button"
           size="sm"
           className="h-11 min-w-0 rounded-2xl border border-[#004178] bg-[#004178] px-1.5 text-[11px] font-extrabold text-white hover:bg-[#003763]"
-          disabled={!isOpen}
-          onClick={() => navigate(`/sale-orders/${saleOrder._id}/edit`)}
+          disabled={!isOpen || !canModify}
+          title={!canModify ? tallyModificationMessage : undefined}
+          onClick={onEdit || (() => navigate(`/sale-orders/${saleOrder._id}/edit`))}
         >
           <Pencil className="size-3.5" />
           <span className="truncate">Edit</span>
@@ -367,7 +349,7 @@ export default function SaleOrderDetailView({
           description="This will mark the sale order as cancelled. This action can be reverted later if needed."
           isCancelled={isCancelled}
           hideWhenCancelled={false}
-          disabled={!isOpen}
+          disabled={!isOpen || !canModify}
           isLoading={isCancelling}
           onConfirm={onCancel}
           triggerIcon={Ban}
@@ -383,17 +365,13 @@ export default function SaleOrderDetailView({
           <Printer className="size-3.5" />
           <span className="truncate">Print</span>
         </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-11 min-w-0 rounded-2xl border-[#004178] bg-white px-1.5 text-[11px] font-extrabold text-[#004178] hover:bg-sky-50 hover:text-[#004178]"
-          onClick={handleShare}
-        >
-          <Share2 className="size-3.5" />
-          <span className="truncate">Share</span>
-        </Button>
       </div>
+
+      {tallyStatus === "accepted" || !tallyStatus ? (
+        <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-600">
+          {tallyModificationMessage}
+        </p>
+      ) : null}
 
       <div className="grid grid-cols-2 gap-2">
         <div className="rounded-2xl border border-blue-100 bg-blue-50 p-2.5">

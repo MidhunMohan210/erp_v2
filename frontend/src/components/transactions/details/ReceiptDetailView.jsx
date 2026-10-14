@@ -1,6 +1,11 @@
 import { ArrowRight, BadgeIndianRupee, Building2, CreditCard, ReceiptText, User2 } from "lucide-react";
 
 import CancelVoucherDialog from "@/components/transactions/details/CancelVoucherDialog";
+import {
+  canModifyTallyVoucher,
+  getTallyModificationMessage,
+  getTallyStatus,
+} from "@/utils/tallyVoucherStatus";
 
 /**
  * Formats backend date value into UI-friendly `DD Mon YYYY`.
@@ -85,6 +90,9 @@ function SectionCard({ title, icon: Icon, children }) {
  */
 export default function ReceiptDetailView({ receipt, onCancel, isCancelling = false }) {
   const isCancelled = receipt?.status === "cancelled";
+  const tallyStatus = getTallyStatus(receipt);
+  const canModify = canModifyTallyVoucher(receipt);
+  const tallyModificationMessage = getTallyModificationMessage(receipt);
   const statusTone =
     receipt?.status === "cancelled"
       ? "bg-rose-100 text-rose-800"
@@ -93,46 +101,54 @@ export default function ReceiptDetailView({ receipt, onCancel, isCancelling = fa
 
   return (
     <div className="mx-auto flex w-full flex-col gap-3 px-1 py-4">
-      <section className="overflow-hidden rounded-xl border-4 border-white bg-[#757bc8] px-4 py-4 text-white shadow-sm">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div className="space-y-1.5">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-200/80">
+      <section className="overflow-hidden rounded-[15px] bg-[#3e5c76] p-4 text-white shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0 flex-1">
+            <p className="text-[9px] font-extrabold uppercase tracking-[0.16em] text-sky-100/90">
               Receipt
             </p>
-            <h1 className="text-xl font-semibold tracking-[0.01em]">
+            <h1 className="mt-1 truncate text-[18px] font-extrabold tracking-[0.01em]">
               {receipt?.voucher_number || "--"}
             </h1>
-            <div className="flex flex-wrap items-center gap-2 text-[12px] text-slate-100/90">
-              <span>{formatDate(receipt?.date)}</span>
-              <span className="text-slate-300">•</span>
-              <span>{receipt?.party_name || "No party selected"}</span>
+            <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[11px] text-sky-100">
+              <span className="shrink-0 whitespace-nowrap">{formatDate(receipt?.date)}</span>
+              <span aria-hidden="true">•</span>
+              <span className="truncate">{receipt?.party_name || "No party selected"}</span>
             </div>
           </div>
 
-          <div className="flex flex-col items-start gap-3 md:items-end">
-            <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase ${statusTone}`}>
-              {receipt?.status || "active"}
-            </span>
-            <div className="text-left md:text-right">
-              <p className="text-[10px] uppercase tracking-[0.18em] text-slate-200/75">
-                Receipt Amount
-              </p>
-              <p className="mt-1 text-2xl font-semibold">
-                {formatAmount(receipt?.amount)}
-              </p>
-            </div>
-            <CancelVoucherDialog
-              label="Cancel"
-              title="Cancel receipt?"
-              description="This will mark the receipt as cancelled. This action can be reverted later if needed."
-              warning="Settlements are reverted only if the outstanding exists."
-              isCancelled={isCancelled}
-              isLoading={isCancelling}
-              onConfirm={onCancel}
-            />
-          </div>
+          <span className={`shrink-0 rounded-full px-2.5 py-1 text-[9px] font-extrabold uppercase ${statusTone}`}>
+            {receipt?.status || "active"}
+          </span>
+        </div>
+
+        <div className="mt-4 border-t border-white/35 pt-3">
+          <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-sky-100/90">
+            Receipt Amount
+          </p>
+          <p className="mt-1 text-[21px] font-extrabold">
+            {formatAmount(receipt?.amount)}
+          </p>
         </div>
       </section>
+
+      <CancelVoucherDialog
+        label="Cancel"
+        title="Cancel receipt?"
+        description="This will mark the receipt as cancelled. This action can be reverted later if needed."
+        warning="Settlements are reverted only if the outstanding exists."
+        isCancelled={isCancelled}
+        disabled={!canModify}
+        isLoading={isCancelling}
+        onConfirm={onCancel}
+        triggerClassName="h-11 w-full rounded-2xl border border-rose-200 bg-rose-50 px-1.5 text-[11px] font-extrabold text-rose-700 hover:bg-rose-100"
+      />
+
+      {tallyStatus === "accepted" || !tallyStatus ? (
+        <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] font-medium text-slate-600">
+          {tallyModificationMessage}
+        </p>
+      ) : null}
 
       <div className="grid gap-3 md:grid-cols-3">
         <SummaryTile label="Party" value={receipt?.party_name || "--"} tone="blue" />

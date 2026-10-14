@@ -296,6 +296,7 @@ export async function getVouchers(filters = {}, req) {
       party_name: 1,
       amount: 1,
       status: 1,
+      tally_status: 1,
     })
       .sort({ date: -1, _id: -1 })
       .skip(skip)
@@ -311,6 +312,7 @@ export async function getVouchers(filters = {}, req) {
     party_name: doc.party_name || null,
     amount: Number(doc.amount) || 0,
     status: doc.status || null,
+    tally_status: doc.tally_status ?? null,
   }));
 
   return {

@@ -6,6 +6,7 @@ import { cashTransactionQueryKeys } from "@/hooks/queries/cashTransactionQueries
 import { outstandingQueryKeys } from "@/hooks/queries/outstandingQueries";
 import { partyQueryKeys } from "@/hooks/queries/partyQueries";
 import { invalidateVoucherSummaryForCompany } from "@/hooks/queries/voucherQueries";
+import { isTallyAcceptedConflict } from "@/utils/tallyVoucherStatus";
 
 /**
  * Mutation hook for cancelling receipt/payment transactions.
@@ -75,6 +76,29 @@ export function useCancelCashTransaction(options = {}) {
         "Failed to cancel receipt";
 
       toast.error(message);
+
+      if (isTallyAcceptedConflict(error)) {
+        const transactionId = variables?.id || "";
+        const resolvedCmpId =
+          cmp_id || variables?.payload?.cmpId || variables?.payload?.cmp_id || "";
+        await Promise.all([
+          transactionId
+            ? queryClient.invalidateQueries({
+              queryKey: cashTransactionQueryKeys.detail(transactionId, resolvedCmpId),
+              refetchType: "all",
+            })
+            : Promise.resolve(),
+          queryClient.invalidateQueries({
+            queryKey: cashTransactionQueryKeys.all,
+            exact: false,
+            refetchType: "all",
+          }),
+          queryClient.invalidateQueries({ queryKey: ["daybook"], exact: false }),
+          resolvedCmpId
+            ? invalidateVoucherSummaryForCompany(queryClient, resolvedCmpId)
+            : Promise.resolve(),
+        ]);
+      }
 
       if (onError) {
         await onError(error, variables, context);

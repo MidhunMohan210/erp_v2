@@ -1,6 +1,7 @@
 import { useEffect } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { useSelector } from "react-redux";
+import { toast } from "sonner";
 
 import ErrorRetryState from "@/components/common/ErrorRetryState";
 import { useMobileHeader } from "@/components/Layout/HomeLayout";
@@ -13,6 +14,11 @@ import { useCashTransactionDetailQuery } from "@/hooks/queries/cashTransactionQu
 import { useCompanySettingsQuery } from "@/hooks/queries/companySettingsQueries";
 import { usePrintConfigQuery } from "@/hooks/queries/printConfigQueries";
 import { useSaleOrderDetailQuery } from "@/hooks/queries/saleOrderQueries";
+import { ROUTES } from "@/routes/paths";
+import {
+  canModifyTallyVoucher,
+  getTallyModificationMessage,
+} from "@/utils/tallyVoucherStatus";
 
 const ORDER_VOUCHER_TYPES = new Set([
   "sale",
@@ -28,6 +34,7 @@ export default function TransactionDetailPage({
 }) {
   const params = useParams();
   const location = useLocation();
+  const navigate = useNavigate();
   const cmpId = useSelector((state) => state.company.selectedCompanyId);
   const selectedCompany = useSelector((state) => state.company.selectedCompany);
   const { setHeaderOptions, resetHeaderOptions } = useMobileHeader();
@@ -65,6 +72,27 @@ export default function TransactionDetailPage({
   );
   const cancelSaleOrderMutation = useCancelSaleOrder({ cmp_id: cmpId || "" });
   const cancelReceiptMutation = useCancelCashTransaction({ cmp_id: cmpId || "" });
+
+  const getFreshModifiableVoucher = async (query) => {
+    const result = await query.refetch();
+    const voucher = result.data;
+
+    if (result.error || !voucher) {
+      toast.error(
+        result.error?.response?.data?.message ||
+          result.error?.message ||
+          "Could not refresh the transaction before making changes.",
+      );
+      return null;
+    }
+
+    if (!canModifyTallyVoucher(voucher)) {
+      toast.error(getTallyModificationMessage(voucher));
+      return null;
+    }
+
+    return voucher;
+  };
 
   if (voucherType === "saleOrder") {
     const saleOrder = saleOrderQuery.data || fallbackTransaction;
@@ -110,15 +138,24 @@ export default function TransactionDetailPage({
           null
         }
         companySettings={companySettingsQuery.data || null}
-        isCancelling={cancelSaleOrderMutation.isPending}
-        onCancel={() =>
-          cancelSaleOrderMutation.mutateAsync({
-            id: saleOrder?._id,
+        isCancelling={cancelSaleOrderMutation.isPending || saleOrderQuery.isFetching}
+        onEdit={async () => {
+          const freshSaleOrder = await getFreshModifiableVoucher(saleOrderQuery);
+          if (!freshSaleOrder || freshSaleOrder.status !== "open") return;
+
+          navigate(ROUTES.saleOrderEdit.replace(":id", freshSaleOrder._id));
+        }}
+        onCancel={async () => {
+          const freshSaleOrder = await getFreshModifiableVoucher(saleOrderQuery);
+          if (!freshSaleOrder || freshSaleOrder.status !== "open") return;
+
+          return cancelSaleOrderMutation.mutateAsync({
+            id: freshSaleOrder._id,
             payload: {
               cmp_id: cmpId,
             },
-          })
-        }
+          });
+        }}
       />
     );
   }
@@ -159,15 +196,18 @@ export default function TransactionDetailPage({
     return (
       <ReceiptDetailView
         receipt={receipt}
-        isCancelling={cancelReceiptMutation.isPending}
-        onCancel={() =>
-          cancelReceiptMutation.mutateAsync({
-            id: receipt?._id,
+        isCancelling={cancelReceiptMutation.isPending || receiptQuery.isFetching}
+        onCancel={async () => {
+          const freshReceipt = await getFreshModifiableVoucher(receiptQuery);
+          if (!freshReceipt || freshReceipt.status !== "active") return;
+
+          return cancelReceiptMutation.mutateAsync({
+            id: freshReceipt._id,
             payload: {
               cmp_id: cmpId,
             },
-          })
-        }
+          });
+        }}
       />
     );
   }
