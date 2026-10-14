@@ -480,7 +480,7 @@ describe("POST /api/sale-orders — Business logic", () => {
       voucher_type: "saleOrder",
     }).lean();
 
-    expect(saleOrder).toMatchObject({ status: "open", tally_status: "pending" });
+    expect(saleOrder).toMatchObject({ status: "open", tally_ref: { tally_status: "pending", tally_accepted_at: null, tally_voucher_id: null } });
     expect(timeline).toMatchObject({ status: "open", tally_status: "pending" });
   });
 
@@ -1747,7 +1747,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
   it("rejects editing a Tally-accepted open order with 409", async () => {
     const createRes = await createSaleOrderForTest();
     await SaleOrder.findByIdAndUpdate(createRes.body.data.saleOrder._id, {
-      tally_status: "accepted",
+      "tally_ref.tally_status": "accepted",
     });
 
     const res = await updateSaleOrderRequest(createRes.body.data.saleOrder._id, {
@@ -1802,7 +1802,7 @@ describe("PUT /api/sale-orders/:saleOrderId/cancel", () => {
   it("rejects cancelling a Tally-accepted open order with 409", async () => {
     const createRes = await createSaleOrderForTest();
     await SaleOrder.findByIdAndUpdate(createRes.body.data.saleOrder._id, {
-      tally_status: "accepted",
+      "tally_ref.tally_status": "accepted",
     });
 
     const res = await cancelSaleOrderRequest(createRes.body.data.saleOrder._id);

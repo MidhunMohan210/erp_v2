@@ -14,14 +14,14 @@ function result(saleOrderId, outcome, reason = null) {
   };
 }
 
-export async function acknowledgeSaleOrderFromTally({ saleOrderId, cmpId }) {
+export async function acknowledgeSaleOrderFromTally({ saleOrderId, cmpId, tallyVoucherId = null }) {
   const session = await mongoose.startSession();
   let acknowledgementResult = null;
 
   try {
     await session.withTransaction(async () => {
       // Read the raw stored document so a schema default cannot disguise a
-      // historical record where tally_status is genuinely absent.
+      // historical record where nested Tally state is genuinely absent.
       const saleOrder = await SaleOrder.collection.findOne(
         {
           _id: new mongoose.Types.ObjectId(saleOrderId),
@@ -45,7 +45,7 @@ export async function acknowledgeSaleOrderFromTally({ saleOrderId, cmpId }) {
         acknowledgementResult = result(
           saleOrderId,
           "inconsistent_related_records",
-          "Sales Order has no stored tally_status and requires reconciliation",
+          "Sales Order has no stored tally_ref.tally_status and requires reconciliation",
         );
         return;
       }
@@ -69,20 +69,52 @@ export async function acknowledgeSaleOrderFromTally({ saleOrderId, cmpId }) {
       }
 
       const timeline = timelines[0];
-      if (saleOrder.tally_status === TALLY_STATUS.ACCEPTED) {
-        acknowledgementResult =
-          timeline.tally_status === TALLY_STATUS.ACCEPTED
-            ? result(saleOrderId, "already_accepted")
-            : result(
-                saleOrderId,
-                "inconsistent_related_records",
-                "Sales Order is accepted but VoucherTimeline is not accepted",
-              );
+      const storedTallyRef = saleOrder.tally_ref;
+      if (storedTallyRef.tally_status === TALLY_STATUS.ACCEPTED) {
+        if (timeline.tally_status !== TALLY_STATUS.ACCEPTED) {
+          acknowledgementResult = result(
+            saleOrderId,
+            "inconsistent_related_records",
+            "Sales Order is accepted but VoucherTimeline is not accepted",
+          );
+          return;
+        }
+        if (
+          tallyVoucherId &&
+          storedTallyRef.tally_voucher_id &&
+          storedTallyRef.tally_voucher_id !== tallyVoucherId
+        ) {
+          acknowledgementResult = result(
+            saleOrderId,
+            "inconsistent_related_records",
+            "Sales Order already has a different Tally voucher ID",
+          );
+          return;
+        }
+        if (tallyVoucherId && !storedTallyRef.tally_voucher_id) {
+          const updated = await SaleOrder.collection.updateOne(
+            {
+              _id: saleOrder._id,
+              cmp_id: saleOrder.cmp_id,
+              "tally_ref.tally_status": TALLY_STATUS.ACCEPTED,
+              $or: [
+                { "tally_ref.tally_voucher_id": null },
+                { "tally_ref.tally_voucher_id": { $exists: false } },
+              ],
+            },
+            { $set: { "tally_ref.tally_voucher_id": tallyVoucherId } },
+            { session },
+          );
+          if (updated.matchedCount !== 1) {
+            throw new Error("Sales Order acknowledgement voucher ID claim was not acquired");
+          }
+        }
+        acknowledgementResult = result(saleOrderId, "already_accepted");
         return;
       }
 
       if (
-        saleOrder.tally_status !== TALLY_STATUS.PENDING ||
+        storedTallyRef.tally_status !== TALLY_STATUS.PENDING ||
         timeline.tally_status !== TALLY_STATUS.PENDING
       ) {
         acknowledgementResult = result(
@@ -98,11 +130,15 @@ export async function acknowledgeSaleOrderFromTally({ saleOrderId, cmpId }) {
           _id: saleOrder._id,
           cmp_id: cmpId,
           status: { $ne: "cancelled" },
-          tally_status: TALLY_STATUS.PENDING,
+          "tally_ref.tally_status": TALLY_STATUS.PENDING,
         },
         {
           $set: {
-            tally_status: TALLY_STATUS.ACCEPTED,
+            "tally_ref.tally_status": TALLY_STATUS.ACCEPTED,
+            "tally_ref.tally_accepted_at": new Date(),
+            ...(tallyVoucherId
+              ? { "tally_ref.tally_voucher_id": tallyVoucherId }
+              : {}),
             updated_by: null,
           },
         },

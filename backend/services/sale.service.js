@@ -18,7 +18,6 @@ import Sale from "../Model/Sale.js";
 import { applyTransactionCreatorScope } from "../utils/authScope.js";
 import {
   getInitialTransactionStatus,
-  getInitialTransactionTallyStatus,
 } from "./transactionState.service.js";
 import { issueVoucherIdentity } from "./voucherIdentity.service.js";
 import {
@@ -658,13 +657,13 @@ export async function updateSale(id, data = {}, req = {}) {
       if (visibleSale.status === "cancelled") {
         throw createSaleValidationError("Cancelled Sale cannot be edited.");
       }
-      if (visibleSale.tally_status === "accepted") {
+      if (visibleSale.tally_ref?.tally_status === "accepted") {
         throw createSaleValidationError("Accepted Sale cannot be edited.");
       }
 
       // Claim this pending, active document before touching any posting.
       const sale = await Sale.findOneAndUpdate(
-        { ...accessFilter, status: "active", tally_status: "pending" },
+        { ...accessFilter, status: "active", "tally_ref.tally_status": "pending" },
         { $set: { updated_by: userId } },
         { returnDocument: "before", session },
       );
@@ -1073,7 +1072,11 @@ export async function createSale(data = {}, req = {}) {
             narration,
             totals: calculated.totals,
             status: getInitialTransactionStatus("sale"),
-            tally_status: getInitialTransactionTallyStatus("sale"),
+            tally_ref: {
+              tally_status: "pending",
+              tally_accepted_at: null,
+              tally_voucher_id: null,
+            },
             created_by: userId,
             updated_by: userId,
           },
@@ -1214,14 +1217,14 @@ export async function cancelSale(id, data = {}, req = {}) {
       if (existingSale.status === "cancelled") {
         throw createCancellationError("Sale is already cancelled");
       }
-      if (existingSale.tally_status === "accepted") {
+      if (existingSale.tally_ref?.tally_status === "accepted") {
         throw createCancellationError("Sale already accepted by Tally cannot be cancelled");
       }
 
       // This atomic state transition prevents two requests from restoring the
       // same stock or reversing the same ledger/monthly balance twice.
       const sale = await Sale.findOneAndUpdate(
-        { ...accessFilter, status: "active", tally_status: "pending" },
+        { ...accessFilter, status: "active", "tally_ref.tally_status": "pending" },
         {
           $set: {
             status: "cancelled",

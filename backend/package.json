@@ -14,7 +14,6 @@
     "migrate-cash-bank-voucher-models": "node utils/migrateCashBankLedgerVoucherModels.js",
     "reconcile:sale-order-tally": "node utils/reconcileSaleOrderTallyStatus.js",
     "migrate:tally-field-cleanup": "node utils/migrateTallyFieldCleanup.js",
-    "migrate:sale-order-tally-ref": "node utils/migrateSaleOrderTallyRef.js",
     "test": "cross-env NODE_ENV=test vitest run",
     "test:watch": "cross-env NODE_ENV=test vitest",
     "test:coverage": "cross-env NODE_ENV=test vitest run --coverage"

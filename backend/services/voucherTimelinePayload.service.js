@@ -17,7 +17,7 @@ export function buildVoucherTimelinePayload(doc = {}, overrides = {}) {
       ) || 0,
     status: overrides.status ?? doc.status ?? null,
     tally_status:
-      overrides.tally_status ?? doc.tally_status ?? TALLY_STATUS.PENDING,
+      overrides.tally_status ?? doc.tally_ref?.tally_status ?? TALLY_STATUS.PENDING,
     ...overrides,
   };
 }

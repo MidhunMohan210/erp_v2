@@ -43,7 +43,7 @@ function createHttpError(message, statusCode = 500) {
 }
 
 function assertSaleOrderNotTallyAccepted(saleOrder) {
-  if (saleOrder?.tally_status === TALLY_STATUS.ACCEPTED) {
+  if (saleOrder?.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
     throw createHttpError(
       "Tally-accepted Sale Order cannot be edited or cancelled",
       409,

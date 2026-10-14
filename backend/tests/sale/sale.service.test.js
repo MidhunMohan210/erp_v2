@@ -385,7 +385,7 @@ describe("createSale", () => {
     expect(sale).toMatchObject({
       voucher_type: "sale",
       status: "active",
-      tally_status: "pending",
+      tally_ref: { tally_status: "pending", tally_accepted_at: null, tally_voucher_id: null },
       narration: "July sale",
     });
     expectId(sale.cmp_id, context.company._id);
@@ -1206,7 +1206,7 @@ describe("updateSale", () => {
       transactionDate: "2026-07-15", partyId: String(party._id),
       items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 5, billedQty: 5, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
     }, { companyId: String(context.company._id), user: context.user });
-    await Sale.updateOne({ _id: sale._id }, { $set: { tally_status: "accepted" } });
+    await Sale.updateOne({ _id: sale._id }, { $set: { "tally_ref.tally_status": "accepted" } });
     await expect(updateSale(sale._id, {
       transactionDate: "2026-07-15", partyId: String(party._id),
       items: [{ ...sale.items[0].toObject?.() }],
@@ -1499,7 +1499,7 @@ describe("cancelSale", () => {
       },
       { companyId: String(context.company._id), user: context.user },
     );
-    await Sale.updateOne({ _id: sale._id }, { $set: { tally_status: "accepted" } });
+    await Sale.updateOne({ _id: sale._id }, { $set: { "tally_ref.tally_status": "accepted" } });
 
     await expect(
       cancelSale(sale._id, {}, { companyId: String(context.company._id), user: context.user }),

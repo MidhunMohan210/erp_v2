@@ -754,7 +754,11 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
     totals: buildSaleOrderTotals(body),
     // Lifecycle + external sync placeholders
     status: getInitialTransactionStatus("saleOrder"),
-    tally_status: TALLY_STATUS.PENDING,
+    tally_ref: {
+      tally_status: TALLY_STATUS.PENDING,
+      tally_accepted_at: null,
+      tally_voucher_id: null,
+    },
     narration: null,
     // Audit
     created_by: userId || null,
