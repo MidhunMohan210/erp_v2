@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { createHash } from "node:crypto";
 
+import { TALLY_STATUS } from "../constants/tallyStatus.js";
 import { getCashBankVoucherModel } from "../utils/cashBankVoucherModel.js";
 
 import Company from "../Model/CompanySchema.js";
@@ -657,13 +658,15 @@ export async function updateSale(id, data = {}, req = {}) {
       if (visibleSale.status === "cancelled") {
         throw createSaleValidationError("Cancelled Sale cannot be edited.");
       }
-      if (visibleSale.tally_ref?.tally_status === "accepted") {
-        throw createSaleValidationError("Accepted Sale cannot be edited.");
+      if (visibleSale.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+        const error = createSaleValidationError("Accepted Sale cannot be edited.");
+        error.statusCode = 409;
+        throw error;
       }
 
       // Claim this pending, active document before touching any posting.
       const sale = await Sale.findOneAndUpdate(
-        { ...accessFilter, status: "active", "tally_ref.tally_status": "pending" },
+        { ...accessFilter, status: "active", "tally_ref.tally_status": TALLY_STATUS.PENDING },
         { $set: { updated_by: userId } },
         { returnDocument: "before", session },
       );
@@ -1217,14 +1220,17 @@ export async function cancelSale(id, data = {}, req = {}) {
       if (existingSale.status === "cancelled") {
         throw createCancellationError("Sale is already cancelled");
       }
-      if (existingSale.tally_ref?.tally_status === "accepted") {
-        throw createCancellationError("Sale already accepted by Tally cannot be cancelled");
+      if (existingSale.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
+        throw createCancellationError(
+          "Sale already accepted by Tally cannot be cancelled",
+          409,
+        );
       }
 
       // This atomic state transition prevents two requests from restoring the
       // same stock or reversing the same ledger/monthly balance twice.
       const sale = await Sale.findOneAndUpdate(
-        { ...accessFilter, status: "active", "tally_ref.tally_status": "pending" },
+        { ...accessFilter, status: "active", "tally_ref.tally_status": TALLY_STATUS.PENDING },
         {
           $set: {
             status: "cancelled",

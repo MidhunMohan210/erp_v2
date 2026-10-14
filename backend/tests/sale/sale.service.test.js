@@ -38,6 +38,31 @@ function expectDate(actual, expected) {
   expect(new Date(actual).toISOString()).toBe(new Date(expected).toISOString());
 }
 
+async function snapshotSaleEffects({ cmpId, saleId, productId }) {
+  const [sale, timeline, product, itemLedgers, partyLedgers, cashBankLedgers, itemMonthlyBalances, partyMonthlyBalances, outstanding] = await Promise.all([
+    Sale.findById(saleId).lean(),
+    VoucherTimeline.findOne({ cmp_id: cmpId, voucher_id: saleId, voucher_type: "sale" }).lean(),
+    Product.findById(productId).lean(),
+    ItemLedger.find({ cmp_id: cmpId, voucher_id: saleId }).sort({ _id: 1 }).lean(),
+    PartyLedger.find({ cmp_id: cmpId, voucher_id: saleId }).sort({ _id: 1 }).lean(),
+    CashBankLedger.find({ cmp_id: cmpId, voucher_id: saleId }).sort({ _id: 1 }).lean(),
+    ItemMonthlyBalance.find({ cmp_id: cmpId }).sort({ _id: 1 }).lean(),
+    PartyMonthlyBalance.find({ cmp_id: cmpId }).sort({ _id: 1 }).lean(),
+    Outstanding.find({ cmp_id: cmpId, source: "sale", billId: String(saleId) }).sort({ _id: 1 }).lean(),
+  ]);
+  return JSON.stringify({
+    sale,
+    timeline,
+    product,
+    itemLedgers,
+    partyLedgers,
+    cashBankLedgers,
+    itemMonthlyBalances,
+    partyMonthlyBalances,
+    outstanding,
+  });
+}
+
 function assertSaleTotals(sale, expected) {
   for (const [field, value] of Object.entries(expected)) {
     expect(sale.totals[field]).toBeCloseTo(value, 2);
@@ -1207,11 +1232,24 @@ describe("updateSale", () => {
       items: [{ itemId: String(product._id), godownId: String(godown._id), godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 5, billedQty: 5, rate: 10, taxInclusive: false, discountType: "amount", discountValue: 0 }],
     }, { companyId: String(context.company._id), user: context.user });
     await Sale.updateOne({ _id: sale._id }, { $set: { "tally_ref.tally_status": "accepted" } });
+    const before = await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    });
     await expect(updateSale(sale._id, {
       transactionDate: "2026-07-15", partyId: String(party._id),
       items: [{ ...sale.items[0].toObject?.() }],
-    }, { companyId: String(context.company._id), user: context.user })).rejects.toThrow("Accepted Sale cannot be edited.");
+    }, { companyId: String(context.company._id), user: context.user })).rejects.toMatchObject({
+      message: "Accepted Sale cannot be edited.",
+      statusCode: 409,
+    });
     expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
+    expect(await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    })).toBe(before);
   });
 });
 
@@ -1500,13 +1538,26 @@ describe("cancelSale", () => {
       { companyId: String(context.company._id), user: context.user },
     );
     await Sale.updateOne({ _id: sale._id }, { $set: { "tally_ref.tally_status": "accepted" } });
+    const before = await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    });
 
     await expect(
       cancelSale(sale._id, {}, { companyId: String(context.company._id), user: context.user }),
-    ).rejects.toThrow("accepted by Tally");
+    ).rejects.toMatchObject({
+      message: "Sale already accepted by Tally cannot be cancelled",
+      statusCode: 409,
+    });
     expect((await Sale.findById(sale._id)).status).toBe("active");
     expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(95);
     expect(await ItemLedger.countDocuments({ voucher_id: sale._id, status: "active" })).toBe(1);
+    expect(await snapshotSaleEffects({
+      cmpId: context.company._id,
+      saleId: sale._id,
+      productId: product._id,
+    })).toBe(before);
   });
 
   it("cancels a Cash Sale without creating customer financial reversals", async () => {

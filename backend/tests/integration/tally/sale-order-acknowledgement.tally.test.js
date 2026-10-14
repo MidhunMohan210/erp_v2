@@ -210,6 +210,38 @@ describe("POST /api/tally/sale-orders/mark-converted", () => {
     ]);
   });
 
+  it("keeps acknowledgement and cancellation mutually exclusive", async () => {
+    const saleOrder = await createOrder();
+    const [acknowledgement, cancellation] = await Promise.all([
+      acknowledge([{ so_orderid: String(saleOrder._id) }]),
+      request(app)
+        .put(`/api/sale-orders/${saleOrder._id}/cancel`)
+        .set("Authorization", `Bearer ${context.token}`)
+        .set("X-Company-Id", String(context.companyId))
+        .send({}),
+    ]);
+    const [storedOrder, timeline] = await Promise.all([
+      SaleOrder.findById(saleOrder._id).lean(),
+      VoucherTimeline.findOne({ voucher_id: saleOrder._id }).lean(),
+    ]);
+
+    expect([200, 409]).toContain(cancellation.status);
+    if (storedOrder.tally_ref.tally_status === "accepted") {
+      expect(acknowledgement.body.items[0].outcome).toBe("accepted");
+      expect(cancellation.status).toBe(409);
+      expect(storedOrder.status).toBe("open");
+      expect(timeline).toMatchObject({ status: "open", tally_status: "accepted" });
+    } else {
+      expect(cancellation.status).toBe(200);
+      expect(storedOrder).toMatchObject({
+        status: "cancelled",
+        tally_ref: { tally_status: "pending" },
+      });
+      expect(timeline).toMatchObject({ status: "cancelled", tally_status: "pending" });
+      expect(acknowledgement.body.items[0].outcome).not.toBe("accepted");
+    }
+  });
+
   it("returns per-item results for a partial batch", async () => {
     const saleOrder = await createOrder();
     const missingId = new mongoose.Types.ObjectId().toString();

@@ -1746,11 +1746,18 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
 
   it("rejects editing a Tally-accepted open order with 409", async () => {
     const createRes = await createSaleOrderForTest();
+    const saleOrderId = createRes.body.data.saleOrder._id;
     await SaleOrder.findByIdAndUpdate(createRes.body.data.saleOrder._id, {
       "tally_ref.tally_status": "accepted",
     });
+    const beforeOrder = await SaleOrder.findById(saleOrderId).lean();
+    const beforeTimeline = await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean();
 
-    const res = await updateSaleOrderRequest(createRes.body.data.saleOrder._id, {
+    const res = await updateSaleOrderRequest(saleOrderId, {
       transactionDate: "2026-07-03T00:00:00.000Z",
       items: [],
       additionalCharges: [],
@@ -1760,6 +1767,12 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
     expect(res.body.message).toBe(
       "Tally-accepted Sale Order cannot be edited or cancelled",
     );
+    expect(await SaleOrder.findById(saleOrderId).lean()).toEqual(beforeOrder);
+    expect(await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean()).toEqual(beforeTimeline);
   });
 });
 
@@ -1801,16 +1814,29 @@ describe("PUT /api/sale-orders/:saleOrderId/cancel", () => {
 
   it("rejects cancelling a Tally-accepted open order with 409", async () => {
     const createRes = await createSaleOrderForTest();
+    const saleOrderId = createRes.body.data.saleOrder._id;
     await SaleOrder.findByIdAndUpdate(createRes.body.data.saleOrder._id, {
       "tally_ref.tally_status": "accepted",
     });
+    const beforeOrder = await SaleOrder.findById(saleOrderId).lean();
+    const beforeTimeline = await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean();
 
-    const res = await cancelSaleOrderRequest(createRes.body.data.saleOrder._id);
+    const res = await cancelSaleOrderRequest(saleOrderId);
 
     expect(res.status).toBe(409);
     expect(res.body.message).toBe(
       "Tally-accepted Sale Order cannot be edited or cancelled",
     );
+    expect(await SaleOrder.findById(saleOrderId).lean()).toEqual(beforeOrder);
+    expect(await VoucherTimeline.findOne({
+      cmp_id: baseContext.companyId,
+      voucher_id: saleOrderId,
+      voucher_type: "saleOrder",
+    }).lean()).toEqual(beforeTimeline);
   });
 });
 
