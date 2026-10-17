@@ -86,6 +86,7 @@ export async function updateSale(req, res) {
     if (process.env.NODE_ENV !== "test") console.error("updateSale error:", error);
     return res.status(error.statusCode || 500).json({
       success: false,
+      code: error.code,
       message: error.message || "Failed to update sale",
     });
   }

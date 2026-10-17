@@ -33,20 +33,21 @@ export async function issueVoucherIdentity({
 
   const resolvedTransactionType = transactionType || voucherType;
 
-  const [voucher, serials] = await Promise.all([
-    getNextVoucherNumber({
-      cmpId,
-      voucherType,
-      seriesId,
-      session,
-    }),
-    getNextTransactionSerialNumbers({
-      cmpId,
-      transactionType: resolvedTransactionType,
-      userId,
-      session,
-    }),
-  ]);
+  // Mongoose does not support parallel operations on one transaction session.
+  // Keep voucher numbering and both counter updates in the transaction, but
+  // issue them one at a time so transaction retries stay reliable.
+  const voucher = await getNextVoucherNumber({
+    cmpId,
+    voucherType,
+    seriesId,
+    session,
+  });
+  const serials = await getNextTransactionSerialNumbers({
+    cmpId,
+    transactionType: resolvedTransactionType,
+    userId,
+    session,
+  });
 
   return {
     voucher,

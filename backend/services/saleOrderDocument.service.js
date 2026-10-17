@@ -712,6 +712,9 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
 
   const selectedSeries = normalizeSelectedSeries(body);
   const priceLevelObject = normalizePriceLevelObject(body);
+  // Validate all commercial inputs and derived totals before mapping any
+  // number into a schema field, so invalid values cannot become zero.
+  const calculatedTotals = buildSaleOrderTotals(body);
 
   return {
     // Ownership + voucher identity
@@ -751,7 +754,7 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
       normalizeTaxType(body)
     ),
     despatch_details: mapDespatchDetails(despatchDetails),
-    totals: buildSaleOrderTotals(body),
+    totals: calculatedTotals,
     // Lifecycle + external sync placeholders
     status: getInitialTransactionStatus("saleOrder"),
     tally_ref: {
@@ -772,6 +775,9 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
   const priceLevelObject = normalizePriceLevelObject(data);
   const requestedMailingName = data?.mailingName ?? data?.mailing_name;
   const party = data.party || null;
+  // Calculate first because the item mapper preserves legacy field aliases.
+  // This guard prevents an invalid alias value from being coerced to zero.
+  const calculatedTotals = buildSaleOrderTotals(data);
 
   saleOrder.date = new Date(data.transactionDate);
   if (party?._id) {
@@ -807,7 +813,7 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
     { preserveIds: true },
   );
   saleOrder.despatch_details = mapDespatchDetails(data.despatchDetails || {});
-  saleOrder.totals = buildSaleOrderTotals(data);
+  saleOrder.totals = calculatedTotals;
   saleOrder.updated_by = userId || null;
 
   return saleOrder;

@@ -71,4 +71,17 @@ describe("Sale foundation calculations", () => {
   it("rejects a negative final amount instead of clamping it", () => {
     expect(() => calculateSaleTotals([resolved], [{ action: "subtract", value: 1000, rates: { igst: 0, cgst: 0, sgst: 0 } }])).toThrow("cannot be negative");
   });
+
+  it("rejects non-finite input and an overflowing Sale line total", () => {
+    expect(() => normalizeSaleItemInput({
+      ...normalized,
+      itemId: ids.product,
+      rate: "Infinity",
+    })).toThrow("rate");
+    expect(() => calculateSaleTotals([{
+      ...resolved,
+      billed_qty: 1e308,
+      rate: 1e308,
+    }])).toThrow("gross amount");
+  });
 });

@@ -1,17 +1,108 @@
+function createFinancialValidationError(message) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  return error;
+}
+
+function assertFiniteNumber(value, fieldName, { required = false, minimum } = {}) {
+  if (value === undefined || value === null || value === "") {
+    if (!required) return;
+    throw createFinancialValidationError(`${fieldName} is required`);
+  }
+  if (
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    throw createFinancialValidationError(`${fieldName} must be a finite number`);
+  }
+  const number = Number(value);
+  if (!Number.isFinite(number) || (minimum !== undefined && number < minimum)) {
+    throw createFinancialValidationError(`${fieldName} must be a finite number`);
+  }
+  return number;
+}
+
+function assertFiniteResult(value, fieldName) {
+  if (!Number.isFinite(value)) {
+    throw createFinancialValidationError(`${fieldName} must be a finite number`);
+  }
+  return value;
+}
+
 function roundMoney(value) {
-  return Math.round((Number(value) || 0) * 100) / 100;
+  const rounded = Math.round(assertFiniteResult(Number(value), "Money value") * 100) / 100;
+  return assertFiniteResult(rounded, "Rounded money value");
 }
 
 function toPaise(value) {
-  return Math.round((Number(value) || 0) * 100);
+  return assertFiniteResult(
+    Math.round(assertFiniteResult(Number(value), "Money value") * 100),
+    "Paise value",
+  );
 }
 
 function fromPaise(value) {
-  return roundMoney((Number(value) || 0) / 100);
+  return roundMoney(assertFiniteResult(Number(value), "Paise value") / 100);
 }
 
 function firstDefined(...values) {
   return values.find((value) => value !== undefined);
+}
+
+function validateSaleOrderFinancialInputs(items, charges, discounts) {
+  for (const item of items) {
+    assertFiniteNumber(
+      firstDefined(item?.actualQty, item?.actual_qty),
+      "Actual quantity",
+      { required: true, minimum: 0 },
+    );
+    assertFiniteNumber(
+      firstDefined(item?.billedQty, item?.billed_qty, item?.qty, item?.quantity),
+      "Billed quantity",
+      { required: true, minimum: 0 },
+    );
+    assertFiniteNumber(item?.rate, "Rate", { required: true, minimum: 0 });
+    for (const [fieldName, value] of [
+      ["Tax rate", firstDefined(item?.taxRate, item?.tax_rate, item?.gst)],
+      ["Cess rate", firstDefined(item?.cessRate, item?.cess_rate, item?.cess)],
+      ["Additional cess rate", firstDefined(item?.addlCessRate, item?.addl_cess_rate, item?.addlCess)],
+      ["Discount amount", firstDefined(item?.discountAmount, item?.discount_amount)],
+      ["Discount percentage", firstDefined(item?.discountPercentage, item?.discount_percentage)],
+    ]) {
+      assertFiniteNumber(value, fieldName);
+    }
+  }
+
+  for (const charge of charges) {
+    assertFiniteNumber(charge?.value, "Additional charge value", {
+      required: true,
+      minimum: 0,
+    });
+    for (const [fieldName, value] of [
+      ["Additional charge IGST rate", firstDefined(charge?.rates?.igst, charge?.igst, charge?.taxPercentage, charge?.tax_percentage)],
+      ["Additional charge CGST rate", firstDefined(charge?.rates?.cgst, charge?.cgst)],
+      ["Additional charge SGST rate", firstDefined(charge?.rates?.sgst, charge?.sgst)],
+      ["Additional charge cess rate", firstDefined(charge?.rates?.cess, charge?.cess)],
+      ["Additional charge additional cess rate", firstDefined(charge?.rates?.addl_cess, charge?.addl_cess, charge?.addlCess)],
+      ["Additional charge state cess rate", firstDefined(charge?.rates?.state_cess, charge?.state_cess, charge?.stateCess)],
+      ["Additional charge tax amount", firstDefined(charge?.taxAmt, charge?.tax_amount)],
+      ["Additional charge final value", firstDefined(charge?.finalValue, charge?.final_value)],
+    ]) {
+      assertFiniteNumber(value, fieldName);
+    }
+  }
+
+  if (discounts == null) return;
+  const values = Array.isArray(discounts) ? discounts : [discounts];
+  for (const discount of values) {
+    assertFiniteNumber(
+      typeof discount === "object"
+        ? firstDefined(discount?.amount, discount?.value, discount?.totalDiscount)
+        : discount,
+      "Document discount",
+      { required: true },
+    );
+  }
 }
 
 function resolveItemQuantity(item = {}) {
@@ -204,6 +295,11 @@ export function calculateSaleOrderTotals(
 ) {
   const normalizedItems = Array.isArray(items) ? items : [];
   const normalizedCharges = Array.isArray(charges) ? charges : [];
+  validateSaleOrderFinancialInputs(
+    normalizedItems,
+    normalizedCharges,
+    discounts,
+  );
 
   let subtotalPaise = 0;
   let totalDiscountPaise = 0;

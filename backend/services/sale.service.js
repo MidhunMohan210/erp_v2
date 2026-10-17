@@ -391,7 +391,17 @@ function mapDespatchDetails(input = {}) {
 }
 
 function mapSaleItems(items) {
-  const money = (value) => Math.round((Number(value) || 0) * 100) / 100;
+  const money = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      throw createSaleValidationError("Sale calculation produced an invalid monetary value");
+    }
+    const rounded = Math.round(numeric * 100) / 100;
+    if (!Number.isFinite(rounded)) {
+      throw createSaleValidationError("Sale calculation produced an invalid monetary value");
+    }
+    return rounded;
+  };
   return items.map((item) => ({
     item_id: item.item_id,
     item_name: item.item_name,
@@ -594,6 +604,36 @@ async function settledReceiptAmount({ cmp_id, outstanding_id, session }) {
   );
 }
 
+const SALE_PARTY_CHANGE_BLOCKED_RECEIPT_ALLOCATED =
+  "SALE_PARTY_CHANGE_BLOCKED_RECEIPT_ALLOCATED";
+
+function createSalePartyChangeBlockedError() {
+  const error = createSaleValidationError(
+    "Customer cannot be changed because a receipt has been allocated to this sale.",
+  );
+  error.statusCode = 409;
+  error.code = SALE_PARTY_CHANGE_BLOCKED_RECEIPT_ALLOCATED;
+  return error;
+}
+
+async function hasActiveReceiptAllocation({ cmp_id, outstanding_id, session }) {
+  // Receipt rows are authoritative allocation history. A zero pending balance
+  // alone cannot tell whether it was caused by an active Receipt allocation.
+  const query = Receipt.exists({
+    cmp_id,
+    voucher_type: "receipt",
+    status: "active",
+    settlement_details: {
+      $elemMatch: {
+        outstanding: outstanding_id,
+        settled_amount: { $gt: 0 },
+      },
+    },
+  });
+  if (session) query.session(session);
+  return query;
+}
+
 async function updateSaleOutstanding({ outstanding, sale, party, amount, userId, session }) {
   const settled = await settledReceiptAmount({
     cmp_id: sale.cmp_id,
@@ -686,14 +726,18 @@ export async function updateSale(id, data = {}, req = {}) {
         : requiredObjectId(priceLevelValue, "priceLevelId");
       const normalized = normalizeSaleInput(data);
 
-      const [company, party, priceLevel, oldParty] = await Promise.all([
-        Company.findById(cmp_id).session(session).lean(),
-        Party.findOne({ _id: party_id, cmp_id }).session(session).lean(),
-        price_level_id
-          ? PriceLevel.findOne({ _id: price_level_id, cmp_id }).session(session).lean()
-          : null,
-        Party.findOne({ _id: oldSale.party_id, cmp_id }).session(session).lean(),
-      ]);
+      const company = await Company.findById(cmp_id).session(session).lean();
+      const party = await Party.findOne({ _id: party_id, cmp_id })
+        .session(session)
+        .lean();
+      const priceLevel = price_level_id
+        ? await PriceLevel.findOne({ _id: price_level_id, cmp_id })
+          .session(session)
+          .lean()
+        : null;
+      const oldParty = await Party.findOne({ _id: oldSale.party_id, cmp_id })
+        .session(session)
+        .lean();
       if (!company) throw createSaleValidationError("Company not found");
       if (!party) throw createSaleValidationError("Selected party does not belong to this company");
       if (!oldParty) throw createSaleValidationError("Sale party is missing");
@@ -701,14 +745,41 @@ export async function updateSale(id, data = {}, req = {}) {
         throw createSaleValidationError("Price level does not belong to this company");
       }
 
+      // Read the Sale Outstanding before any accounting change. Receipt create
+      // and edit update this same document in their transaction, so MongoDB
+      // retries one operation if a customer change races an allocation.
+      const outstandingRows = await Outstanding.find({
+        cmp_id, billId: String(sale._id), source: "sale",
+      }).session(session);
+      if ((!isCashBankParty(oldParty) && outstandingRows.length !== 1) || outstandingRows.length > 1) {
+        throw createSaleValidationError("Sale Outstanding relationship is corrupted");
+      }
+      const oldOutstanding = outstandingRows[0] || null;
+
+      if (
+        oldOutstanding &&
+        !sameId(oldSale.party_id, party._id) &&
+        await hasActiveReceiptAllocation({
+          cmp_id,
+          outstanding_id: oldOutstanding._id,
+          session,
+        })
+      ) {
+        throw createSalePartyChangeBlockedError();
+      }
+
       const oldItemsById = new Map(oldSale.items.map((item) => [String(item._id), item]));
       const oldChargesById = new Map(
         (oldSale.additional_charges || []).map((charge) => [String(charge._id), charge]),
       );
-      const [resolvedItemMasters, resolvedChargeMasters] = await Promise.all([
-        resolveSaleItemMasters(normalized.items, { cmpId: cmp_id, session }),
-        resolveSaleChargeMasters(normalized.additional_charges, { cmpId: cmp_id, session }),
-      ]);
+      const resolvedItemMasters = await resolveSaleItemMasters(
+        normalized.items,
+        { cmpId: cmp_id, session },
+      );
+      const resolvedChargeMasters = await resolveSaleChargeMasters(
+        normalized.additional_charges,
+        { cmpId: cmp_id, session },
+      );
       const resolvedItems = applyExistingItemTaxSnapshots(resolvedItemMasters, oldItemsById);
       const resolvedCharges = applyExistingChargeTaxSnapshots(resolvedChargeMasters, oldChargesById);
       const calculated = calculateSaleTotals(
@@ -823,9 +894,11 @@ export async function updateSale(id, data = {}, req = {}) {
           throw createSaleValidationError("ItemLedger rows could not be cancelled safely");
         }
       }
-      const ledgerResults = await Promise.all(existingLedgerUpdates);
-      if (ledgerResults.some((result) => result.modifiedCount !== 1)) {
-        throw createSaleValidationError("ItemLedger rows could not be updated safely");
+      for (const ledgerUpdate of existingLedgerUpdates) {
+        const result = await ledgerUpdate;
+        if (result.modifiedCount !== 1) {
+          throw createSaleValidationError("ItemLedger rows could not be updated safely");
+        }
       }
       if (newLedgerRows.length) await ItemLedger.create(newLedgerRows, { session, ordered: true });
 
@@ -860,17 +933,9 @@ export async function updateSale(id, data = {}, req = {}) {
         await oldPartyLedgers[0].save({ session });
       }
 
-      let oldOutstanding = null;
-      const outstandingRows = await Outstanding.find({
-        cmp_id, billId: String(sale._id), source: "sale",
-      }).session(session);
-      if ((!oldIsCashBank && outstandingRows.length !== 1) || outstandingRows.length > 1) {
-        throw createSaleValidationError("Sale Outstanding relationship is corrupted");
-      }
       // A customer -> cash -> customer edit can legitimately encounter the
       // original, cancelled Outstanding. Reuse it rather than creating a
       // second bill row (and preserve any receipt history it contains).
-      oldOutstanding = outstandingRows[0] || null;
 
       if (newIsCashBank) {
         if (oldIsCashBank && !cashBankIdentityChanged) {
@@ -995,15 +1060,15 @@ export async function createSale(data = {}, req = {}) {
         return;
       }
 
-      const [company, party, priceLevel] = await Promise.all([
-        Company.findById(cmp_id).session(session).lean(),
-        Party.findOne({ _id: party_id, cmp_id }).session(session).lean(),
-        price_level_id
-          ? PriceLevel.findOne({ _id: price_level_id, cmp_id })
-              .session(session)
-              .lean()
-          : null,
-      ]);
+      const company = await Company.findById(cmp_id).session(session).lean();
+      const party = await Party.findOne({ _id: party_id, cmp_id })
+        .session(session)
+        .lean();
+      const priceLevel = price_level_id
+        ? await PriceLevel.findOne({ _id: price_level_id, cmp_id })
+          .session(session)
+          .lean()
+        : null;
       if (!company) throw createSaleValidationError("Company not found");
       if (!party)
         throw createSaleValidationError(
@@ -1015,13 +1080,14 @@ export async function createSale(data = {}, req = {}) {
         );
 
       /// check if the items and additional charges are valid
-      const [resolvedItems, resolvedCharges] = await Promise.all([
-        resolveSaleItemMasters(normalized.items, { cmpId: cmp_id, session }),
-        resolveSaleChargeMasters(normalized.additional_charges, {
-          cmpId: cmp_id,
-          session,
-        }),
-      ]);
+      const resolvedItems = await resolveSaleItemMasters(normalized.items, {
+        cmpId: cmp_id,
+        session,
+      });
+      const resolvedCharges = await resolveSaleChargeMasters(
+        normalized.additional_charges,
+        { cmpId: cmp_id, session },
+      );
 
       /// check if the tax type is igst or cgst_sgst based on the company and party state
       const tax_type = resolveTaxType(company, party);
@@ -1189,8 +1255,24 @@ export async function getSaleById(id, { cmp_id } = {}, req = {}) {
   const filter = applyTransactionCreatorScope(req, { _id: id });
 
   if (cmp_id) filter.cmp_id = cmp_id;
+  const sale = await Sale.findOne(filter).lean();
+  if (!sale) return null;
 
-  return Sale.findOne(filter).lean();
+  const outstanding = await Outstanding.findOne({
+    cmp_id: sale.cmp_id,
+    billId: String(sale._id),
+    source: "sale",
+  }).select("_id").lean();
+
+  return {
+    ...sale,
+    has_active_receipt_allocation: outstanding
+      ? Boolean(await hasActiveReceiptAllocation({
+        cmp_id: sale.cmp_id,
+        outstanding_id: outstanding._id,
+      }))
+      : false,
+  };
 }
 
 export async function findSaleByRequestId(requestId, { cmp_id } = {}, req = {}) {

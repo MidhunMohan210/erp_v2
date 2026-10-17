@@ -29,6 +29,12 @@ function optionalObjectId(value, field) {
 }
 
 function finiteNumber(value, field, { minimum = 0, maximum = Infinity } = {}) {
+  if (
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    throw createSaleValidationError(`${field} must be a finite number`);
+  }
   const number = Number(value);
   if (!Number.isFinite(number) || number < minimum || number > maximum) {
     throw createSaleValidationError(
@@ -36,6 +42,20 @@ function finiteNumber(value, field, { minimum = 0, maximum = Infinity } = {}) {
     );
   }
   return number;
+}
+
+function optionalFiniteNumber(value, field, defaultValue = 0) {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  return finiteNumber(value, field, { minimum: -Infinity });
+}
+
+function calculatedFiniteNumber(value, field) {
+  if (!Number.isFinite(value)) {
+    throw createSaleValidationError(`${field} must be a finite number`);
+  }
+  return value;
 }
 
 function optionalText(value, field, maximum = 2000) {
@@ -64,13 +84,18 @@ function booleanValue(value, field) {
 }
 
 function roundMoney(value) {
-  return Math.round((Number(value) || 0) * 100) / 100;
+  const rounded = Math.round(calculatedFiniteNumber(Number(value), "Money value") * 100) / 100;
+  return calculatedFiniteNumber(rounded, "Rounded money value");
 }
 
 function splitTax(amount, taxType, rates, { round = true } = {}) {
+  const taxableAmount = calculatedFiniteNumber(amount, "Taxable amount");
+  const igstRate = calculatedFiniteNumber(rates.igst, "IGST rate");
+  const cgstRate = calculatedFiniteNumber(rates.cgst, "CGST rate");
+  const sgstRate = calculatedFiniteNumber(rates.sgst, "SGST rate");
   if (taxType === "cgst_sgst") {
-    const cgst_amount = amount * (rates.cgst / 100);
-    const sgst_amount = amount * (rates.sgst / 100);
+    const cgst_amount = calculatedFiniteNumber(taxableAmount * (cgstRate / 100), "CGST amount");
+    const sgst_amount = calculatedFiniteNumber(taxableAmount * (sgstRate / 100), "SGST amount");
     return {
       igst_amount: 0,
       cgst_amount: round ? roundMoney(cgst_amount) : cgst_amount,
@@ -80,7 +105,7 @@ function splitTax(amount, taxType, rates, { round = true } = {}) {
         : cgst_amount + sgst_amount,
     };
   }
-  const igst_amount = amount * (rates.igst / 100);
+  const igst_amount = calculatedFiniteNumber(taxableAmount * (igstRate / 100), "IGST amount");
   const tax_amount = round ? roundMoney(igst_amount) : igst_amount;
   return {
     igst_amount: tax_amount,
@@ -223,14 +248,17 @@ export function normalizeSaleInput(input = {}) {
 /** Resolve product stock-row and Godown identity inside the caller's session. */
 export async function resolveSaleItemMaster(item, { cmpId, session } = {}) {
   const cmp_id = requiredObjectId(cmpId, "cmpId");
-  const [product, godown] = await Promise.all([
-    Product.findOne({ _id: item.item_id, cmp_id })
-      .session(session || null)
-      .lean(),
-    Godown.findOne({ _id: item.godown_id, cmp_id })
-      .session(session || null)
-      .lean(),
-  ]);
+  const findProduct = () => Product.findOne({ _id: item.item_id, cmp_id })
+    .session(session || null)
+    .lean();
+  const findGodown = () => Godown.findOne({ _id: item.godown_id, cmp_id })
+    .session(session || null)
+    .lean();
+  // Keep ordinary non-transaction reads parallel, but a transaction session
+  // permits only one in-flight operation at a time.
+  const [product, godown] = session
+    ? [await findProduct(), await findGodown()]
+    : await Promise.all([findProduct(), findGodown()]);
   if (!product)
     throw createSaleValidationError("Product does not belong to this company");
   if (!godown)
@@ -285,16 +313,23 @@ export async function resolveSaleItemMaster(item, { cmpId, session } = {}) {
     expdt: stock_row.expdt || null,
     mrp: stock_row.mrp ?? null,
     tax_rates: {
-      igst: Number(product.igst) || 0,
-      cgst: Number(product.cgst) || 0,
-      sgst: Number(product.sgst) || 0,
-      cess: Number(product.cess) || 0,
-      addl_cess: Number(product.addl_cess) || 0,
+      igst: optionalFiniteNumber(product.igst, "Product IGST rate"),
+      cgst: optionalFiniteNumber(product.cgst, "Product CGST rate"),
+      sgst: optionalFiniteNumber(product.sgst, "Product SGST rate"),
+      cess: optionalFiniteNumber(product.cess, "Product cess rate"),
+      addl_cess: optionalFiniteNumber(product.addl_cess, "Product additional cess rate"),
     },
   };
 }
 
 export async function resolveSaleItemMasters(items, options = {}) {
+  if (options.session) {
+    const resolvedItems = [];
+    for (const item of items) {
+      resolvedItems.push(await resolveSaleItemMaster(item, options));
+    }
+    return resolvedItems;
+  }
   return Promise.all(items.map((item) => resolveSaleItemMaster(item, options)));
 }
 
@@ -316,14 +351,21 @@ export async function resolveSaleChargeMaster(charge, { cmpId, session } = {}) {
     name: master.name,
     hsn: master.hsn || null,
     rates: {
-      igst: Number(master.igst) || 0,
-      cgst: Number(master.cgst) || 0,
-      sgst: Number(master.sgst) || 0,
+      igst: optionalFiniteNumber(master.igst, "Additional charge IGST rate"),
+      cgst: optionalFiniteNumber(master.cgst, "Additional charge CGST rate"),
+      sgst: optionalFiniteNumber(master.sgst, "Additional charge SGST rate"),
     },
   };
 }
 
 export async function resolveSaleChargeMasters(charges, options = {}) {
+  if (options.session) {
+    const resolvedCharges = [];
+    for (const charge of charges) {
+      resolvedCharges.push(await resolveSaleChargeMaster(charge, options));
+    }
+    return resolvedCharges;
+  }
   return Promise.all(
     charges.map((charge) => resolveSaleChargeMaster(charge, options)),
   );
@@ -332,31 +374,47 @@ export async function resolveSaleChargeMasters(charges, options = {}) {
 export function calculateSaleItem(item, taxType = "igst") {
   if (!["igst", "cgst_sgst"].includes(taxType))
     throw createSaleValidationError("taxType must be igst or cgst_sgst");
-  const gross_amount = item.billed_qty * item.rate;
+  const billedQty = calculatedFiniteNumber(item.billed_qty, "Billed quantity");
+  const rate = calculatedFiniteNumber(item.rate, "Sale rate");
+  const gross_amount = calculatedFiniteNumber(billedQty * rate, "Sale line gross amount");
   const taxRate =
     taxType === "igst"
-      ? item.tax_rates.igst
-      : item.tax_rates.cgst + item.tax_rates.sgst;
+      ? calculatedFiniteNumber(item.tax_rates.igst, "IGST rate")
+      : calculatedFiniteNumber(
+          calculatedFiniteNumber(item.tax_rates.cgst, "CGST rate") +
+            calculatedFiniteNumber(item.tax_rates.sgst, "SGST rate"),
+          "GST rate",
+        );
   // A tax-inclusive rate is the gross line value. Remove GST before applying
   // the item discount, matching the established Sale Order calculation flow.
-  const base_price =
+  const base_price = calculatedFiniteNumber(
     item.tax_inclusive && taxRate > 0
       ? gross_amount / (1 + taxRate / 100)
-      : gross_amount;
-  const discount_amount =
+      : gross_amount,
+    "Sale line base price",
+  );
+  const discount_amount = calculatedFiniteNumber(
     item.discount_type === "percentage"
       ? (base_price * item.discount_value) / 100
-      : item.discount_value;
+      : item.discount_value,
+    "Sale line discount amount",
+  );
   if (discount_amount > base_price)
     throw createSaleValidationError(
       "Item discount cannot exceed the item price",
     );
-  const taxable_amount = base_price - discount_amount;
+  const taxable_amount = calculatedFiniteNumber(base_price - discount_amount, "Sale line taxable amount");
   const tax = splitTax(taxable_amount, taxType, item.tax_rates, {
     round: false,
   });
-  const cess_amount = taxable_amount * (item.tax_rates.cess / 100);
-  const addl_cess_amount = item.billed_qty * item.tax_rates.addl_cess;
+  const cess_amount = calculatedFiniteNumber(
+    taxable_amount * (calculatedFiniteNumber(item.tax_rates.cess, "Cess rate") / 100),
+    "Cess amount",
+  );
+  const addl_cess_amount = calculatedFiniteNumber(
+    billedQty * calculatedFiniteNumber(item.tax_rates.addl_cess, "Additional cess rate"),
+    "Additional cess amount",
+  );
   return {
     ...item,
     base_price,
@@ -365,12 +423,16 @@ export function calculateSaleItem(item, taxType = "igst") {
     ...tax,
     cess_amount,
     addl_cess_amount,
-    total_amount: taxable_amount + tax.tax_amount + cess_amount + addl_cess_amount,
+    total_amount: calculatedFiniteNumber(
+      taxable_amount + tax.tax_amount + cess_amount + addl_cess_amount,
+      "Sale line total amount",
+    ),
   };
 }
 
 export function calculateSaleCharge(charge, taxType = "igst") {
-  const tax = splitTax(charge.value, taxType, charge.rates, { round: false });
+  const value = calculatedFiniteNumber(charge.value, "Additional charge value");
+  const tax = splitTax(value, taxType, charge.rates, { round: false });
   const sign = charge.action === "subtract" ? -1 : 1;
   return {
     ...charge,
@@ -387,7 +449,10 @@ export function calculateSaleCharge(charge, taxType = "igst") {
     cess_amount: 0,
     addl_cess_amount: 0,
     state_cess_amount: 0,
-    final_value: (charge.value + tax.tax_amount) * sign,
+    final_value: calculatedFiniteNumber(
+      (value + tax.tax_amount) * sign,
+      "Additional charge final value",
+    ),
   };
 }
 
@@ -403,10 +468,18 @@ export function calculateSaleTotals(
     calculateSaleCharge(charge, taxType),
   );
   const sum = (rows, key) =>
-    roundMoney(rows.reduce((total, row) => total + (Number(row[key]) || 0), 0));
+    roundMoney(rows.reduce(
+      (total, row) => calculatedFiniteNumber(
+        total + calculatedFiniteNumber(Number(row[key]), `${key} amount`),
+        `${key} total`,
+      ),
+      0,
+    ));
   const item_total = sum(calculated_items, "total_amount");
   const total_additional_charge = sum(calculated_charges, "final_value");
-  const final_amount = roundMoney(item_total + total_additional_charge);
+  const final_amount = roundMoney(
+    calculatedFiniteNumber(item_total + total_additional_charge, "Sale final amount"),
+  );
   if (final_amount < 0)
     throw createSaleValidationError("Sale finalAmount cannot be negative");
   return {

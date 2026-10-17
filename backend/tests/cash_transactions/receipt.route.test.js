@@ -707,6 +707,89 @@ describe("POST /api/cash-transactions - Validation failures", () => {
       "Missing required fields",
     );
   });
+
+  it.each([
+    ["Infinity", "Infinity"],
+    ["NaN", "NaN"],
+    ["zero", 0],
+    ["negative", -1],
+    ["non-numeric", "not-a-number"],
+  ])("rejects a %s Receipt amount without financial writes", async (_label, amount) => {
+    const res = await postReceipt(
+      baseContext.token,
+      buildValidReceiptPayload(
+        baseContext.party._id,
+        baseContext.series.seriesId,
+        baseContext.cashAccount._id,
+        { amount },
+      ),
+    );
+
+    expect(res.status).toBe(400);
+    await expectNoReceiptAccountingSideEffects();
+  });
+
+  it("keeps numeric-string Receipt amounts and allocations compatible", async () => {
+    const outstanding = await createOutstandingForParty({
+      billNo: "INV-NUMERIC-STRING",
+      billAmount: 500,
+      pendingAmount: 500,
+    });
+
+    const res = await createReceiptForTest({
+      amount: "500.00",
+      settlement_details: [buildSettlement(outstanding, "200.00")],
+    });
+
+    expect(res.body.data.cashTransaction.amount).toBe(500);
+    expect(res.body.data.cashTransaction.advance_amount).toBe(300);
+    expect((await Outstanding.findById(outstanding._id).lean()).bill_pending_amt).toBe(300);
+  });
+
+  it("rejects non-finite allocations and overflowed allocation totals without financial writes", async () => {
+    const first = await createOutstandingForParty({
+      billNo: "INV-INVALID-ALLOCATION-A",
+      billAmount: Number.MAX_VALUE,
+      pendingAmount: Number.MAX_VALUE,
+    });
+    const second = await createOutstandingForParty({
+      billNo: "INV-INVALID-ALLOCATION-B",
+      billAmount: Number.MAX_VALUE,
+      pendingAmount: Number.MAX_VALUE,
+    });
+
+    const nonFinite = await postReceipt(
+      baseContext.token,
+      buildValidReceiptPayload(
+        baseContext.party._id,
+        baseContext.series.seriesId,
+        baseContext.cashAccount._id,
+        {
+          amount: 500,
+          settlement_details: [buildSettlement(first, "Infinity")],
+        },
+      ),
+    );
+    expect(nonFinite.status).toBe(400);
+
+    const overflow = await postReceipt(
+      baseContext.token,
+      buildValidReceiptPayload(
+        baseContext.party._id,
+        baseContext.series.seriesId,
+        baseContext.cashAccount._id,
+        {
+          amount: Number.MAX_VALUE,
+          settlement_details: [
+            buildSettlement(first, Number.MAX_VALUE),
+            buildSettlement(second, Number.MAX_VALUE),
+          ],
+        },
+      ),
+    );
+    expect(overflow.status).toBe(400);
+    await expectNoReceiptAccountingSideEffects([first, second]);
+  });
 });
 
 describe("POST /api/cash-transactions - Company ownership failures", () => {
@@ -1828,6 +1911,60 @@ describe("GET /api/cash-transactions/by-request-id/:requestId", () => {
 });
 
 describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
+  it("blocks Edit when an original Outstanding was replaced with the same bill number", async () => {
+    const originalBill = await createOutstandingForParty({
+      billNo: "INV-EDIT-REPLACED",
+      billAmount: 300,
+      pendingAmount: 300,
+    });
+    const created = await createReceiptForTest({
+      amount: 100,
+      settlement_details: [buildSettlement(originalBill, 100)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+    const [receiptBefore, partyLedgerBefore, cashLedgerBefore, monthlyBefore, timelineBefore] =
+      await Promise.all([
+        Receipt.findById(receiptId).lean(),
+        PartyLedger.findOne({ voucher_id: receiptId }).lean(),
+        CashBankLedger.findOne({ voucher_id: receiptId }).lean(),
+        PartyMonthlyBalance.findOne({
+          cmp_id: baseContext.companyId,
+          party_id: baseContext.party._id,
+        }).lean(),
+        VoucherTimeline.findOne({ voucher_id: receiptId }).lean(),
+      ]);
+
+    await Outstanding.deleteOne({ _id: originalBill._id });
+    const replacementBill = await createOutstandingForParty({
+      billNo: originalBill.bill_no,
+      billAmount: 300,
+      pendingAmount: 300,
+    });
+
+    const response = await editReceiptRequest(receiptId, { amount: 100 });
+    const [receiptAfter, partyLedgerAfter, cashLedgerAfter, monthlyAfter, timelineAfter] =
+      await Promise.all([
+        Receipt.findById(receiptId).lean(),
+        PartyLedger.findOne({ voucher_id: receiptId }).lean(),
+        CashBankLedger.findOne({ voucher_id: receiptId }).lean(),
+        PartyMonthlyBalance.findOne({
+          cmp_id: baseContext.companyId,
+          party_id: baseContext.party._id,
+        }).lean(),
+        VoucherTimeline.findOne({ voucher_id: receiptId }).lean(),
+      ]);
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("RECEIPT_OUTSTANDING_MISSING");
+    expect(receiptAfter).toEqual(receiptBefore);
+    expect(partyLedgerAfter).toEqual(partyLedgerBefore);
+    expect(cashLedgerAfter).toEqual(cashLedgerBefore);
+    expect(monthlyAfter).toEqual(monthlyBefore);
+    expect(timelineAfter).toEqual(timelineBefore);
+    expect(String(replacementBill._id)).not.toBe(String(originalBill._id));
+    expect((await Outstanding.findById(replacementBill._id).lean()).bill_pending_amt).toBe(300);
+  });
+
   it("keeps the Receipt detail snapshot unchanged after a later Receipt settles the same bill", async () => {
     const { firstReceiptId, billA, billB, billC } =
       await createReceiptSnapshotScenario();
@@ -2336,6 +2473,32 @@ describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
     expect((await Receipt.findById(receiptId).lean()).amount).toBe(500);
   });
 
+  it("rejects a non-finite edit allocation before changing Receipt accounting", async () => {
+    const bill = await createOutstandingForParty({
+      billNo: "INV-EDIT-NON-FINITE",
+      billAmount: 500,
+      pendingAmount: 500,
+    });
+    const created = await createReceiptForTest({
+      amount: 500,
+      settlement_details: [buildSettlement(bill, 300)],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    const invalid = await editReceiptRequest(receiptId, {
+      settlement_details: [
+        { outstanding: String(bill._id), settled_amount: "Infinity" },
+      ],
+    });
+
+    expect(invalid.status).toBe(400);
+    expect((await Outstanding.findById(bill._id).lean()).bill_pending_amt).toBe(200);
+    const receipt = await Receipt.findById(receiptId).lean();
+    expect(receipt.amount).toBe(500);
+    expect(receipt.advance_amount).toBe(200);
+    expect(receipt.settlement_details[0].settled_amount).toBe(300);
+  });
+
   it("handles all advance transitions by reusing one historical advance row", async () => {
     const bill = await createOutstandingForParty({
       billNo: "INV-EDIT-ADVANCE",
@@ -2728,6 +2891,54 @@ describe("PUT /api/cash-transactions/:id - Receipt Edit", () => {
 });
 
 describe("PUT /api/cash-transactions/:id/cancel", () => {
+  it("blocks Cancel without changing financial records when multiple original Outstandings are missing", async () => {
+    const firstBill = await createOutstandingForParty({
+      billNo: "INV-CANCEL-MISSING-A",
+      billAmount: 300,
+      pendingAmount: 300,
+    });
+    const secondBill = await createOutstandingForParty({
+      billNo: "INV-CANCEL-MISSING-B",
+      billAmount: 300,
+      pendingAmount: 300,
+    });
+    const created = await createReceiptForTest({
+      amount: 300,
+      settlement_details: [
+        buildSettlement(firstBill, 100),
+        buildSettlement(secondBill, 200),
+      ],
+    });
+    const receiptId = created.body.data.cashTransaction._id;
+
+    await Outstanding.deleteMany({ _id: { $in: [firstBill._id, secondBill._id] } });
+    await createOutstandingForParty({
+      billNo: firstBill.bill_no,
+      billAmount: 300,
+      pendingAmount: 300,
+    });
+
+    const response = await cancelReceiptRequest(receiptId);
+    const [receipt, partyLedger, cashLedger, monthlyBalance, timeline] = await Promise.all([
+      Receipt.findById(receiptId).lean(),
+      PartyLedger.findOne({ voucher_id: receiptId }).lean(),
+      CashBankLedger.findOne({ voucher_id: receiptId }).lean(),
+      PartyMonthlyBalance.findOne({
+        cmp_id: baseContext.companyId,
+        party_id: baseContext.party._id,
+      }).lean(),
+      VoucherTimeline.findOne({ voucher_id: receiptId }).lean(),
+    ]);
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe("RECEIPT_OUTSTANDING_MISSING");
+    expect(receipt.status).toBe("active");
+    expect(partyLedger).toMatchObject({ status: "active", amount: 300 });
+    expect(cashLedger).toMatchObject({ status: "active", amount: 300 });
+    expect(monthlyBalance).toMatchObject({ total_credit: 300, transaction_count: 1 });
+    expect(timeline).toMatchObject({ status: "active", amount: 300 });
+  });
+
   it('Cancel active receipt -> 200, status becomes "cancelled" and related ledgers are cancelled', async () => {
     const createRes = await createReceiptForTest();
 

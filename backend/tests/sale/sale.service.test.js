@@ -373,6 +373,38 @@ describe("createSale", () => {
     );
   });
 
+  it("rejects an overflowing Sale calculation before any financial write", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+
+    await expect(createSale({
+      request_id: "sale-overflow-rejected-before-write",
+      selectedSeries: { _id: String(seriesId) },
+      transactionDate: "2026-07-15",
+      partyId: String(party._id),
+      additionalCharges: [],
+      items: [{
+        itemId: String(product._id),
+        godownId: String(godown._id),
+        godownStockRowId: String(rowId),
+        selectedUnit: "NOS",
+        actualQty: 1e308,
+        billedQty: 1e308,
+        rate: 1e308,
+        taxInclusive: false,
+        discountType: "amount",
+        discountValue: 0,
+      }],
+    }, { companyId: String(context.company._id), user: context.user })).rejects.toThrow(
+      "gross amount",
+    );
+
+    expect(await Sale.countDocuments({ cmp_id: context.company._id })).toBe(0);
+    expect(await Outstanding.countDocuments({ cmp_id: context.company._id })).toBe(0);
+    expect(await ItemLedger.countDocuments({ cmp_id: context.company._id })).toBe(0);
+    expect(await PartyLedger.countDocuments({ cmp_id: context.company._id })).toBe(0);
+    expect(await VoucherTimeline.countDocuments({ cmp_id: context.company._id })).toBe(0);
+  });
+
   it("posts every Sale effect atomically and groups repeated stock-row movement", async () => {
     const { context, party, godown, product, rowId, seriesId, charge } =
       await setupSaleContext();
@@ -1592,6 +1624,85 @@ describe("cancelSale", () => {
     expect(await PartyMonthlyBalance.countDocuments({ party_id: cashParty._id })).toBe(0);
     expect(await Outstanding.countDocuments({ billId: String(sale._id) })).toBe(0);
     expect((await Product.findById(product._id)).GodownList[0].balance_stock).toBe(100);
+  });
+  it("blocks customer changes for active partial or full Receipt allocations, but not cancelled Receipts", async () => {
+    const { context, party, godown, product, rowId, seriesId } = await setupSaleContext();
+    const secondParty = await createTestParty({
+      cmp_id: context.company._id,
+      Primary_user_id: context.user._id,
+      accountGroup: (await createAccountGroup({
+        cmp_id: context.company._id,
+        Primary_user_id: context.user._id,
+        accountGroup_id: "sale-party-change-receipt-guard",
+      }))._id,
+      partyName: "Replacement customer",
+      state: "Kerala",
+    });
+    const line = {
+      itemId: String(product._id), godownId: String(godown._id),
+      godownStockRowId: String(rowId), selectedUnit: "NOS", actualQty: 2,
+      billedQty: 2, rate: 100, taxInclusive: false,
+      discountType: "amount", discountValue: 0,
+    };
+    const createGuardedSale = async (requestId) => {
+      const sale = await createSale({
+        request_id: requestId, selectedSeries: { _id: String(seriesId) },
+        transactionDate: "2026-07-15", partyId: String(party._id),
+        items: [line], additionalCharges: [],
+      }, { companyId: String(context.company._id), user: context.user });
+      const outstanding = await Outstanding.findOne({
+        billId: String(sale._id), source: "sale",
+      }).lean();
+      return { sale, outstanding };
+    };
+    let receiptSerial = 0;
+    const createReceipt = async (outstanding, amount, status = "active") =>
+      Receipt.create({
+        cmp_id: context.company._id, voucher_type: "receipt",
+        series_id: new mongoose.Types.ObjectId(), series_name: "Test receipt",
+        voucher_number: `SALE-GUARD-${new mongoose.Types.ObjectId()}`,
+        company_level_serial_number: ++receiptSerial,
+        user_level_serial_number: receiptSerial,
+        date: new Date("2026-07-16"), party_id: party._id,
+        party_name: party.partyName, cash_bank_id: party._id,
+        cash_bank_name: party.partyName, cash_bank_type: "cash", amount,
+        status, created_by: context.user._id, updated_by: context.user._id,
+        settlement_details: [{
+          outstanding: outstanding._id, outstanding_number: outstanding.bill_no,
+          outstanding_date: outstanding.bill_date, outstanding_type: "dr",
+          previous_outstanding_amount: outstanding.bill_amount,
+          settled_amount: amount,
+          remaining_outstanding_amount: outstanding.bill_amount - amount,
+        }],
+      });
+    const updateParty = (sale) => updateSale(sale._id, {
+      transactionDate: "2026-07-15", partyId: String(secondParty._id),
+      items: [{ ...line, _id: String(sale.items[0]._id) }], additionalCharges: [],
+    }, { companyId: String(context.company._id), user: context.user });
+
+    const partial = await createGuardedSale("sale-party-guard-partial");
+    await createReceipt(partial.outstanding, 50);
+    const partialEffects = await snapshotSaleEffects({
+      cmpId: context.company._id, saleId: partial.sale._id, productId: product._id,
+    });
+    await expect(updateParty(partial.sale)).rejects.toMatchObject({
+      statusCode: 409, code: "SALE_PARTY_CHANGE_BLOCKED_RECEIPT_ALLOCATED",
+    });
+    expect(await snapshotSaleEffects({
+      cmpId: context.company._id, saleId: partial.sale._id, productId: product._id,
+    })).toBe(partialEffects);
+
+    const full = await createGuardedSale("sale-party-guard-full");
+    await createReceipt(full.outstanding, full.outstanding.bill_amount);
+    await expect(updateParty(full.sale)).rejects.toMatchObject({
+      statusCode: 409, code: "SALE_PARTY_CHANGE_BLOCKED_RECEIPT_ALLOCATED",
+    });
+
+    const cancelled = await createGuardedSale("sale-party-guard-cancelled");
+    await createReceipt(cancelled.outstanding, 50, "cancelled");
+    await expect(updateParty(cancelled.sale)).resolves.toMatchObject({
+      party_id: secondParty._id,
+    });
   });
 });
 

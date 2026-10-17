@@ -55,21 +55,20 @@ export async function getNextTransactionSerialNumbers({
     throw new Error("User id is required for user-level transaction serial tracking");
   }
 
-  const [companyLevelSerialNumber, userLevelSerialNumber] = await Promise.all([
-    incrementCounter({
-      cmpId,
-      transactionType,
-      scope: "company",
-      session,
-    }),
-    incrementCounter({
-      cmpId,
-      transactionType,
-      scope: "user",
-      userId,
-      session,
-    }),
-  ]);
+  // These writes share the caller's transaction session and must not overlap.
+  const companyLevelSerialNumber = await incrementCounter({
+    cmpId,
+    transactionType,
+    scope: "company",
+    session,
+  });
+  const userLevelSerialNumber = await incrementCounter({
+    cmpId,
+    transactionType,
+    scope: "user",
+    userId,
+    session,
+  });
 
   return {
     companyLevelSerialNumber,

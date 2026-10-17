@@ -478,15 +478,13 @@ export async function createSaleOrder(data = {}, req) {
         return;
       }
       // Ownership guardrail: sale order cannot reference party from another company.
-      const [company, party] = await Promise.all([
-        Company.findById(cmpId).session(session).lean(),
-        Party.findOne({
+      const company = await Company.findById(cmpId).session(session).lean();
+      const party = await Party.findOne({
         _id: partyId,
         cmp_id: cmpId,
       })
         .session(session)
-        .lean(),
-      ]);
+        .lean();
 
       if (!company) {
         throw createHttpError("Company not found", 400);
@@ -660,12 +658,10 @@ export async function updateSaleOrder(id, data = {}, req) {
       const selectedPartyId = canReplaceParty
         ? requestedPartyId
         : saleOrder.party_id;
-      const [company, party] = await Promise.all([
-        Company.findById(cmpId).session(session).lean(),
-        Party.findOne({ _id: selectedPartyId, cmp_id: cmpId })
-          .session(session)
-          .lean(),
-      ]);
+      const company = await Company.findById(cmpId).session(session).lean();
+      const party = await Party.findOne({ _id: selectedPartyId, cmp_id: cmpId })
+        .session(session)
+        .lean();
       if (!company) throw createHttpError("Company not found", 400);
       if (!party) {
         throw createHttpError("Selected party does not belong to this company", 400);

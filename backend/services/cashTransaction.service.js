@@ -51,6 +51,68 @@ function createHttpError(message, statusCode = 500) {
 const RECEIPT_INSTRUMENT_TYPES = ["cash", "cheque", "upi", "neft", "rtgs"];
 const BANK_INSTRUMENT_TYPES = ["cheque", "upi", "neft", "rtgs"];
 const MONEY_TOLERANCE = 0.000001;
+const RECEIPT_OUTSTANDING_MISSING = "RECEIPT_OUTSTANDING_MISSING";
+
+function createReceiptOutstandingMissingError() {
+  const error = createHttpError(
+    "This receipt cannot be edited or cancelled because its linked outstanding bill is no longer available.",
+    409,
+  );
+  error.code = RECEIPT_OUTSTANDING_MISSING;
+  return error;
+}
+
+// Receipt settlement history points to the original Outstanding IDs. Do not
+// attempt to match a replacement import by bill number: that would reverse a
+// different financial record.
+async function assertReceiptOutstandingReferencesExist(receipt, session) {
+  const outstandingIds = [
+    ...new Set(
+      (receipt.settlement_details || []).map((detail) =>
+        String(detail?.outstanding || ""),
+      ),
+    ),
+  ];
+
+  if (!outstandingIds.length) return;
+  if (outstandingIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) {
+    throw createReceiptOutstandingMissingError();
+  }
+
+  const existingRows = await Outstanding.find({
+    _id: { $in: outstandingIds },
+    cmp_id: receipt.cmp_id,
+  })
+    .select("_id")
+    .session(session)
+    .lean();
+
+  if (existingRows.length !== outstandingIds.length) {
+    throw createReceiptOutstandingMissingError();
+  }
+}
+
+function parsePositiveReceiptAmount(value, fieldName) {
+  if (
+    (typeof value !== "number" && typeof value !== "string") ||
+    (typeof value === "string" && !value.trim())
+  ) {
+    throw createHttpError(`${fieldName} must be greater than zero`, 400);
+  }
+
+  const amount = Number(value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw createHttpError(`${fieldName} must be greater than zero`, 400);
+  }
+  return amount;
+}
+
+function assertFiniteDerivedReceiptAmount(value, fieldName) {
+  if (!Number.isFinite(value)) {
+    throw createHttpError(`${fieldName} must be a finite number`, 400);
+  }
+  return value;
+}
 
 function normalizeType(value) {
   return String(value || "").trim().toLowerCase();
@@ -215,6 +277,10 @@ function buildValidatedReceiptData(data, party, cashBank) {
 function validateSubmittedSettlements(settlementDetails, receiptAmount) {
   const seenOutstandingIds = new Set();
   let totalSettlement = 0;
+  const normalizedReceiptAmount = parsePositiveReceiptAmount(
+    receiptAmount,
+    "Receipt amount",
+  );
 
   const submittedSettlements = (settlementDetails || []).map((item) => {
     const submittedOutstandingId = String(item?.outstanding || "");
@@ -245,7 +311,10 @@ function validateSubmittedSettlements(settlementDetails, receiptAmount) {
     }
 
     seenOutstandingIds.add(outstandingId);
-    totalSettlement += settledAmount;
+    totalSettlement = assertFiniteDerivedReceiptAmount(
+      totalSettlement + settledAmount,
+      "Total settled amount",
+    );
 
     return {
       outstandingId,
@@ -253,7 +322,7 @@ function validateSubmittedSettlements(settlementDetails, receiptAmount) {
     };
   });
 
-  if (totalSettlement > Number(receiptAmount)) {
+  if (totalSettlement > normalizedReceiptAmount) {
     throw createHttpError(
       "Total settled amount cannot exceed receipt amount",
       400,
@@ -289,7 +358,10 @@ async function resolveAuthoritativeSettlements({
       );
     }
 
-    const currentPendingAmount = Number(outstanding.bill_pending_amt) || 0;
+    const currentPendingAmount = Number(outstanding.bill_pending_amt);
+    if (!Number.isFinite(currentPendingAmount)) {
+      throw createHttpError("Outstanding pending amount is invalid", 409);
+    }
     if (item.settledAmount > currentPendingAmount) {
       throw createHttpError(
         "Settled amount cannot exceed the current pending amount",
@@ -886,9 +958,11 @@ export async function createCashTransaction(data = {}, req) {
     throw createHttpError("A valid request_id is required", 400);
   }
 
-  const requestFingerprint = buildReceiptRequestFingerprint(data);
+  const amount = parsePositiveReceiptAmount(data.amount, "Receipt amount");
+  const requestFingerprint = buildReceiptRequestFingerprint({ ...data, amount });
   const receiptData = {
     ...data,
+    amount,
     request_id: requestId,
     request_fingerprint: requestFingerprint,
   };
@@ -933,17 +1007,18 @@ export async function createCashTransaction(data = {}, req) {
         return;
       }
 
-      const [party, cashBank] = await Promise.all([
-        Party.findOne({ _id: receiptData.party_id, cmp_id: receiptData.cmp_id })
-          .session(session)
-          .lean(),
-        Party.findOne({
-          _id: receiptData.cash_bank_id,
-          cmp_id: receiptData.cmp_id,
-        })
-          .session(session)
-          .lean(),
-      ]);
+      const party = await Party.findOne({
+        _id: receiptData.party_id,
+        cmp_id: receiptData.cmp_id,
+      })
+        .session(session)
+        .lean();
+      const cashBank = await Party.findOne({
+        _id: receiptData.cash_bank_id,
+        cmp_id: receiptData.cmp_id,
+      })
+        .session(session)
+        .lean();
 
       if (!party) {
         throw createHttpError(
@@ -981,12 +1056,23 @@ export async function createCashTransaction(data = {}, req) {
       const settlement_details = resolvedSettlements.map(
         (item) => item.detail,
       );
-      const settled_amount = settlement_details.reduce(
-        (total, item) => total + (Number(item.settled_amount) || 0),
-        0,
+      const settled_amount = settlement_details.reduce((total, item) => {
+        const settledAmount = Number(item.settled_amount);
+        if (!Number.isFinite(settledAmount) || settledAmount <= 0) {
+          throw createHttpError("Settled amount must be greater than zero", 400);
+        }
+        return assertFiniteDerivedReceiptAmount(
+          total + settledAmount,
+          "Total settled amount",
+        );
+      }, 0);
+      const advance_amount = assertFiniteDerivedReceiptAmount(
+        Number(validatedData.amount) - settled_amount,
+        "Advance amount",
       );
-      const advance_amount =
-        (Number(validatedData.amount) || 0) - settled_amount;
+      if (advance_amount < 0) {
+        throw createHttpError("Advance amount cannot be negative", 400);
+      }
 
       const voucherIdentity = await issueVoucherIdentity({
         cmpId: validatedData.cmp_id,
@@ -1111,6 +1197,7 @@ export async function createCashTransaction(data = {}, req) {
 // settlement set so later transactions on the same bills remain intact.
 export async function updateCashTransaction(id, data = {}, req) {
   const expectedVersion = parseExpectedReceiptVersion(data.expected_updated_at);
+  const amount = parsePositiveReceiptAmount(data.amount, "Receipt amount");
   const session = await mongoose.startSession();
 
   try {
@@ -1142,23 +1229,23 @@ export async function updateCashTransaction(id, data = {}, req) {
         );
       }
 
+      await assertReceiptOutstandingReferencesExist(receipt, session);
+
       validateReceiptEditIdentity(receipt, data);
       const date = validateReceiptEditDate(data.date);
       const submittedSettlements = validateSubmittedSettlements(
         data.settlement_details,
-        data.amount,
+        amount,
       );
 
-      const [party, cashBank] = await Promise.all([
-        Party.findOne({
-          _id: receipt.party_id,
-          cmp_id: receipt.cmp_id,
-        }).session(session).lean(),
-        Party.findOne({
-          _id: data.cash_bank_id,
-          cmp_id: receipt.cmp_id,
-        }).session(session).lean(),
-      ]);
+      const party = await Party.findOne({
+        _id: receipt.party_id,
+        cmp_id: receipt.cmp_id,
+      }).session(session).lean();
+      const cashBank = await Party.findOne({
+        _id: data.cash_bank_id,
+        cmp_id: receipt.cmp_id,
+      }).session(session).lean();
       if (!party) {
         throw createHttpError("Original Receipt party was not found", 409);
       }
@@ -1173,6 +1260,7 @@ export async function updateCashTransaction(id, data = {}, req) {
       const validatedData = buildValidatedReceiptData(
         {
           ...data,
+          amount,
           cmp_id: receipt.cmp_id,
           voucher_type: receipt.voucher_type,
           party_id: receipt.party_id,
@@ -1193,11 +1281,23 @@ export async function updateCashTransaction(id, data = {}, req) {
         settlementDate: date,
         session,
       });
-      const totalSettled = replacement.details.reduce(
-        (total, detail) => total + Number(detail.settled_amount || 0),
-        0,
+      const totalSettled = replacement.details.reduce((total, detail) => {
+        const settledAmount = Number(detail.settled_amount);
+        if (!Number.isFinite(settledAmount) || settledAmount <= 0) {
+          throw createHttpError("Settled amount must be greater than zero", 400);
+        }
+        return assertFiniteDerivedReceiptAmount(
+          total + settledAmount,
+          "Total settled amount",
+        );
+      }, 0);
+      const advanceAmount = assertFiniteDerivedReceiptAmount(
+        Number(validatedData.amount) - totalSettled,
+        "Advance amount",
       );
-      const advanceAmount = Number(validatedData.amount) - totalSettled;
+      if (advanceAmount < 0) {
+        throw createHttpError("Advance amount cannot be negative", 400);
+      }
 
       // Restore each old contribution and apply the complete desired set in one
       // save per bill. The transaction keeps this intermediate state private.
@@ -1382,18 +1482,16 @@ export async function getReceiptEditAllocationAvailability(
 }
 
 async function validateReceiptLedgers(transaction, session) {
-  const [partyLedgers, cashBankLedgers] = await Promise.all([
-    PartyLedger.find({
-      voucher_id: transaction._id,
-      voucher_type: transaction.voucher_type,
-      status: "active",
-    }).session(session),
-    CashBankLedger.find({
-      voucher_id: transaction._id,
-      voucher_type: transaction.voucher_type,
-      status: "active",
-    }).session(session),
-  ]);
+  const partyLedgers = await PartyLedger.find({
+    voucher_id: transaction._id,
+    voucher_type: transaction.voucher_type,
+    status: "active",
+  }).session(session);
+  const cashBankLedgers = await CashBankLedger.find({
+    voucher_id: transaction._id,
+    voucher_type: transaction.voucher_type,
+    status: "active",
+  }).session(session);
 
   if (partyLedgers.length !== 1) {
     throw createHttpError(
@@ -1536,6 +1634,8 @@ export async function cancelCashTransaction(id, data = {}, req) {
       if (visibleReceipt.tally_ref?.tally_status === TALLY_STATUS.ACCEPTED) {
         throw createHttpError("Tally-accepted Receipt cannot be cancelled", 409);
       }
+
+      await assertReceiptOutstandingReferencesExist(visibleReceipt, session);
 
       const transaction = await Receipt.findOneAndUpdate(
         { ...accessFilter, status: "active", "tally_ref.tally_status": TALLY_STATUS.PENDING },

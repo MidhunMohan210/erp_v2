@@ -160,7 +160,7 @@ export async function createCashTransaction(req, res) {
       });
     }
 
-    if (payload.amount <= 0) {
+    if (!Number.isFinite(payload.amount) || payload.amount <= 0) {
       return res.status(400).json({
         success: false,
         message: "Amount must be greater than 0",
@@ -246,6 +246,7 @@ export async function updateCashTransaction(req, res) {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to update cash transaction",
+      code: error.code,
     });
   }
 }
@@ -317,6 +318,7 @@ export async function cancelCashTransaction(req, res) {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to cancel cash transaction",
+      code: error.code,
     });
   }
 }

@@ -2,6 +2,16 @@ import { getInitialTransactionStatus } from "./transactionState.service.js";
 import { getCashBankVoucherModel } from "../utils/cashBankVoucherModel.js";
 import { TALLY_STATUS } from "../constants/tallyStatus.js";
 
+function requireFiniteReceiptNumber(value, fieldName) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    const error = new Error(`${fieldName} must be a finite number`);
+    error.statusCode = 400;
+    throw error;
+  }
+  return number;
+}
+
 // Builds the stored settlement snapshot from the current Outstanding record.
 // Client-provided bill labels and balances are intentionally not used here.
 export function buildAuthoritativeSettlementDetail(
@@ -9,8 +19,20 @@ export function buildAuthoritativeSettlementDetail(
   settledAmount,
   settlementDate,
 ) {
-  const previousOutstandingAmount =
-    Number(outstanding?.bill_pending_amt) || 0;
+  const previousOutstandingAmount = requireFiniteReceiptNumber(
+    outstanding?.bill_pending_amt,
+    "Outstanding pending amount",
+  );
+  const normalizedSettledAmount = requireFiniteReceiptNumber(
+    settledAmount,
+    "Settled amount",
+  );
+  const remainingOutstandingAmount =
+    previousOutstandingAmount - normalizedSettledAmount;
+  requireFiniteReceiptNumber(
+    remainingOutstandingAmount,
+    "Remaining outstanding amount",
+  );
 
   return {
     outstanding: outstanding?._id,
@@ -18,9 +40,8 @@ export function buildAuthoritativeSettlementDetail(
     outstanding_date: new Date(outstanding?.bill_date),
     outstanding_type: outstanding?.classification,
     previous_outstanding_amount: previousOutstandingAmount,
-    settled_amount: Number(settledAmount) || 0,
-    remaining_outstanding_amount:
-      previousOutstandingAmount - (Number(settledAmount) || 0),
+    settled_amount: normalizedSettledAmount,
+    remaining_outstanding_amount: remainingOutstandingAmount,
     settlement_date: new Date(settlementDate),
   };
 }

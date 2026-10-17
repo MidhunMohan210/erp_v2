@@ -105,7 +105,13 @@ async function expectSinglePosting(setup, expectedStock) {
   expect(await PartyMonthlyBalance.countDocuments({ cmp_id: context.company._id })).toBe(1);
   expect(await Outstanding.countDocuments({ cmp_id: context.company._id })).toBe(1);
   expect(await VoucherTimeline.countDocuments({ cmp_id: context.company._id })).toBe(1);
-  expect((await Product.findById(product._id).lean()).GodownList[0].balance_stock).toBe(expectedStock);
+  const stock = (await Product.findById(product._id).lean()).GodownList[0]
+    .balance_stock;
+  if (Array.isArray(expectedStock)) {
+    expect(expectedStock).toContain(stock);
+    return;
+  }
+  expect(stock).toBe(expectedStock);
 }
 
 describe("Sale creation idempotency", () => {
@@ -261,6 +267,35 @@ describe("Sale creation idempotency", () => {
     await expectSinglePosting(setup, 6);
   });
 
+  it("issues unique voucher and serial numbers for concurrent Sales", async () => {
+    const setup = await setupSaleContext("concurrent-identities");
+    const [first, second] = await Promise.all([
+      createSale(
+        saleRequest(setup, "sale-request-concurrent-identity-a", 2),
+        saleContext(setup),
+      ),
+      createSale(
+        saleRequest(setup, "sale-request-concurrent-identity-b", 3),
+        saleContext(setup),
+      ),
+    ]);
+
+    expect(String(first._id)).not.toBe(String(second._id));
+    expect(new Set([first.voucher_number, second.voucher_number]).size).toBe(2);
+    expect(
+      new Set([
+        first.company_level_serial_number,
+        second.company_level_serial_number,
+      ]).size,
+    ).toBe(2);
+    expect(
+      new Set([
+        first.user_level_serial_number,
+        second.user_level_serial_number,
+      ]).size,
+    ).toBe(2);
+  });
+
   it("allows only one concurrent Sale when bodies conflict", async () => {
     const setup = await setupSaleContext("concurrent-conflict");
     const firstRequest = saleRequest(setup, "sale-request-concurrent-conflict", 4);
@@ -274,7 +309,8 @@ describe("Sale creation idempotency", () => {
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
     expect(rejected.reason).toMatchObject({ statusCode: 409 });
-    await expectSinglePosting(setup, 6);
+    // Either concurrent request may win the unique request-id race.
+    await expectSinglePosting(setup, [6, 7]);
   });
 
   it("allows separate Sales for different request IDs", async () => {
