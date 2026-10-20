@@ -18,6 +18,12 @@ router.get(
   requireCompanyAccess,
   saleOrderController.getSaleOrderByRequestId,
 );
+router.post(
+  "/by-request-id/:requestId/verify",
+  protect,
+  requireCompanyAccess,
+  saleOrderController.verifySaleOrderByRequestId,
+);
 
 // Fetch one sale order by document id.
 // Access scope is still enforced by company and creator scoping in service layer.

@@ -1734,6 +1734,34 @@ export async function findReceiptByRequestId(requestId, { cmp_id } = {}, req) {
     .lean();
 }
 
+/** Read-only recovery verification; legacy data is never backfilled here. */
+export async function verifyReceiptByRequestId(requestId, payload, { cmp_id } = {}, req) {
+  const request_id = String(requestId || "").trim();
+  if (!request_id || request_id.length > 128) {
+    throw createHttpError("A valid request_id is required", 400);
+  }
+  const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
+  const receipt = await Receipt.findOne(filter).lean();
+  if (!receipt) return { outcome: "not_found" };
+  if (!receipt.request_fingerprint) {
+    return { outcome: "unverifiable", receipt };
+  }
+
+  try {
+    if (String(payload?.request_id || payload?.requestId || "").trim() !== request_id) {
+      return { outcome: "unverifiable", receipt };
+    }
+    const amount = parsePositiveReceiptAmount(payload.amount, "Receipt amount");
+    const candidateFingerprint = buildReceiptRequestFingerprint({ ...payload, amount });
+    return {
+      outcome: receipt.request_fingerprint === candidateFingerprint ? "match" : "conflict",
+      receipt,
+    };
+  } catch {
+    return { outcome: "unverifiable", receipt };
+  }
+}
+
 // List receipts with filter support and creator/company scoping.
 export async function getCashTransactions(filters = {}, req) {
   const { cmp_id, voucher_type, party_id, status, from, to } = filters;

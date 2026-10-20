@@ -1,6 +1,6 @@
 import express from "express";
 
-import { auditSale, cancelSale, createSale, getSaleById, getSaleByRequestId, updateSale } from "../../controllers/saleController.js";
+import { auditSale, cancelSale, createSale, getSaleById, getSaleByRequestId, updateSale, verifySaleByRequestId } from "../../controllers/saleController.js";
 import { protect } from "../../middleware/authMiddleware.js";
 import { requireCompanyAccess } from "../../middleware/companyAccessMiddleware.js";
 
@@ -8,6 +8,7 @@ const router = express.Router();
 
 router.post("/", protect, requireCompanyAccess, createSale);
 router.get("/by-request-id/:requestId", protect, requireCompanyAccess, getSaleByRequestId);
+router.post("/by-request-id/:requestId/verify", protect, requireCompanyAccess, verifySaleByRequestId);
 router.put("/:id", protect, requireCompanyAccess, updateSale);
 router.put("/:id/cancel", protect, requireCompanyAccess, cancelSale);
 router.get("/:id", protect, requireCompanyAccess, getSaleById);

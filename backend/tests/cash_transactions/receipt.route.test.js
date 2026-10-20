@@ -477,6 +477,14 @@ function getReceiptByRequestId(requestId, companyId = baseContext.companyId) {
     .query({ cmp_id: String(companyId) });
 }
 
+function verifyReceiptByRequestId(requestId, payload, companyId = baseContext.companyId) {
+  return request(app)
+    .post(`/api/cash-transactions/by-request-id/${requestId}/verify`)
+    .set("Authorization", `Bearer ${baseContext.token}`)
+    .query({ cmp_id: String(companyId) })
+    .send({ payload });
+}
+
 beforeAll(async () => {
   baseContext = null;
 });
@@ -1907,6 +1915,24 @@ describe("GET /api/cash-transactions/by-request-id/:requestId", () => {
     const createRes = await createReceiptForTest({ request_id: "receipt-request-other-company" });
     expect(createRes.status).toBe(201);
     expect((await getReceiptByRequestId("receipt-request-other-company", otherCompany.companyId)).status).toBe(404);
+  });
+});
+
+describe("POST /api/cash-transactions/by-request-id/:requestId/verify", () => {
+  it("returns match, conflict, and not_found without another Receipt posting", async () => {
+    const payload = buildValidReceiptPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      baseContext.cashAccount._id,
+      { request_id: "receipt-request-verify" },
+    );
+    await postReceipt(baseContext.token, payload);
+    const beforeCount = await Receipt.countDocuments();
+
+    expect((await verifyReceiptByRequestId(payload.request_id, payload)).body.data.outcome).toBe("match");
+    expect((await verifyReceiptByRequestId(payload.request_id, { ...payload, amount: 700 })).body.data.outcome).toBe("conflict");
+    expect((await verifyReceiptByRequestId("receipt-request-not-found", payload)).body.data.outcome).toBe("not_found");
+    expect(await Receipt.countDocuments()).toBe(beforeCount);
   });
 });
 

@@ -3,6 +3,7 @@ import {
   createSaleOrder as createSaleOrderService,
   getSaleOrderById as getSaleOrderByIdService,
   findSaleOrderByRequestId as findSaleOrderByRequestIdService,
+  verifySaleOrderByRequestId as verifySaleOrderByRequestIdService,
   updateSaleOrder as updateSaleOrderService,
 } from "../services/saleOrder.service.js";
 
@@ -115,6 +116,36 @@ export async function getSaleOrderByRequestId(req, res) {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to find Sale Order",
+    });
+  }
+}
+
+export async function verifySaleOrderByRequestId(req, res) {
+  try {
+    const result = await verifySaleOrderByRequestIdService(
+      req.params.requestId,
+      req.body?.payload,
+      { cmp_id: req.companyId },
+      req,
+    );
+    const saleOrder = result.saleOrder;
+    return res.status(200).json({
+      success: true,
+      data: {
+        outcome: result.outcome,
+        exists: Boolean(saleOrder),
+        transaction_type: "sale_order",
+        ...(saleOrder ? {
+          request_id: saleOrder.request_id,
+          id: saleOrder._id,
+          voucher_number: saleOrder.voucher_number,
+        } : {}),
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to verify Sale Order",
     });
   }
 }

@@ -9,6 +9,7 @@ import {
   getCashTransactionById,
   auditReceipt,
   getReceiptByRequestId,
+  verifyReceiptByRequestId,
   getCashTransactions,
   updateCashTransaction,
 } from "../../controllers/cashTransactionController.js";
@@ -32,6 +33,7 @@ router.get("/cash-bank-balances", protect, requireCompanyAccess, getCashBankLedg
 // Must be registered before /:id so "cash-bank" is never treated as an ID.
 router.get("/cash-bank/:cashBankId/transactions", protect, requireCompanyAccess, getCashBankLedgerTransactions);
 router.get("/by-request-id/:requestId", protect, requireCompanyAccess, getReceiptByRequestId);
+router.post("/by-request-id/:requestId/verify", protect, requireCompanyAccess, verifyReceiptByRequestId);
 
 // Returns authoritative bill availability after logically reversing this Receipt.
 router.get(

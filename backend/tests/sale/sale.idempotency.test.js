@@ -11,7 +11,7 @@ import { Godown } from "../../Model/ProductSubDetails.js";
 import Sale from "../../Model/Sale.js";
 import VoucherSeries from "../../Model/VoucherSeriesSchema.js";
 import VoucherTimeline from "../../Model/VoucherTimeline.js";
-import { createSale, findSaleByRequestId } from "../../services/sale.service.js";
+import { createSale, findSaleByRequestId, verifySaleByRequestId } from "../../services/sale.service.js";
 import { createTestCompany } from "../helpers/company.js";
 import { createAccountGroup, createTestParty, setupIntegrationTestContext } from "../helpers/party.js";
 import { loginAndGetAuthContext } from "../helpers/user.js";
@@ -136,6 +136,39 @@ describe("Sale creation idempotency", () => {
       { cmp_id: String(setup.context.company._id) },
       saleContext(setup),
     )).toBeNull();
+    await expectSinglePosting(setup, 7);
+  });
+
+  it("verifies a matching Sale payload and preserves conflict and legacy records without writes", async () => {
+    const setup = await setupSaleContext("verify");
+    const request = saleRequest(setup, "sale-request-verify");
+    const created = await createSale(request, saleContext(setup));
+
+    const match = await verifySaleByRequestId(
+      request.request_id,
+      request,
+      { cmp_id: String(setup.context.company._id) },
+      saleContext(setup),
+    );
+    expect(match.outcome).toBe("match");
+
+    const conflict = await verifySaleByRequestId(
+      request.request_id,
+      { ...request, items: [{ ...request.items[0], actualQty: 4, billedQty: 4 }] },
+      { cmp_id: String(setup.context.company._id) },
+      saleContext(setup),
+    );
+    expect(conflict.outcome).toBe("conflict");
+
+    await Sale.updateOne({ _id: created._id }, { $unset: { request_fingerprint: 1 } });
+    const legacy = await verifySaleByRequestId(
+      request.request_id,
+      request,
+      { cmp_id: String(setup.context.company._id) },
+      saleContext(setup),
+    );
+    expect(legacy.outcome).toBe("match");
+    expect((await Sale.findById(created._id).lean()).request_fingerprint).toBeFalsy();
     await expectSinglePosting(setup, 7);
   });
 

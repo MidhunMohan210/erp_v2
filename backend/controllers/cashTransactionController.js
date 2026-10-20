@@ -8,6 +8,7 @@ import {
   getCashBankLedgerTransactions as getCashBankLedgerTransactionsService,
   getCashTransactionById as getCashTransactionByIdService,
   findReceiptByRequestId as findReceiptByRequestIdService,
+  verifyReceiptByRequestId as verifyReceiptByRequestIdService,
   getCashTransactions as getCashTransactionsService,
   updateCashTransaction as updateCashTransactionService,
 } from "../services/cashTransaction.service.js";
@@ -401,6 +402,42 @@ export async function getReceiptByRequestId(req, res) {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to find Receipt",
+    });
+  }
+}
+
+export async function verifyReceiptByRequestId(req, res) {
+  try {
+    const payload = buildCashTransactionPayload(
+      req.body?.payload || {},
+      req.user?._id || req.user?.id || null,
+    );
+    // Verification uses the middleware scope, never a company value from the body.
+    payload.cmp_id = req.companyId;
+    const result = await verifyReceiptByRequestIdService(
+      req.params.requestId,
+      payload,
+      { cmp_id: req.companyId },
+      req,
+    );
+    const receipt = result.receipt;
+    return res.status(200).json({
+      success: true,
+      data: {
+        outcome: result.outcome,
+        exists: Boolean(receipt),
+        transaction_type: "receipt",
+        ...(receipt ? {
+          request_id: receipt.request_id,
+          id: receipt._id,
+          voucher_number: receipt.voucher_number,
+        } : {}),
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to verify Receipt",
     });
   }
 }

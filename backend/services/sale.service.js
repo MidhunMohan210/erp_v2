@@ -1284,6 +1284,54 @@ export async function findSaleByRequestId(requestId, { cmp_id } = {}, req = {}) 
 }
 
 /**
+ * Read-only recovery verification. Unlike create replay, this must never
+ * backfill a legacy fingerprint because a lookup cannot change financial data.
+ */
+export async function verifySaleByRequestId(requestId, payload, { cmp_id } = {}, req = {}) {
+  const request_id = normalizeRequestId(requestId);
+  const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
+  const sale = await Sale.findOne(filter).lean();
+  if (!sale) return { outcome: "not_found" };
+
+  let storedFingerprint = sale.request_fingerprint;
+  if (!storedFingerprint) {
+    try {
+      storedFingerprint = buildLegacySaleRequestFingerprint(sale);
+    } catch {
+      return { outcome: "unverifiable", sale };
+    }
+  }
+
+  try {
+    if (normalizeRequestId(payload?.request_id ?? payload?.requestId) !== request_id) {
+      return { outcome: "unverifiable", sale };
+    }
+    const candidateFingerprint = buildSaleRequestFingerprint({
+      cmp_id: requiredObjectId(req.companyId, "companyId"),
+      userId: requiredObjectId(req.user?._id || req.user?.id, "userId"),
+      series_id: requiredObjectId(
+        payload.selectedSeries?._id ?? payload.series_id,
+        "selectedSeries._id",
+      ),
+      date: normalizeDate(payload.transactionDate ?? payload.date),
+      party_id: requiredObjectId(payload.partyId ?? payload.party_id, "partyId"),
+      price_level_id: payload.priceLevelId ?? payload.price_level_id ?? null,
+      normalized: normalizeSaleInput(payload),
+      despatch_details: mapDespatchDetails(
+        payload.despatchDetails ?? payload.despatch_details,
+      ),
+      narration: normalizedText(payload.narration),
+    });
+    return {
+      outcome: storedFingerprint === candidateFingerprint ? "match" : "conflict",
+      sale,
+    };
+  } catch {
+    return { outcome: "unverifiable", sale };
+  }
+}
+
+/**
  * Reverses every pending Sale posting as one transaction. The conditional
  * Sale update is the claim: only one concurrent request can reach reversals.
  */

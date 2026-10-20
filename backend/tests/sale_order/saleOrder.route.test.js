@@ -256,6 +256,14 @@ function getSaleOrderByRequestId(requestId) {
     .query({ cmp_id: String(baseContext.companyId) });
 }
 
+function verifySaleOrderByRequestId(requestId, payload) {
+  return request(app)
+    .post(`/api/sale-orders/by-request-id/${requestId}/verify`)
+    .set("Authorization", `Bearer ${baseContext.token}`)
+    .query({ cmp_id: String(baseContext.companyId) })
+    .send({ payload });
+}
+
 async function createSaleOrderForTest(overrides = {}) {
   const payload = buildValidSaleOrderPayload(
     baseContext.party._id,
@@ -470,6 +478,21 @@ describe("POST /api/sale-orders — Business logic", () => {
     });
     expect(await SaleOrder.countDocuments()).toBe(beforeCount);
     expect((await getSaleOrderByRequestId("sale-order-request-missing")).status).toBe(404);
+  });
+
+  it("verifies matching and conflicting Sale Order recovery payloads", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: "sale-order-verify" },
+    );
+    await postSaleOrder(baseContext.token, payload);
+
+    expect((await verifySaleOrderByRequestId(payload.request_id, payload)).body.data.outcome).toBe("match");
+    expect((await verifySaleOrderByRequestId(payload.request_id, {
+      ...payload,
+      items: [{ ...payload.items[0], actualQty: 3, billedQty: 3 }],
+    })).body.data.outcome).toBe("conflict");
   });
 
   it("creates a Sale Order and timeline with pending Tally status", async () => {
