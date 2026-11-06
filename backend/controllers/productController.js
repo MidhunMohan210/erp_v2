@@ -252,6 +252,57 @@ export const listProducts = async (req, res) => {
   }
 };
 
+// Returns complete Product documents for one offline-master download page.
+// Sorting is stable, but concurrent Product changes can still move records
+// between pages; the mobile client should accept only a fully completed download.
+export const downloadProductMaster = async (req, res) => {
+  try {
+    const { Primary_user_id: owner, cmp_id } = resolveCompanyScope(req, {
+      requireCompanyId: true,
+    });
+    const pageNum = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limitNum = Math.min(
+      Math.max(Number.parseInt(req.query.limit, 10) || 500, 1),
+      500,
+    );
+    const skip = (pageNum - 1) * limitNum;
+    const filter = {
+      Primary_user_id: owner,
+      cmp_id,
+      is_deleted: { $ne: true },
+    };
+
+    const [items, total] = await Promise.all([
+      Product.find(filter)
+        .populate(PRODUCT_POPULATE)
+        .sort({ product_name: 1, _id: 1 })
+        .collation({ locale: "en", strength: 2 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      Product.countDocuments(filter),
+    ]);
+    const enrichedItems = await enrichGodownNames(items, { owner, cmp_id });
+
+    return res.json({
+      items: enrichedItems,
+      page: pageNum,
+      hasMore: skip + enrichedItems.length < total,
+      total,
+      limit: limitNum,
+    });
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("downloadProductMaster error:", error);
+    }
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode
+        ? error.message
+        : "Failed to download Product master",
+    });
+  }
+};
+
 export const getProductById = async (req, res) => {
   try {
     const { Primary_user_id: owner, cmp_id } = resolveCompanyScope(req, {

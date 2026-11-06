@@ -3,6 +3,7 @@ import { resolveAdminOwnerId } from "../utils/authScope.js";
 
 export const listPriceLevels = async (req, res) => {
   try {
+
     const owner = resolveAdminOwnerId(req);
     const { cmp_id } = req.query;
 

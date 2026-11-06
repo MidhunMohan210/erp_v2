@@ -1,10 +1,25 @@
 import {
   addParty as addPartyService,
   deleteParty as deletePartyService,
+  downloadPartyMaster as downloadPartyMasterService,
   getPartyById as getPartyByIdService,
   listParties as listPartiesService,
   updateParty as updatePartyService,
 } from "../services/party.service.js";
+
+export const downloadPartyMaster = async (req, res) => {
+  try {
+    const result = await downloadPartyMasterService(req.query || {}, req);
+    return res.json(result);
+  } catch (error) {
+    if (process.env.NODE_ENV !== "test") {
+      console.error("downloadPartyMaster error:", error);
+    }
+    return res.status(error.statusCode || 500).json({
+      message: error.statusCode ? error.message : "Failed to download Party master",
+    });
+  }
+};
 
 export const addParty = async (req, res) => {
   try {

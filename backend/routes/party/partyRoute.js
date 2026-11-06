@@ -2,6 +2,7 @@
 import express from "express";
 import {
   addParty,
+  downloadPartyMaster,
   listParties,
   getPartyById,
   updateParty,
@@ -13,6 +14,8 @@ import { requireCompanyAccess } from "../../middleware/companyAccessMiddleware.j
 const router = express.Router();
 
 router.post("/", protect, requireCompanyAccess, addParty);            // create
+// Keep this above /:id so "offline-master" is not treated as a Party id.
+router.get("/offline-master", protect, requireCompanyAccess, downloadPartyMaster);
 router.get("/", protect, requireCompanyAccess, listParties);          // list (infinite scroll)
 router.get("/:id", protect, getPartyById);      // single
 router.put("/:id", protect, requireCompanyAccess, updateParty);       // edit

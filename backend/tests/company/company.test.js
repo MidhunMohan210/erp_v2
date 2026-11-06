@@ -37,9 +37,10 @@ describe("Company routes", () => {
     });
     const voucherTypes = voucherDocs.map((doc) => doc.voucherType);
 
-    expect(voucherDocs.length).toBeGreaterThan(0);
+    expect(voucherDocs).toHaveLength(3);
     expect(voucherTypes).toContain("saleOrder");
     expect(voucherTypes).toContain("receipt");
+    expect(voucherTypes).toContain("sales");
 
     voucherDocs.forEach((voucherDoc) => {
       expect(Array.isArray(voucherDoc.series)).toBe(true);

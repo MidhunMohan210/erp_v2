@@ -8,6 +8,7 @@ import {
   listBrands,
   listCategories,
   listGodowns,
+  downloadProductMaster,
   listProducts,
   listSubcategories,
 } from "../../controllers/productController.js";
@@ -30,6 +31,8 @@ router.get("/brands", protect, listBrands);
 router.get("/categories", protect, listCategories);
 router.get("/subcategories", protect, listSubcategories);
 router.get("/godowns", protect, requireCompanyAccess, listGodowns);
+// Keep this above /:id so "offline-master" is not treated as a Product id.
+router.get("/offline-master", protect, requireCompanyAccess, downloadProductMaster);
 router.post("/", protect, discardClientOwnership, requireCompanyAccess, createManualProduct);
 router.get("/", protect, listProducts);
 router.put("/:id", protect, discardClientOwnership, requireCompanyAccess, updateManualProduct);

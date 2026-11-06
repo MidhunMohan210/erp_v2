@@ -8,7 +8,7 @@ export const createDefaultVoucherSeries = async ({
   const voucherTypes = [
     "saleOrder",
     "receipt",
-    // "sales",
+    "sales",
     // "vanSale",
     // "purchase",
     // "creditNote",

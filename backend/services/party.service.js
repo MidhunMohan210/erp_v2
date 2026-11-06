@@ -27,6 +27,53 @@ const PARTY_LIST_PROJECTION = {
   source: 1,
 };
 
+// This is intentionally broader than PARTY_LIST_PROJECTION. The mobile
+// importer needs all Party master fields, not calculated ledger balances.
+const PARTY_MASTER_DOWNLOAD_PROJECTION = {
+  _id: 1,
+  cmp_id: 1,
+  Primary_user_id: 1,
+  Secondary_user_id: 1,
+  partyType: 1,
+  accountGroup: 1,
+  subGroup: 1,
+  priceLevel: 1,
+  groupName: 1,
+  childGroupName: 1,
+  openingBalanceAmount: 1,
+  openingBalanceType: 1,
+  partyName: 1,
+  mobileNumber: 1,
+  country: 1,
+  state: 1,
+  pin: 1,
+  emailID: 1,
+  gstNo: 1,
+  panNo: 1,
+  billingAddress: 1,
+  shippingAddress: 1,
+  creditPeriod: 1,
+  creditLimit: 1,
+  state_reference: 1,
+  pincode: 1,
+  party_master_id: 1,
+  acholder_name: 1,
+  ac_no: 1,
+  ifsc: 1,
+  swift_code: 1,
+  bank_name: 1,
+  branch: 1,
+  upi_id: 1,
+  bsr_code: 1,
+  client_code: 1,
+  source: 1,
+  lastUpdatedBySource: 1,
+  tallyUserName: 1,
+  created_by: 1,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
 function createHttpError(message, statusCode = 500) {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -278,6 +325,40 @@ export async function listParties(filters = {}, req) {
     total,
     page: pageNum,
     hasMore,
+  };
+}
+
+export async function downloadPartyMaster(filters = {}, req) {
+  const owner = resolveAdminOwnerId(req);
+  const cmp_id = req.companyId;
+  if (!cmp_id) {
+    throw createHttpError("cmp_id (company) is required", 400);
+  }
+
+  const pageNum = Math.max(parseInt(filters.page, 10) || 1, 1);
+  // A fixed upper bound avoids an accidental unbounded master export.
+  const limitNum = Math.min(Math.max(parseInt(filters.limit, 10) || 500, 1), 500);
+  const filter = {
+    Primary_user_id: owner,
+    cmp_id: new mongoose.Types.ObjectId(cmp_id),
+  };
+  const skip = (pageNum - 1) * limitNum;
+  const [items, total] = await Promise.all([
+    Party.find(filter)
+      .select(PARTY_MASTER_DOWNLOAD_PROJECTION)
+      .sort({ partyName: 1, _id: 1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean(),
+    Party.countDocuments(filter),
+  ]);
+
+  return {
+    items,
+    page: pageNum,
+    hasMore: skip + items.length < total,
+    total,
+    limit: limitNum,
   };
 }
 
