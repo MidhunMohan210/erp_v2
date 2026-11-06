@@ -52,12 +52,10 @@ async function setupStockPolicyContext(openingStock) {
     }],
   });
   const seriesId = new mongoose.Types.ObjectId();
-  await VoucherSeries.create({
-    primary_user_id: context.user._id,
-    cmp_id: context.company._id,
-    voucherType: "sales",
-    series: [{ _id: seriesId, seriesName: "Stock Policy", widthOfNumericalPart: 3, currentNumber: 1 }],
-  });
+  await VoucherSeries.updateOne(
+    { cmp_id: context.company._id, voucherType: "sales" },
+    { $push: { series: { _id: seriesId, seriesName: "Stock Policy", widthOfNumericalPart: 3, currentNumber: 1 } } },
+  );
   return { context, party, godown, product, rowId, seriesId };
 }
 

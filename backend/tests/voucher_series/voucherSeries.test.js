@@ -232,6 +232,7 @@ describe("GET /api/voucher-series/:cmp_id", () => {
   });
 
   it('normalizes voucherType "sale" to "sales" and returns 404 when that document does not exist', async () => {
+    await VoucherSeries.deleteOne({ cmp_id: baseContext.companyId, voucherType: "sales" });
     const res = await getSeriesRequest(baseContext.companyId, "sale");
 
     expect(res.status).toBe(404);
@@ -292,6 +293,7 @@ describe("POST /api/voucher-series/:cmp_id", () => {
   });
 
   it('upserts a new voucher-series document when voucherType "sale" is used', async () => {
+    await VoucherSeries.deleteOne({ cmp_id: baseContext.companyId, voucherType: "sales" });
     const res = await createSeriesRequest(
       buildCreateVoucherSeriesPayload({
         voucherType: "sale",
@@ -471,6 +473,7 @@ describe("DELETE /api/voucher-series/:cmp_id/:seriesId", () => {
   });
 
   it('returns 404 when voucherType document does not exist', async () => {
+    await VoucherSeries.deleteOne({ cmp_id: baseContext.companyId, voucherType: "sales" });
     const res = await deleteSeriesRequest(new mongoose.Types.ObjectId().toString(), {
       voucherType: "sales",
     });

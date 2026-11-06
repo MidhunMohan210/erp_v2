@@ -292,19 +292,15 @@ async function setupSaleContext() {
     igst: 18,
   });
   const seriesId = new mongoose.Types.ObjectId();
-  await VoucherSeries.create({
-    primary_user_id: context.user._id,
-    cmp_id,
-    voucherType: "sales",
-    series: [
-      {
-        _id: seriesId,
-        seriesName: "Sale",
-        widthOfNumericalPart: 3,
-        currentNumber: 1,
-      },
-    ],
-  });
+  await VoucherSeries.updateOne(
+    { cmp_id, voucherType: "sales" },
+    { $push: { series: {
+      _id: seriesId,
+      seriesName: "Sale",
+      widthOfNumericalPart: 3,
+      currentNumber: 1,
+    } } },
+  );
   const charge = await AdditionalCharges.create({
     cmp_id,
     Primary_user_id: context.user._id,
