@@ -1,3 +1,5 @@
+import Decimal from "decimal.js";
+
 function createFinancialValidationError(message) {
   const error = new Error(message);
   error.statusCode = 400;
@@ -27,22 +29,6 @@ function assertFiniteResult(value, fieldName) {
     throw createFinancialValidationError(`${fieldName} must be a finite number`);
   }
   return value;
-}
-
-function roundMoney(value) {
-  const rounded = Math.round(assertFiniteResult(Number(value), "Money value") * 100) / 100;
-  return assertFiniteResult(rounded, "Rounded money value");
-}
-
-function toPaise(value) {
-  return assertFiniteResult(
-    Math.round(assertFiniteResult(Number(value), "Money value") * 100),
-    "Paise value",
-  );
-}
-
-function fromPaise(value) {
-  return roundMoney(assertFiniteResult(Number(value), "Paise value") / 100);
 }
 
 function firstDefined(...values) {
@@ -105,294 +91,122 @@ function validateSaleOrderFinancialInputs(items, charges, discounts) {
   }
 }
 
-function resolveItemQuantity(item = {}) {
-  return Number(
-    firstDefined(item?.billedQty, item?.billed_qty, item?.qty, item?.quantity)
-  ) || 0;
-}
+// Calculate at decimal precision; round only the monetary fields saved in a voucher.
+const money = (value) => new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+const number = (value) => assertFiniteResult(Number(value), "Calculated finite number");
+const decimal = (value) => new Decimal(value ?? 0);
+const sum = (rows, key) => rows.reduce((total, row) => total.plus(row[key]), new Decimal(0));
+const field = (row, ...keys) => keys.map((key) => row?.[key]).find((value) => value !== undefined);
 
-function resolveItemRate(item = {}) {
-  return Number(item?.rate) || 0;
-}
-
-function resolveItemTaxRate(item = {}) {
-  return Number(firstDefined(item?.taxRate, item?.tax_rate, item?.gst)) || 0;
-}
-
-function resolveItemTaxInclusive(item = {}) {
-  return Boolean(firstDefined(item?.taxInclusive, item?.tax_inclusive));
-}
-
-function resolveItemCessRate(item = {}) {
-  return Number(firstDefined(item?.cessRate, item?.cess_rate, item?.cess)) || 0;
-}
-
-function resolveItemAddlCessRate(item = {}) {
-  return (
-    Number(
-      firstDefined(
-        item?.addlCessRate,
-        item?.addl_cess_rate,
-        item?.addl_cess,
-        item?.addlCess,
-      )
-    ) || 0
-  );
-}
-
-function resolveItemDiscount(item = {}, lineSubtotalPaise = 0) {
-  const discountType = item?.discountType || item?.discount_type || "amount";
-  const discountAmount = Number(
-    firstDefined(item?.discountAmount, item?.discount_amount)
-  ) || 0;
-  const discountPercentage = Number(
-    firstDefined(item?.discountPercentage, item?.discount_percentage)
-  ) || 0;
-
-  const resolvedDiscountPaise =
-    discountType === "percentage"
-      ? Math.round(lineSubtotalPaise * (discountPercentage / 100))
-      : toPaise(discountAmount);
-
-  return Math.min(Math.max(resolvedDiscountPaise, 0), lineSubtotalPaise);
-}
-
-function resolveChargeAmountPaise(charge = {}) {
-  return resolveChargeBreakdownPaise(charge).finalValuePaise;
-}
-
-function resolveChargeRate(charge = {}, key, legacyFallback = 0) {
-  const explicitRate = Number(firstDefined(charge?.[key], charge?.[key])) || 0;
-  if (explicitRate > 0) return explicitRate;
-  return Number(legacyFallback) || 0;
-}
-
-function resolveChargeBreakdownPaise(charge = {}, taxType = "igst") {
-  const normalizedAction =
-    charge?.action === "subtract" || charge?.action === "substract"
-      ? "subtract"
-      : "add";
-  const sign = normalizedAction === "subtract" ? -1 : 1;
-  const baseValuePaise = toPaise(charge?.value);
-  const legacyTaxPercentage = Number(
-    firstDefined(charge?.taxPercentage, charge?.tax_percentage)
-  ) || 0;
-
-  const igstRate =
-    taxType === "igst"
-      ? resolveChargeRate(charge, "igst", legacyTaxPercentage)
-      : 0;
-  const cgstRate =
-    taxType === "cgst_sgst"
-      ? resolveChargeRate(charge, "cgst", legacyTaxPercentage / 2)
-      : 0;
-  const sgstRate =
-    taxType === "cgst_sgst"
-      ? resolveChargeRate(charge, "sgst", legacyTaxPercentage / 2)
-      : 0;
-  const igstAmountPaise = Math.round(baseValuePaise * (igstRate / 100));
-  const cgstAmountPaise = Math.round(baseValuePaise * (cgstRate / 100));
-  const sgstAmountPaise = Math.round(baseValuePaise * (sgstRate / 100));
-  const explicitTaxAmount = firstDefined(charge?.taxAmt, charge?.tax_amount);
-  const derivedTaxAmountPaise =
-    igstAmountPaise + cgstAmountPaise + sgstAmountPaise;
-  const hasSplitTaxDefinition =
-    igstRate > 0 ||
-    cgstRate > 0 ||
-    sgstRate > 0 ||
-    firstDefined(
-      charge?.igstAmount,
-      charge?.igst_amount,
-      charge?.cgstAmount,
-      charge?.cgst_amount,
-      charge?.sgstAmount,
-      charge?.sgst_amount
-    ) !== undefined;
-  const taxAmountPaise =
-    explicitTaxAmount !== undefined &&
-    explicitTaxAmount !== null &&
-    !hasSplitTaxDefinition
-      ? toPaise(explicitTaxAmount)
-      : derivedTaxAmountPaise;
-  const cessAmountPaise = 0;
-  const addlCessAmountPaise = 0;
-  const stateCessAmountPaise = 0;
-  const explicitFinalValue = firstDefined(charge?.finalValue, charge?.final_value);
-
-  if (explicitFinalValue !== undefined && explicitFinalValue !== null) {
-    const finalValuePaise = toPaise(explicitFinalValue);
-
-    if (finalValuePaise < 0) {
-      return {
-        baseValuePaise: baseValuePaise * sign,
-        igstAmountPaise: igstAmountPaise * sign,
-        cgstAmountPaise: cgstAmountPaise * sign,
-        sgstAmountPaise: sgstAmountPaise * sign,
-        taxAmountPaise: taxAmountPaise * sign,
-        cessAmountPaise: cessAmountPaise * sign,
-        addlCessAmountPaise: addlCessAmountPaise * sign,
-        stateCessAmountPaise: stateCessAmountPaise * sign,
-        finalValuePaise,
-      };
-    }
-
-    return {
-      baseValuePaise: baseValuePaise * sign,
-      igstAmountPaise: igstAmountPaise * sign,
-      cgstAmountPaise: cgstAmountPaise * sign,
-      sgstAmountPaise: sgstAmountPaise * sign,
-      taxAmountPaise: taxAmountPaise * sign,
-      cessAmountPaise: cessAmountPaise * sign,
-      addlCessAmountPaise: addlCessAmountPaise * sign,
-      stateCessAmountPaise: stateCessAmountPaise * sign,
-      finalValuePaise: finalValuePaise * sign,
-    };
-  }
-
+function calculateItem(item, taxType) {
+  const billedQty = decimal(field(item, "billedQty", "billed_qty", "qty", "quantity"));
+  const rate = decimal(item.rate);
+  const taxRate = decimal(field(item, "taxRate", "tax_rate", "gst"));
+  const cessRate = decimal(field(item, "cessRate", "cess_rate", "cess"));
+  const addlCessRate = decimal(field(item, "addlCessRate", "addl_cess_rate", "addl_cess", "addlCess"));
+  const gross = billedQty.times(rate);
+  const base = field(item, "taxInclusive", "tax_inclusive") && taxRate.gt(0)
+    ? gross.div(new Decimal(1).plus(taxRate.div(100))) : gross;
+  const discountType = field(item, "discountType", "discount_type") || "amount";
+  const requestedDiscount = discountType === "percentage"
+    ? base.times(decimal(field(item, "discountPercentage", "discount_percentage"))).div(100)
+    : decimal(field(item, "discountAmount", "discount_amount"));
+  const discount = Decimal.min(Decimal.max(requestedDiscount, 0), base);
+  const taxable = base.minus(discount);
+  // GST components are calculated separately, then added; never split a rounded total.
+  const igst = taxType === "igst" ? money(taxable.times(taxRate).div(100)) : new Decimal(0);
+  const cgst = taxType === "cgst_sgst" ? money(taxable.times(taxRate).div(200)) : new Decimal(0);
+  const sgst = taxType === "cgst_sgst" ? money(taxable.times(taxRate).div(200)) : new Decimal(0);
+  const baseSaved = money(base);
+  const discountSaved = Decimal.min(baseSaved, money(discount));
+  const taxableSaved = baseSaved.minus(discountSaved);
+  const cess = money(taxable.times(cessRate).div(100));
+  const addlCess = money(billedQty.times(addlCessRate));
+  const tax = igst.plus(cgst).plus(sgst);
   return {
-    baseValuePaise: baseValuePaise * sign,
-    igstAmountPaise: igstAmountPaise * sign,
-    cgstAmountPaise: cgstAmountPaise * sign,
-    sgstAmountPaise: sgstAmountPaise * sign,
-    taxAmountPaise: taxAmountPaise * sign,
-    cessAmountPaise: cessAmountPaise * sign,
-    addlCessAmountPaise: addlCessAmountPaise * sign,
-    stateCessAmountPaise: stateCessAmountPaise * sign,
-    finalValuePaise:
-      (baseValuePaise +
-        taxAmountPaise +
-        cessAmountPaise +
-        addlCessAmountPaise +
-        stateCessAmountPaise) * sign,
+    base_price: number(baseSaved), discount_amount: number(discountSaved),
+    taxable_amount: number(taxableSaved), igst_amount: number(igst),
+    cgst_amount: number(cgst), sgst_amount: number(sgst), tax_amount: number(tax),
+    cess_amount: number(cess), addl_cess_amount: number(addlCess),
+    total_amount: number(taxableSaved.plus(tax).plus(cess).plus(addlCess)),
   };
 }
 
-function resolveDocumentDiscountPaise(discounts) {
-  if (discounts == null) return 0;
-
-  if (Array.isArray(discounts)) {
-    return discounts.reduce(
-      (sum, discount) =>
-        sum + toPaise(firstDefined(discount?.amount, discount?.value, discount)),
-      0
-    );
-  }
-
-  if (typeof discounts === "object") {
-    return toPaise(
-      firstDefined(discounts?.amount, discounts?.value, discounts?.totalDiscount)
-    );
-  }
-
-  return toPaise(discounts);
+function calculateCharge(charge, taxType) {
+  const value = decimal(charge.value);
+  const sign = charge.action === "subtract" || charge.action === "substract" ? -1 : 1;
+  const legacyRate = decimal(field(charge, "taxPercentage", "tax_percentage"));
+  const rate = (name, fallback) => {
+    const chosen = decimal(field(charge.rates, name) ?? charge[name]);
+    return chosen.gt(0) ? chosen : fallback;
+  };
+  const igstRate = taxType === "igst" ? rate("igst", legacyRate) : new Decimal(0);
+  const cgstRate = taxType === "cgst_sgst" ? rate("cgst", legacyRate.div(2)) : new Decimal(0);
+  const sgstRate = taxType === "cgst_sgst" ? rate("sgst", legacyRate.div(2)) : new Decimal(0);
+  const signed = (amount) => number(money(amount).times(sign));
+  const igst = money(value.times(igstRate).div(100));
+  const cgst = money(value.times(cgstRate).div(100));
+  const sgst = money(value.times(sgstRate).div(100));
+  const tax = igst.plus(cgst).plus(sgst);
+  const valueSaved = money(value);
+  return {
+    value: number(valueSaved),
+    igst_amount: signed(igst), cgst_amount: signed(cgst), sgst_amount: signed(sgst),
+    tax_amount: signed(tax), cess_amount: 0, addl_cess_amount: 0,
+    state_cess_amount: 0, final_value: signed(valueSaved.plus(tax)),
+  };
 }
 
-export function calculateSaleOrderTotals(
-  items = [],
-  charges = [],
-  discounts = null,
-  taxType = "igst",
-) {
+// This single result supplies both persisted rows and the document summary.
+export function calculateSaleOrderDocument(items = [], charges = [], discounts = null, taxType = "igst") {
   const normalizedItems = Array.isArray(items) ? items : [];
   const normalizedCharges = Array.isArray(charges) ? charges : [];
-  validateSaleOrderFinancialInputs(
-    normalizedItems,
-    normalizedCharges,
-    discounts,
+  validateSaleOrderFinancialInputs(normalizedItems, normalizedCharges, discounts);
+  if (!["igst", "cgst_sgst"].includes(taxType)) {
+    throw createFinancialValidationError("Sale Order tax type is invalid");
+  }
+  const calculatedItems = normalizedItems.map((item) => calculateItem(item, taxType));
+  const calculatedCharges = normalizedCharges.map((charge) => calculateCharge(charge, taxType));
+  const documentDiscount = discounts == null ? new Decimal(0) : money(
+    (Array.isArray(discounts) ? discounts : [discounts]).reduce((total, discount) =>
+      total.plus(typeof discount === "object"
+        ? field(discount, "amount", "value", "totalDiscount") : discount), new Decimal(0)),
   );
-
-  let subtotalPaise = 0;
-  let totalDiscountPaise = 0;
-  let totalTaxPaise = 0;
-  let totalCessPaise = 0;
-  let totalAddlCessPaise = 0;
-  let totalAdditionalChargeTaxPaise = 0;
-  let totalAdditionalChargeIgstPaise = 0;
-  let totalAdditionalChargeCgstPaise = 0;
-  let totalAdditionalChargeSgstPaise = 0;
-  let totalAdditionalChargeCessPaise = 0;
-  let totalAdditionalChargeAddlCessPaise = 0;
-  let totalAdditionalChargeStateCessPaise = 0;
-
-  normalizedItems.forEach((item) => {
-    const quantity = resolveItemQuantity(item);
-    const rate = resolveItemRate(item);
-    const lineTotalPaise = toPaise(quantity * rate);
-    const taxRate = resolveItemTaxRate(item);
-    const taxInclusive = resolveItemTaxInclusive(item);
-    const itemSubtotalPaise = taxInclusive
-      ? taxRate > 0
-        ? Math.round(lineTotalPaise / (1 + taxRate / 100))
-        : lineTotalPaise
-      : lineTotalPaise;
-    const itemDiscountPaise = resolveItemDiscount(item, itemSubtotalPaise);
-    const taxablePaise = Math.max(itemSubtotalPaise - itemDiscountPaise, 0);
-    const itemTaxPaise = Math.round(taxablePaise * (taxRate / 100));
-    const itemCessPaise = Math.round(
-      taxablePaise * (resolveItemCessRate(item) / 100)
-    );
-    const itemAddlCessPaise = Math.round(
-      quantity * resolveItemAddlCessRate(item) * 100
-    );
-
-    subtotalPaise += itemSubtotalPaise;
-    totalDiscountPaise += itemDiscountPaise;
-    totalTaxPaise += itemTaxPaise;
-    totalCessPaise += itemCessPaise;
-    totalAddlCessPaise += itemAddlCessPaise;
-  });
-
-  const chargeTotalPaise = normalizedCharges.reduce((sum, charge) => {
-    const breakdown = resolveChargeBreakdownPaise(charge, taxType);
-    totalAdditionalChargeTaxPaise += breakdown.taxAmountPaise;
-    totalAdditionalChargeIgstPaise += breakdown.igstAmountPaise;
-    totalAdditionalChargeCgstPaise += breakdown.cgstAmountPaise;
-    totalAdditionalChargeSgstPaise += breakdown.sgstAmountPaise;
-    totalAdditionalChargeCessPaise += breakdown.cessAmountPaise;
-    totalAdditionalChargeAddlCessPaise += breakdown.addlCessAmountPaise;
-    totalAdditionalChargeStateCessPaise += breakdown.stateCessAmountPaise;
-    return sum + breakdown.finalValuePaise;
-  }, 0);
-  const documentDiscountPaise = resolveDocumentDiscountPaise(discounts);
-
-  totalDiscountPaise += documentDiscountPaise;
-
-  const grandTotalPaise =
-    subtotalPaise -
-    totalDiscountPaise +
-    totalTaxPaise +
-    totalCessPaise +
-    totalAddlCessPaise +
-    chargeTotalPaise;
-
-  return {
-    subtotal: fromPaise(subtotalPaise),
-    taxableAmount: fromPaise(Math.max(subtotalPaise - totalDiscountPaise, 0)),
-    totalDiscount: fromPaise(totalDiscountPaise),
-    totalTax: fromPaise(totalTaxPaise),
-    totalCess: fromPaise(totalCessPaise),
-    totalAddlCess: fromPaise(totalAddlCessPaise),
-    itemTotal: fromPaise(
-      Math.max(subtotalPaise - totalDiscountPaise, 0) +
-        totalTaxPaise +
-        totalCessPaise +
-        totalAddlCessPaise
-    ),
-    totalAdditionalCharge: fromPaise(chargeTotalPaise),
-    totalAdditionalChargeTax: fromPaise(totalAdditionalChargeTaxPaise),
-    totalAdditionalChargeIgst: fromPaise(totalAdditionalChargeIgstPaise),
-    totalAdditionalChargeCgst: fromPaise(totalAdditionalChargeCgstPaise),
-    totalAdditionalChargeSgst: fromPaise(totalAdditionalChargeSgstPaise),
-    totalAdditionalChargeCess: fromPaise(totalAdditionalChargeCessPaise),
-    totalAdditionalChargeAddlCess: fromPaise(
-      totalAdditionalChargeAddlCessPaise
-    ),
-    totalAdditionalChargeStateCess: fromPaise(
-      totalAdditionalChargeStateCessPaise
-    ),
-    amountWithAdditionalCharge: fromPaise(Math.max(grandTotalPaise, 0)),
-    grandTotal: fromPaise(Math.max(grandTotalPaise, 0)),
+  const subtotal = sum(calculatedItems, "base_price");
+  const itemDiscount = sum(calculatedItems, "discount_amount");
+  const taxableBeforeDocumentDiscount = sum(calculatedItems, "taxable_amount");
+  if (documentDiscount.lt(0) || documentDiscount.gt(taxableBeforeDocumentDiscount)) {
+    throw createFinancialValidationError("Document discount exceeds taxable item value");
+  }
+  const taxable = taxableBeforeDocumentDiscount.minus(documentDiscount);
+  const totalTax = sum(calculatedItems, "tax_amount");
+  const totalCess = sum(calculatedItems, "cess_amount");
+  const totalAddlCess = sum(calculatedItems, "addl_cess_amount");
+  const itemTotal = taxable.plus(totalTax).plus(totalCess).plus(totalAddlCess);
+  const chargeTotal = sum(calculatedCharges, "final_value");
+  const grandTotal = itemTotal.plus(chargeTotal);
+  if (grandTotal.lt(0)) throw createFinancialValidationError("Sale Order final amount cannot be negative");
+  const totals = {
+    subtotal: number(subtotal), taxableAmount: number(taxable),
+    totalDiscount: number(itemDiscount.plus(documentDiscount)),
+    totalTax: number(totalTax), totalIgst: number(sum(calculatedItems, "igst_amount")),
+    totalCgst: number(sum(calculatedItems, "cgst_amount")),
+    totalSgst: number(sum(calculatedItems, "sgst_amount")),
+    totalCess: number(totalCess), totalAddlCess: number(totalAddlCess),
+    itemTotal: number(itemTotal), totalAdditionalCharge: number(chargeTotal),
+    totalAdditionalChargeTax: number(sum(calculatedCharges, "tax_amount")),
+    totalAdditionalChargeIgst: number(sum(calculatedCharges, "igst_amount")),
+    totalAdditionalChargeCgst: number(sum(calculatedCharges, "cgst_amount")),
+    totalAdditionalChargeSgst: number(sum(calculatedCharges, "sgst_amount")),
+    totalAdditionalChargeCess: 0, totalAdditionalChargeAddlCess: 0,
+    totalAdditionalChargeStateCess: 0,
+    amountWithAdditionalCharge: number(grandTotal), grandTotal: number(grandTotal),
   };
+  return { items: calculatedItems, charges: calculatedCharges, totals };
+}
+
+export function calculateSaleOrderTotals(items = [], charges = [], discounts = null, taxType = "igst") {
+  return calculateSaleOrderDocument(items, charges, discounts, taxType).totals;
 }
 
 export default calculateSaleOrderTotals;

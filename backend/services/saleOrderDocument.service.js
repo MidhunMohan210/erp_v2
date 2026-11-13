@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-import { calculateSaleOrderTotals } from "./calculation.service.js";
+import { calculateSaleOrderDocument, calculateSaleOrderTotals } from "./calculation.service.js";
 import { TALLY_STATUS } from "../constants/tallyStatus.js";
 import { getInitialTransactionStatus } from "./transactionState.service.js";
 import { convertBaseQtyToAlternate } from "../utils/unitConversion.js";
@@ -317,75 +317,13 @@ function normalizeTaxType(body = {}) {
   return body.tax_type || body.taxType || "igst";
 }
 
-function calculateSaleOrderItemAmounts(row = {}, taxType = "igst") {
-  const billedQty = Number(firstDefined(row?.billedQty, row?.billed_qty)) || 0;
-  const rate = Number(row?.rate) || 0;
-  const taxRate =
-    Number(firstDefined(row?.taxRate, row?.tax_rate, row?.gst)) || 0;
-  const grossAmount = billedQty * rate;
-  const taxInclusive = Boolean(
-    firstDefined(row?.taxInclusive, row?.tax_inclusive),
-  );
-  const basePrice =
-    taxInclusive && taxRate > 0
-      ? grossAmount / (1 + taxRate / 100)
-      : grossAmount;
-  const discountType = row?.discountType || row?.discount_type || "amount";
-  const requestedDiscount =
-    discountType === "percentage"
-      ? (basePrice *
-          (Number(
-            firstDefined(row?.discountPercentage, row?.discount_percentage),
-          ) ||
-            0)) /
-        100
-      : Number(firstDefined(row?.discountAmount, row?.discount_amount)) || 0;
-  const discountAmount = Math.min(Math.max(requestedDiscount, 0), basePrice);
-  const taxableAmount = Math.max(basePrice - discountAmount, 0);
-  const igstAmount =
-    taxType === "igst" ? taxableAmount * (taxRate / 100) : 0;
-  const cgstAmount =
-    taxType === "cgst_sgst" ? taxableAmount * (taxRate / 200) : 0;
-  const sgstAmount =
-    taxType === "cgst_sgst" ? taxableAmount * (taxRate / 200) : 0;
-  const taxAmount = igstAmount + cgstAmount + sgstAmount;
-  const cessAmount =
-    taxableAmount *
-    ((Number(firstDefined(row?.cessRate, row?.cess_rate, row?.cess)) || 0) /
-      100);
-  const addlCessAmount =
-    billedQty *
-    (Number(
-      firstDefined(
-        row?.addlCessRate,
-        row?.addl_cess_rate,
-        row?.addlCess,
-        row?.addl_cess,
-      ),
-    ) ||
-      0);
-
-  return {
-    base_price: basePrice,
-    discount_amount: discountAmount,
-    taxable_amount: taxableAmount,
-    igst_amount: igstAmount,
-    cgst_amount: cgstAmount,
-    sgst_amount: sgstAmount,
-    tax_amount: taxAmount,
-    cess_amount: cessAmount,
-    addl_cess_amount: addlCessAmount,
-    total_amount: taxableAmount + taxAmount + cessAmount + addlCessAmount,
-  };
-}
-
 // Convert incoming item rows into schema-compliant order item subdocuments.
 // `preserveIds` is used in update flow so existing line-item `_id` values survive edits.
 function mapSaleOrderItems(
   items = [],
-  { preserveIds = false, taxType = "igst" } = {},
+  { preserveIds = false, calculatedItems = [] } = {},
 ) {
-  return items.map((row) => {
+  return items.map((row, index) => {
     const alternateFields = normalizeAlternateUnitFields(row);
 
     return {
@@ -429,7 +367,7 @@ function mapSaleOrderItems(
         Number(firstDefined(row?.discountAmount, row?.discount_amount)) || 0,
       // Client monetary amounts are previews only. Rebuild every derived value
       // from the commercial inputs and the server-resolved tax snapshot.
-      ...calculateSaleOrderItemAmounts(row, taxType),
+      ...calculatedItems[index],
       price_level_id: row?.priceLevel || row?.price_level_id || null,
       initial_price_source:
         row?.initialPriceSource || row?.initial_price_source || null,
@@ -441,82 +379,23 @@ function mapSaleOrderItems(
 
 // Normalize additional charges and fix known legacy typo:
 // `substract` -> `subtract`
-function mapAdditionalCharges(
-  additionalCharges = [],
-  taxType = "igst",
-  { preserveIds = false } = {},
-) {
-  return additionalCharges.map((charge) => {
-    const normalizedCharge = {
-      additional_charge_id: firstDefined(
-        charge?.additional_charge_id,
-        charge?.additionalChargeId,
-        charge?.charge_master_id,
-        charge?.chargeMasterId,
-      ),
-      option: charge?.option || charge?.name || "",
-      value: Number(charge?.value) || 0,
-      action:
-        charge?.action === "substract" ? "subtract" : charge?.action || "add",
-      igst: Number(firstDefined(charge?.rates?.igst, charge?.igst, taxType === "igst" ? firstDefined(charge?.taxPercentage, charge?.tax_percentage) : 0)) || 0,
-      cgst:
-        Number(
-          firstDefined(
-            charge?.rates?.cgst,
-            charge?.cgst,
-            taxType === "cgst_sgst"
-              ? (Number(firstDefined(charge?.taxPercentage, charge?.tax_percentage)) || 0) /
-                  2
-              : 0
-          )
-        ) || 0,
-      sgst:
-        Number(
-          firstDefined(
-            charge?.rates?.sgst,
-            charge?.sgst,
-            taxType === "cgst_sgst"
-              ? (Number(firstDefined(charge?.taxPercentage, charge?.tax_percentage)) || 0) /
-                  2
-              : 0
-          )
-        ) || 0,
-      cess: Number(firstDefined(charge?.rates?.cess, charge?.cess)) || 0,
-      addl_cess:
-        Number(firstDefined(charge?.rates?.addl_cess, charge?.addl_cess, charge?.addlCess)) || 0,
-      state_cess: Number(firstDefined(charge?.rates?.state_cess, charge?.state_cess, charge?.stateCess)) || 0,
-      hsn: charge?.hsn || null,
-    };
-
-    const igstAmount =
-      taxType === "igst"
-        ? roundMoney(normalizedCharge.value * (normalizedCharge.igst / 100))
-        : 0;
-    const cgstAmount =
-      taxType === "cgst_sgst"
-        ? roundMoney(normalizedCharge.value * (normalizedCharge.cgst / 100))
-        : 0;
-    const sgstAmount =
-      taxType === "cgst_sgst"
-        ? roundMoney(normalizedCharge.value * (normalizedCharge.sgst / 100))
-        : 0;
-
-    return {
-      _id:
-        preserveIds && charge?._id
-          ? charge._id
-          : new mongoose.Types.ObjectId(),
-      ...normalizedCharge,
-      igst_amount: igstAmount,
-      cgst_amount: cgstAmount,
-      sgst_amount: sgstAmount,
-      tax_amount: roundMoney(igstAmount + cgstAmount + sgstAmount),
-      cess_amount: 0,
-      addl_cess_amount: 0,
-      state_cess_amount: 0,
-      final_value: roundMoney(normalizedCharge.value + igstAmount + cgstAmount + sgstAmount),
-    };
-  });
+function mapAdditionalCharges(additionalCharges = [], { preserveIds = false, calculatedCharges = [] } = {}) {
+  return additionalCharges.map((charge, index) => ({
+    _id: preserveIds && charge?._id ? charge._id : new mongoose.Types.ObjectId(),
+    additional_charge_id: firstDefined(charge?.additional_charge_id, charge?.additionalChargeId, charge?.charge_master_id, charge?.chargeMasterId),
+    option: charge?.option || charge?.name || "",
+    value: Number(charge?.value) || 0,
+    action: charge?.action === "substract" ? "subtract" : charge?.action || "add",
+    igst: Number(firstDefined(charge?.rates?.igst, charge?.igst)) || 0,
+    cgst: Number(firstDefined(charge?.rates?.cgst, charge?.cgst)) || 0,
+    sgst: Number(firstDefined(charge?.rates?.sgst, charge?.sgst)) || 0,
+    cess: Number(firstDefined(charge?.rates?.cess, charge?.cess)) || 0,
+    addl_cess: Number(firstDefined(charge?.rates?.addl_cess, charge?.addl_cess)) || 0,
+    state_cess: Number(firstDefined(charge?.rates?.state_cess, charge?.state_cess)) || 0,
+    hsn: charge?.hsn || null,
+    // Signed amounts come from the same calculation used by document totals.
+    ...calculatedCharges[index],
+  }));
 }
 
 // Convert UI dispatch object into backend snake_case schema fields.
@@ -531,11 +410,6 @@ function mapDespatchDetails(despatchDetails = {}) {
     terms_of_pay: despatchDetails?.termsOfPay || null,
     terms_of_delivery: despatchDetails?.termsOfDelivery || null,
   };
-}
-
-// Keep currency math consistent to 2 decimals where tax split is derived.
-function roundMoney(value) {
-  return Math.round((Number(value) || 0) * 100) / 100;
 }
 
 function withLegacySaleOrderItemUnitFields(item = {}) {
@@ -561,32 +435,20 @@ export function addLegacySaleOrderUnitFields(saleOrder = null) {
 
 // Canonical totals builder used by both create and update flows.
 // We recalculate on server side from items/charges to avoid trusting client math.
-export function buildSaleOrderTotals(body = {}) {
-  const calculatedTotals = calculateSaleOrderTotals(
-    body.items || [],
-    body.additionalCharges || [],
-    body.discounts || null,
-    normalizeTaxType(body)
+export function buildSaleOrderTotals(body = {}, calculation = null) {
+  const calculatedTotals = calculation?.totals || calculateSaleOrderTotals(
+    body.items || [], body.additionalCharges || [], body.discounts || null, normalizeTaxType(body)
   );
-  const normalizedTotals = normalizeTotals(body);
-  const taxType = normalizeTaxType(body);
-  const totalIgstAmt =
-    taxType === "igst" ? calculatedTotals.totalTax : 0;
-  const splitTaxAmount =
-    taxType === "cgst_sgst"
-      ? roundMoney(calculatedTotals.totalTax / 2)
-      : 0;
-
   return {
     sub_total: calculatedTotals.subtotal,
     total_discount: calculatedTotals.totalDiscount,
     taxable_amount: calculatedTotals.taxableAmount,
     total_tax_amount: calculatedTotals.totalTax,
-    total_igst_amt: totalIgstAmt,
-    total_cgst_amt: splitTaxAmount,
-    total_sgst_amt: splitTaxAmount,
-    total_cess_amt: roundMoney(calculatedTotals.totalCess),
-    total_addl_cess_amt: roundMoney(calculatedTotals.totalAddlCess),
+    total_igst_amt: calculatedTotals.totalIgst,
+    total_cgst_amt: calculatedTotals.totalCgst,
+    total_sgst_amt: calculatedTotals.totalSgst,
+    total_cess_amt: calculatedTotals.totalCess,
+    total_addl_cess_amt: calculatedTotals.totalAddlCess,
     item_total: calculatedTotals.itemTotal,
     total_additional_charge: calculatedTotals.totalAdditionalCharge,
     total_additional_charge_tax_amount:
@@ -604,7 +466,8 @@ export function buildSaleOrderTotals(body = {}) {
     total_additional_charge_state_cess_amt:
       calculatedTotals.totalAdditionalChargeStateCess,
     amount_with_additional_charge: calculatedTotals.amountWithAdditionalCharge,
-    round_off: normalizedTotals.roundOff || 0,
+    // No whole-rupee adjustment is applied to final_amount.
+    round_off: 0,
     final_amount: calculatedTotals.grandTotal,
   };
 }
@@ -714,7 +577,8 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
   const priceLevelObject = normalizePriceLevelObject(body);
   // Validate all commercial inputs and derived totals before mapping any
   // number into a schema field, so invalid values cannot become zero.
-  const calculatedTotals = buildSaleOrderTotals(body);
+  const calculation = calculateSaleOrderDocument(items, additionalCharges, body.discounts || null, normalizeTaxType(body));
+  const calculatedTotals = buildSaleOrderTotals(body, calculation);
 
   return {
     // Ownership + voucher identity
@@ -748,10 +612,10 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
     price_level_id: priceLevelObject?._id || null,
     price_level_name: priceLevelObject?.pricelevel || priceLevelObject?.name || null,
     // Monetary details
-    items: mapSaleOrderItems(items, { taxType: normalizeTaxType(body) }),
+    items: mapSaleOrderItems(items, { calculatedItems: calculation.items }),
     additional_charges: mapAdditionalCharges(
       additionalCharges,
-      normalizeTaxType(body)
+      { calculatedCharges: calculation.charges }
     ),
     despatch_details: mapDespatchDetails(despatchDetails),
     totals: calculatedTotals,
@@ -777,7 +641,8 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
   const party = data.party || null;
   // Calculate first because the item mapper preserves legacy field aliases.
   // This guard prevents an invalid alias value from being coerced to zero.
-  const calculatedTotals = buildSaleOrderTotals(data);
+  const calculation = calculateSaleOrderDocument(data.items || [], data.additionalCharges || [], data.discounts || null, normalizeTaxType(data));
+  const calculatedTotals = buildSaleOrderTotals(data, calculation);
 
   saleOrder.date = new Date(data.transactionDate);
   if (party?._id) {
@@ -805,12 +670,11 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
     priceLevelObject?.pricelevel || priceLevelObject?.name || null;
   saleOrder.items = mapSaleOrderItems(data.items || [], {
     preserveIds: true,
-    taxType: normalizeTaxType(data),
+    calculatedItems: calculation.items,
   });
   saleOrder.additional_charges = mapAdditionalCharges(
     data.additionalCharges || [],
-    normalizeTaxType(data),
-    { preserveIds: true },
+    { preserveIds: true, calculatedCharges: calculation.charges },
   );
   saleOrder.despatch_details = mapDespatchDetails(data.despatchDetails || {});
   saleOrder.totals = calculatedTotals;

@@ -865,6 +865,52 @@ describe("POST /api/sale-orders — DB side effects (assert after valid create)"
 });
 
 describe("POST /api/sale-orders — Totals behaviour", () => {
+  it("persists reconciled GST, signed charges and totals on create and edit", async () => {
+    const charge = await AdditionalCharges.create({
+      cmp_id: baseContext.companyId,
+      Primary_user_id: baseContext.userId,
+      additional_charge_id: `ROUND-${new mongoose.Types.ObjectId()}`,
+      name: "Rounding charge",
+      igst: 18, cgst: 9, sgst: 9,
+    });
+    const item = {
+      id: String(baseContext.product._id), name: "Small item",
+      baseUnit: "pcs", selectedUnit: "pcs",
+      actualQty: 1, billedQty: 1, rate: 0.06,
+      discountType: "percentage", discountPercentage: 0,
+    };
+    const created = await createSaleOrderForTest({
+      items: [item],
+      additionalCharges: [{ additionalChargeId: String(charge._id), action: "subtract", value: 0.01 }],
+    });
+    const saved = await SaleOrder.findById(created.body.data.saleOrder._id).lean();
+    expect(saved.items[0]).toMatchObject({
+      taxable_amount: 0.06, cgst_amount: 0.01, sgst_amount: 0.01,
+      tax_amount: 0.02, total_amount: 0.08,
+    });
+    expect(saved.additional_charges[0]).toMatchObject({
+      action: "subtract", value: 0.01, final_value: -0.01,
+    });
+    expect(saved.totals.total_tax_amount).toBe(saved.totals.total_cgst_amt + saved.totals.total_sgst_amt);
+    expect(saved.totals.final_amount).toBe(0.07);
+
+    const response = await updateSaleOrderRequest(saved._id, {
+      transactionDate: "2026-06-29T00:00:00.000Z",
+      items: [buildSavedItemUpdate(saved.items[0], { rate: 0.07 })],
+      additionalCharges: [{
+        _id: String(saved.additional_charges[0]._id),
+        additionalChargeId: String(charge._id), action: "subtract", value: 0.01,
+      }],
+    });
+    expect(response.status).toBe(200);
+    const updated = await SaleOrder.findById(saved._id).lean();
+    expect(updated.items[0].total_amount).toBe(0.09);
+    expect(updated.additional_charges[0].final_value).toBe(-0.01);
+    expect(updated.totals.final_amount).toBe(0.08);
+    expect(updated.totals.item_total).toBe(updated.items[0].total_amount);
+    expect(updated.totals.total_additional_charge).toBe(updated.additional_charges[0].final_value);
+  });
+
   it("Send deliberately wrong client totals → saved document totals must match server-recomputed values, not client values", async () => {
     const res = await createSaleOrderForTest({
       totals: {
@@ -883,6 +929,7 @@ describe("POST /api/sale-orders — Totals behaviour", () => {
     expect(saleOrder.totals.sub_total).toBe(200);
     expect(saleOrder.totals.total_tax_amount).toBe(36);
     expect(saleOrder.totals.final_amount).toBe(236);
+    expect(saleOrder.totals.round_off).toBe(0);
     expect(saleOrder.totals.final_amount).not.toBe(5555);
   });
 
