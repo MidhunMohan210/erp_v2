@@ -1,4 +1,5 @@
 import { createSlice } from "@reduxjs/toolkit";
+import Decimal from "decimal.js";
 import {
   calculateAdditionalChargeAmounts,
   calculateAdditionalChargeTotals,
@@ -129,6 +130,9 @@ function recalculateTotals(state) {
     state.taxType,
   );
   state.additionalCharges = chargeTotals.rows;
+  const finalAmount = new Decimal(itemTotals.itemTotal)
+    .plus(chargeTotals.totalAdditionalCharge)
+    .toNumber();
 
   state.totals = {
     ...itemTotals,
@@ -143,9 +147,8 @@ function recalculateTotals(state) {
       chargeTotals.totalAdditionalChargeAddlCessAmt,
     totalAdditionalChargeStateCessAmt:
       chargeTotals.totalAdditionalChargeStateCessAmt,
-    amountWithAdditionalCharge:
-      itemTotals.itemTotal + chargeTotals.totalAdditionalCharge,
-    finalAmount: itemTotals.itemTotal + chargeTotals.totalAdditionalCharge,
+    amountWithAdditionalCharge: finalAmount,
+    finalAmount,
   };
 }
 

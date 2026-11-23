@@ -257,9 +257,6 @@ export default function AdditionalChargesSection() {
                       <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
                         Tax split: IGST {formatCurrency(selected.igstAmount)} · CGST {formatCurrency(selected.cgstAmount)} · SGST {formatCurrency(selected.sgstAmount)}
                       </div>
-                      <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                        Other cess: Cess {formatCurrency(selected.cessAmount)} · Addl. {formatCurrency(selected.addlCessAmount)} · State {formatCurrency(selected.stateCessAmount)}
-                      </div>
                       <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2 text-[11px] font-semibold text-slate-700 md:col-span-2">
                         Final impact: {formatCurrency(selected.finalValue)}
                       </div>

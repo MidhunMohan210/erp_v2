@@ -7,7 +7,7 @@
     "dev": "vite --host",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test tests/idempotentSubmissionStorage.test.js",
+    "test": "node --test tests/idempotentSubmissionStorage.test.js tests/additionalChargeCess.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -20,6 +20,7 @@
     "axios": "^1.13.6",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "decimal.js": "10.6.0",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.577.0",
