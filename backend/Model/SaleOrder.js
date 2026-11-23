@@ -75,6 +75,18 @@ const SaleOrderSchema = new Schema(
     // Create-only idempotency identity. Historical orders can omit this.
     request_id: { type: String, trim: true, maxlength: 128, default: null },
     request_fingerprint: { type: String, default: null },
+    // Stable device identity for one offline draft. UUID casing is normalized
+    // before save so the unique index cannot treat the same UUID as two values.
+    offline_voucher_id: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: null,
+      match: /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    },
+    creation_source: { type: String, enum: ["online", "offline"], default: "online" },
+    offline_created_at: { type: Date, default: null },
+    synced_at: { type: Date, default: null },
 
     // Voucher identity
     // Stored identity fields allow deterministic reconstruction of voucher number history.
@@ -155,6 +167,15 @@ SaleOrderSchema.index(
   {
     unique: true,
     partialFilterExpression: { request_id: { $type: "string" } },
+  },
+);
+SaleOrderSchema.index(
+  { cmp_id: 1, offline_voucher_id: 1 },
+  {
+    name: "sale_order_company_offline_voucher_unique",
+    unique: true,
+    // Existing online and historical orders store null or omit the field.
+    partialFilterExpression: { offline_voucher_id: { $type: "string" } },
   },
 );
 SaleOrderSchema.index({ cmp_id: 1, company_level_serial_number: 1 }, { unique: true });

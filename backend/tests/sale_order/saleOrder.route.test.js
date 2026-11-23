@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { createHash, randomUUID } from "node:crypto";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -264,6 +265,18 @@ function verifySaleOrderByRequestId(requestId, payload) {
     .send({ payload });
 }
 
+function reconcileSaleOrderIdentity(
+  body,
+  token = baseContext.token,
+  companyId = baseContext.companyId,
+) {
+  return request(app)
+    .post("/api/sale-orders/reconcile")
+    .set("Authorization", `Bearer ${token}`)
+    .query({ cmp_id: String(companyId) })
+    .send(body);
+}
+
 async function createSaleOrderForTest(overrides = {}) {
   const payload = buildValidSaleOrderPayload(
     baseContext.party._id,
@@ -461,7 +474,635 @@ describe("POST /api/sale-orders — Auth & middleware", () => {
   });
 });
 
+describe("POST /api/sale-orders — structured Create errors", () => {
+  function expectCreateError(response, status, code, category, submissionOutcome = "definite_rejection") {
+    expect(response.status).toBe(status);
+    expect(response.body).toMatchObject({
+      success: false,
+      code,
+      category,
+      submission_outcome: submissionOutcome,
+    });
+    expect(typeof response.body.message).toBe("string");
+  }
+
+  it("reports unavailable customer, product, charge, and series as correctable", async () => {
+    const customer = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    customer.party._id = String(new mongoose.Types.ObjectId());
+    expectCreateError(await postSaleOrder(baseContext.token, customer), 400,
+      "SALE_ORDER_CUSTOMER_UNAVAILABLE", "user_correctable");
+
+    const product = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      creation_source: "offline", offline_created_at: "2026-06-28T10:30:00.000Z",
+      offline_voucher_id: randomUUID(),
+    });
+    product.items[0].id = String(new mongoose.Types.ObjectId());
+    expectCreateError(await postSaleOrder(baseContext.token, product), 400,
+      "SALE_ORDER_PRODUCT_UNAVAILABLE", "user_correctable");
+
+    const charge = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      additionalCharges: [{ additionalChargeId: String(new mongoose.Types.ObjectId()), action: "add", value: 10 }],
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, charge), 400,
+      "SALE_ORDER_CHARGE_UNAVAILABLE", "user_correctable");
+
+    const series = buildValidSaleOrderPayload(baseContext.party._id, new mongoose.Types.ObjectId());
+    expectCreateError(await postSaleOrder(baseContext.token, series), 404,
+      "SALE_ORDER_SERIES_UNAVAILABLE", "user_correctable");
+  });
+
+  it("classifies invalid editable values as a definite rejection", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    payload.items[0].rate = "bad-rate";
+    expectCreateError(await postSaleOrder(baseContext.token, payload), 400,
+      "SALE_ORDER_INVALID_VALUES", "user_correctable");
+  });
+
+  it("routes derived values and malformed charge metadata to manual review", async () => {
+    const derivedTax = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    derivedTax.items[0].taxRate = "invalid-master-tax";
+    expectCreateError(await postSaleOrder(baseContext.token, derivedTax), 400,
+      "SALE_ORDER_DERIVED_VALUES_INVALID", "manual_review");
+
+    const derivedUnit = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    derivedUnit.items[0].alternateUnit = "Box";
+    derivedUnit.items[0].baseDenominator = 0;
+    expectCreateError(await postSaleOrder(baseContext.token, derivedUnit), 400,
+      "SALE_ORDER_DERIVED_VALUES_INVALID", "manual_review");
+
+    const invalidChargeList = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      additionalCharges: { value: 10 },
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, invalidChargeList), 400,
+      "SALE_ORDER_METADATA_INVALID", "manual_review");
+
+    const invalidChargeId = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      additionalCharges: [{ additionalChargeId: "not-an-id", action: "add", value: 10 }],
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, invalidChargeId), 400,
+      "SALE_ORDER_METADATA_INVALID", "manual_review");
+
+    const missingSeriesIdentity = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      selectedSeries: { seriesName: "Primary Sale Order Series" },
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, missingSeriesIdentity), 400,
+      "SALE_ORDER_METADATA_INVALID", "manual_review");
+  });
+
+  it("classifies invalid identity and corrupt offline metadata for manual review", async () => {
+    const identity = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      request_id: "",
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, identity), 400,
+      "SALE_ORDER_REQUEST_ID_INVALID", "manual_review");
+
+    const metadata = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      creation_source: "offline", offline_created_at: "invalid", offline_voucher_id: randomUUID(),
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, metadata), 400,
+      "SALE_ORDER_METADATA_INVALID", "manual_review");
+
+    const corruptItem = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      items: [null],
+    });
+    expectCreateError(await postSaleOrder(baseContext.token, corruptItem), 400,
+      "SALE_ORDER_METADATA_INVALID", "manual_review");
+  });
+
+  it("preserves request ID conflict details and marks it for manual review", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    const conflict = await postSaleOrder(baseContext.token, { ...payload, narration: "changed" });
+    expectCreateError(conflict, 409, "SALE_ORDER_REQUEST_ID_CONFLICT", "manual_review");
+    expect(conflict.body.conflict).toEqual({ conflict_type: "request_id" });
+  });
+
+  it("preserves offline voucher conflicts and marks them for manual review", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      creation_source: "offline", offline_created_at: "2026-06-28T10:30:00.000Z",
+      offline_voucher_id: randomUUID(),
+    });
+    payload.items[0].cessRate = 0;
+    payload.items[0].addlCessRate = 0;
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    const conflict = await postSaleOrder(baseContext.token, {
+      ...payload, request_id: "different-request-id",
+    });
+    expectCreateError(conflict, 409, "SALE_ORDER_OFFLINE_VOUCHER_CONFLICT", "manual_review");
+    expect(conflict.body.conflict).toEqual({
+      conflict_type: "offline_voucher_id",
+      offline_voucher_id: payload.offline_voucher_id,
+    });
+  });
+
+  it("classifies authentication and company permission failures as access required", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    const unauthenticated = await request(app).post("/api/sale-orders").send(payload);
+    expectCreateError(unauthenticated, 401, "SALE_ORDER_ACCESS_REQUIRED", "access_required");
+    expect(unauthenticated.body.pre_create_auth_rejected).toBe(true);
+    const invalidToken = await postSaleOrder("invalid-token", payload);
+    expectCreateError(invalidToken, 401, "SALE_ORDER_ACCESS_REQUIRED", "access_required");
+    expect(invalidToken.body.pre_create_auth_rejected).toBe(true);
+    const forbidden = await postSaleOrder(baseContext.token, { ...payload, cmp_id: String(new mongoose.Types.ObjectId()) });
+    expectCreateError(forbidden, 403, "SALE_ORDER_ACCESS_REQUIRED", "access_required");
+    expect(forbidden.body.pre_create_auth_rejected).toBeUndefined();
+  });
+
+  it("reports disabled offline synchronization as unavailable", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+        creation_source: "offline", offline_created_at: "2026-06-28T10:30:00.000Z",
+        offline_voucher_id: randomUUID(),
+      });
+      expectCreateError(await postSaleOrder(baseContext.token, payload), 403,
+        "SALE_ORDER_OFFLINE_SYNC_DISABLED", "system_unavailable");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("sanitizes an unexpected transaction failure and marks outcome unknown", async () => {
+    vi.spyOn(voucherTimelineService, "createVoucherTimelineEntry")
+      .mockRejectedValueOnce(new Error("private database diagnostics"));
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    const response = await postSaleOrder(baseContext.token, payload);
+    expectCreateError(response, 500, "SALE_ORDER_UNKNOWN_FAILURE", "unknown_outcome", "unknown_outcome");
+    expect(response.body.message).not.toContain("private database diagnostics");
+    expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(0);
+  });
+});
+
 describe("POST /api/sale-orders — Business logic", () => {
+  function offlinePayload(overrides = {}) {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      creation_source: "offline",
+      offline_created_at: "2026-06-28T10:30:00.000Z",
+      offline_voucher_id: randomUUID(),
+      ...overrides,
+    });
+    payload.items = payload.items.map((item) => ({ ...item, cessRate: 2, addlCessRate: 1 }));
+    return payload;
+  }
+
+  it("preserves offline item and charge tax snapshots after masters change", async () => {
+    const charge = await AdditionalCharges.create({
+      cmp_id: baseContext.companyId, Primary_user_id: baseContext.userId,
+      additional_charge_id: `SO-OFFLINE-${new mongoose.Types.ObjectId()}`,
+      name: "Freight", igst: 18, cgst: 9, sgst: 9,
+    });
+    const payload = offlinePayload({ synced_at: "2000-01-01T00:00:00.000Z", additionalCharges: [{
+      additionalChargeId: String(charge._id), option: "Original Freight",
+      action: "add", value: 10, igst: 5, cgst: 2.5, sgst: 2.5,
+      cess: 1, addl_cess: 0, state_cess: 0,
+    }] });
+    await Product.updateOne({ _id: baseContext.product._id }, { $set: {
+      igst: 28, cess: 7, addl_cess: 4, is_deleted: true,
+    } });
+    await AdditionalCharges.updateOne({ _id: charge._id }, { $set: { igst: 28, cgst: 14, sgst: 14 } });
+    const response = await postSaleOrder(baseContext.token, payload);
+    expect(response.status).toBe(201);
+    const saved = response.body.data.saleOrder;
+    expect(saved).toMatchObject({ creation_source: "offline", tax_type: "igst",
+      offline_voucher_id: payload.offline_voucher_id,
+      date: payload.transactionDate, offline_created_at: payload.offline_created_at });
+    expect(saved.request_fingerprint).toMatch(/^v4:/);
+    expect(saved.items[0]).toMatchObject({ rate: 100, tax_rate: 18,
+      cess_rate: 2, addl_cess_rate: 1, tax_inclusive: false });
+    expect(saved.additional_charges[0]).toMatchObject({ option: "Original Freight",
+      igst: 5, cgst: 2.5, sgst: 2.5, cess: 1, igst_amount: 0.5,
+      cess_amount: 0, final_value: 10.5 });
+    expect(saved.items[0]).toMatchObject({ igst_amount: 36, cess_amount: 4,
+      addl_cess_amount: 2, total_amount: 242 });
+    expect(saved.totals).toMatchObject({ final_amount: 252.5,
+      total_additional_charge_tax_amount: 0.5, total_additional_charge_cess_amt: 0 });
+    expect(saved.synced_at).toBeTruthy();
+    expect(saved.synced_at).not.toBe(payload.synced_at);
+    const replay = await postSaleOrder(baseContext.token, payload);
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.saleOrder.synced_at).toBe(saved.synced_at);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      additionalCharges: [{ ...payload.additionalCharges[0], igst: 6 }],
+    })).status).toBe(409);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      offline_created_at: "2026-06-28T10:31:00.000Z",
+    })).status).toBe(409);
+    expect((await getSaleOrderByRequestId(payload.request_id)).body.data).toMatchObject({
+      creation_source: "offline", offline_created_at: payload.offline_created_at,
+      synced_at: saved.synced_at,
+    });
+    expect((await verifySaleOrderByRequestId(payload.request_id, payload)).body.data).toMatchObject({
+      outcome: "matched", creation_source: "offline", synced_at: saved.synced_at,
+    });
+    expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+    expect(await VoucherTimeline.countDocuments({ voucher_id: saved._id })).toBe(1);
+    const series = await VoucherSeries.findOne({ cmp_id: baseContext.companyId, voucherType: "saleOrder" }).lean();
+    expect(series.series.find((entry) => String(entry._id) === String(baseContext.series.seriesId)).currentNumber).toBe(2);
+  });
+
+  it("rejects a corrected submission with a new request ID for the same offline voucher", async () => {
+    const payload = offlinePayload({ request_id: "offline-original-request" });
+    const created = await postSaleOrder(baseContext.token, payload);
+    const corrected = {
+      ...payload,
+      request_id: "offline-corrected-request",
+      narration: "Corrected after the first sync response",
+    };
+
+    const response = await postSaleOrder(baseContext.token, corrected);
+
+    expect(created.status).toBe(201);
+    expect(response.status).toBe(409);
+    expect(response.body).toMatchObject({
+      success: false,
+      code: "SALE_ORDER_OFFLINE_VOUCHER_CONFLICT",
+      conflict: {
+        conflict_type: "offline_voucher_id",
+        offline_voucher_id: payload.offline_voucher_id,
+      },
+    });
+    expect(await SaleOrder.countDocuments({
+      cmp_id: baseContext.companyId,
+      offline_voucher_id: payload.offline_voucher_id,
+    })).toBe(1);
+    expect(await VoucherTimeline.countDocuments({
+      cmp_id: baseContext.companyId,
+      voucher_type: "saleOrder",
+    })).toBe(1);
+    const series = await VoucherSeries.findOne({
+      cmp_id: baseContext.companyId,
+      voucherType: "saleOrder",
+    }).lean();
+    expect(series.series.find((entry) =>
+      String(entry._id) === String(baseContext.series.seriesId)).currentNumber).toBe(2);
+  });
+
+  it("serializes concurrent request IDs for one offline voucher", async () => {
+    const offlineVoucherId = randomUUID();
+    const firstPayload = offlinePayload({
+      request_id: "offline-concurrent-a",
+      offline_voucher_id: offlineVoucherId,
+    });
+    const secondPayload = {
+      ...firstPayload,
+      request_id: "offline-concurrent-b",
+    };
+
+    const responses = await Promise.all([
+      postSaleOrder(baseContext.token, firstPayload),
+      postSaleOrder(baseContext.token, secondPayload),
+    ]);
+
+    expect(responses.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect(responses.find((response) => response.status === 409)?.body.code)
+      .toBe("SALE_ORDER_OFFLINE_VOUCHER_CONFLICT");
+    expect(await SaleOrder.countDocuments({
+      cmp_id: baseContext.companyId,
+      offline_voucher_id: offlineVoucherId,
+    })).toBe(1);
+    expect(await VoucherTimeline.countDocuments({
+      cmp_id: baseContext.companyId,
+      voucher_type: "saleOrder",
+    })).toBe(1);
+    const counters = await TransactionCounter.find({
+      cmp_id: baseContext.companyId,
+      transaction_type: "saleOrder",
+    }).lean();
+    expect(counters.map((counter) => counter.sequence_value)).toEqual([1, 1]);
+  });
+
+  it("scopes offline voucher identity to the company", async () => {
+    const offlineVoucherId = randomUUID();
+    const requestId = "company-scoped-offline-request";
+    expect((await postSaleOrder(baseContext.token, offlinePayload({
+      request_id: requestId,
+      offline_voucher_id: offlineVoucherId,
+    }))).status).toBe(201);
+
+    const otherCompany = await createOwnedCompany(
+      baseContext.token,
+      "Fetch Scope Company",
+    );
+    const otherAccountGroup = await createAccountGroup({
+      cmp_id: otherCompany.companyId,
+      Primary_user_id: baseContext.userId,
+      accountGroup: "Sundry Debtors",
+      accountGroup_id: `AG-SO-${new mongoose.Types.ObjectId()}`,
+    });
+    const otherParty = await createTestParty({
+      cmp_id: otherCompany.companyId,
+      Primary_user_id: baseContext.userId,
+      accountGroup: otherAccountGroup._id,
+      created_by: baseContext.userId,
+      partyName: "Other Company Customer",
+      state: "Kerala",
+    });
+    const otherProduct = (await createProductMasters("Other Company Product", {
+      cmp_id: otherCompany.companyId,
+      Primary_user_id: baseContext.userId,
+      igst: 18,
+      cgst: 9,
+      sgst: 9,
+    })).product;
+    const otherSeries = await createTestSeries(otherCompany.companyId, "saleOrder");
+    const otherPayload = offlinePayload({
+      request_id: requestId,
+      cmp_id: String(otherCompany.companyId),
+      offline_voucher_id: offlineVoucherId,
+      selectedSeries: {
+        _id: String(otherSeries.seriesId),
+        seriesName: otherSeries.seriesName,
+      },
+      party: buildPartySelection(otherParty),
+      items: [{
+        ...offlinePayload().items[0],
+        id: String(otherProduct._id),
+        name: otherProduct.product_name,
+      }],
+    });
+
+    const response = await postSaleOrder(baseContext.token, otherPayload);
+
+    expect(response.status).toBe(201);
+    expect(await SaleOrder.countDocuments({
+      offline_voucher_id: offlineVoucherId,
+    })).toBe(2);
+    expect(await SaleOrder.countDocuments({ request_id: requestId })).toBe(2);
+    expect(await SaleOrder.countDocuments({
+      cmp_id: otherCompany.companyId,
+      offline_voucher_id: offlineVoucherId,
+    })).toBe(1);
+  });
+
+  it("reconciles both offline identities without exposing another creator's order", async () => {
+    const firstStaff = await createOwnedStaffUser({
+      owner: baseContext.userId,
+      userName: "Offline Sync Staff A",
+      email: "offline-sync-a@example.com",
+      mobileNumber: "9333333331",
+    });
+    const secondStaff = await createOwnedStaffUser({
+      owner: baseContext.userId,
+      userName: "Offline Sync Staff B",
+      email: "offline-sync-b@example.com",
+      mobileNumber: "9333333332",
+    });
+    const [firstLogin, secondLogin] = await Promise.all([
+      request(app).post("/api/auth/Login").send({
+        identifier: firstStaff.email,
+        password: "Password123",
+      }),
+      request(app).post("/api/auth/Login").send({
+        identifier: secondStaff.email,
+        password: "Password123",
+      }),
+    ]);
+    const payload = offlinePayload({ request_id: "offline-reconcile-request" });
+    expect((await postSaleOrder(firstLogin.body.token, payload)).status).toBe(201);
+
+    const matched = await reconcileSaleOrderIdentity({
+      request_id: payload.request_id,
+      offline_voucher_id: payload.offline_voucher_id,
+      payload,
+    }, firstLogin.body.token);
+    expect(matched.body.data).toMatchObject({
+      outcome: "matched",
+      reason: "identity_and_fingerprint_match",
+      exists: true,
+      request_may_be_in_flight: false,
+      request_id: payload.request_id,
+      offline_voucher_id: payload.offline_voucher_id,
+    });
+
+    const conflicting = await reconcileSaleOrderIdentity({
+      request_id: "offline-reconcile-corrected",
+      offline_voucher_id: payload.offline_voucher_id,
+      payload: { ...payload, request_id: "offline-reconcile-corrected" },
+    }, firstLogin.body.token);
+    expect(conflicting.body.data).toMatchObject({
+      outcome: "conflicting",
+      reason: "identity_mismatch",
+    });
+
+    const unverifiable = await reconcileSaleOrderIdentity({
+      request_id: payload.request_id,
+      offline_voucher_id: payload.offline_voucher_id,
+      payload: {
+        request_id: payload.request_id,
+        offline_voucher_id: payload.offline_voucher_id,
+      },
+    }, firstLogin.body.token);
+    expect(unverifiable.body.data).toMatchObject({
+      outcome: "unverifiable",
+      reason: "payload_cannot_be_fingerprinted",
+      exists: true,
+    });
+
+    const saleOrderCountBeforeHidden = await SaleOrder.countDocuments();
+    const timelineCountBeforeHidden = await VoucherTimeline.countDocuments();
+    const hidden = await reconcileSaleOrderIdentity({
+      request_id: payload.request_id,
+      offline_voucher_id: payload.offline_voucher_id,
+      payload,
+    }, secondLogin.body.token);
+    expect(hidden.status).toBe(200);
+    expect(hidden.body.data).toEqual({
+      outcome: "unverifiable",
+      reason: "identity_not_visible_in_creator_scope",
+      exists: false,
+      transaction_type: "sale_order",
+      request_may_be_in_flight: true,
+    });
+    expect(await SaleOrder.countDocuments()).toBe(saleOrderCountBeforeHidden);
+    expect(await VoucherTimeline.countDocuments()).toBe(timelineCountBeforeHidden);
+
+    const missing = await reconcileSaleOrderIdentity({
+      request_id: "offline-reconcile-missing",
+      offline_voucher_id: randomUUID(),
+      payload,
+    }, firstLogin.body.token);
+    expect(missing.body.data).toMatchObject({
+      outcome: "not_found",
+      reason: "no_committed_order_found",
+      exists: false,
+      request_may_be_in_flight: true,
+    });
+  });
+
+  it("keeps reconciliation company-scoped without revealing or mutating another company's order", async () => {
+    const payload = offlinePayload({ request_id: "offline-company-scope-reconcile" });
+    const created = await postSaleOrder(baseContext.token, payload);
+    expect(created.status).toBe(201);
+    const otherCompany = await createOwnedCompany(
+      baseContext.token,
+      "Fetch Scope Company",
+    );
+    const saleOrderCount = await SaleOrder.countDocuments();
+    const timelineCount = await VoucherTimeline.countDocuments();
+    const body = {
+      request_id: payload.request_id,
+      offline_voucher_id: payload.offline_voucher_id,
+      payload,
+    };
+
+    const hidden = await reconcileSaleOrderIdentity(
+      body,
+      baseContext.token,
+      otherCompany.companyId,
+    );
+
+    expect(hidden.status).toBe(200);
+    expect(hidden.body.data).toEqual({
+      outcome: "not_found",
+      reason: "no_committed_order_found",
+      exists: false,
+      transaction_type: "sale_order",
+      request_may_be_in_flight: true,
+    });
+    expect(await SaleOrder.countDocuments()).toBe(saleOrderCount);
+    expect(await VoucherTimeline.countDocuments()).toBe(timelineCount);
+
+    const allowed = await reconcileSaleOrderIdentity(body);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.data).toMatchObject({
+      outcome: "matched",
+      exists: true,
+      request_id: payload.request_id,
+      offline_voucher_id: payload.offline_voucher_id,
+      id: created.body.data.saleOrder._id,
+    });
+  });
+
+  it("rejects missing offline masters and incomplete frozen taxes", async () => {
+    const missingProduct = offlinePayload();
+    missingProduct.items[0].id = String(new mongoose.Types.ObjectId());
+    expect((await postSaleOrder(baseContext.token, missingProduct)).status).toBe(400);
+    const missingTax = offlinePayload();
+    delete missingTax.items[0].taxRate;
+    expect((await postSaleOrder(baseContext.token, missingTax)).status).toBe(400);
+    const invalidCharge = offlinePayload({ additionalCharges: [{
+      additionalChargeId: String(new mongoose.Types.ObjectId()), action: "add",
+      value: 10, igst: 5, cgst: 2.5, sgst: 2.5,
+      cess: 0, addl_cess: 0, state_cess: 0,
+    }] });
+    expect((await postSaleOrder(baseContext.token, invalidCharge)).status).toBe(400);
+    const missingParty = offlinePayload();
+    await baseContext.party.deleteOne();
+    expect((await postSaleOrder(baseContext.token, missingParty)).status).toBe(400);
+    expect(await SaleOrder.countDocuments()).toBe(0);
+  });
+
+  it("requires a valid offline timestamp and rejects offline fields on Online Create", async () => {
+    expect((await postSaleOrder(baseContext.token, offlinePayload({ offline_created_at: "not-a-date" }))).status).toBe(400);
+    expect((await postSaleOrder(baseContext.token, offlinePayload({ offline_created_at: null }))).status).toBe(400);
+    const online = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      offline_created_at: "2026-06-28T10:30:00.000Z",
+    });
+    expect((await postSaleOrder(baseContext.token, online)).status).toBe(400);
+    expect((await postSaleOrder(baseContext.token, offlinePayload({
+      offline_voucher_id: "not-a-uuid",
+    }))).body.message).toBe("offline_voucher_id must be a valid UUID");
+    expect(await SaleOrder.countDocuments()).toBe(0);
+  });
+
+  it("keeps offline tax acceptance disabled in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const response = await postSaleOrder(baseContext.token, offlinePayload());
+      expect(response.status).toBe(403);
+      expect(await SaleOrder.countDocuments()).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps Online tax resolution and ignores a client-supplied sync timestamp", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      synced_at: "2000-01-01T00:00:00.000Z",
+    });
+    payload.items[0].taxRate = 5;
+    const response = await postSaleOrder(baseContext.token, payload);
+    expect(response.status).toBe(201);
+    expect(response.body.data.saleOrder).toMatchObject({
+      offline_voucher_id: null, creation_source: "online",
+      offline_created_at: null, synced_at: null,
+    });
+    expect(response.body.data.saleOrder.request_fingerprint).toMatch(/^v2:/);
+    expect(response.body.data.saleOrder.items[0].tax_rate).toBe(18);
+  });
+
+  it("keeps historical orders without offline_voucher_id replayable", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: "historical-sale-order" },
+    );
+    const created = await postSaleOrder(baseContext.token, payload);
+    await SaleOrder.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(created.body.data.saleOrder._id) },
+      { $unset: { offline_voucher_id: "" } },
+    );
+
+    const replay = await postSaleOrder(baseContext.token, payload);
+
+    expect(replay.status).toBe(200);
+    expect(replay.body.idempotent_replay).toBe(true);
+    expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+  });
+
+  it("declares the offline identity index as company-scoped and partial", () => {
+    const [, options] = SaleOrder.schema.indexes().find(
+      ([keys]) => keys.cmp_id === 1 && keys.offline_voucher_id === 1,
+    );
+
+    expect(options).toMatchObject({
+      name: "sale_order_company_offline_voucher_unique",
+      unique: true,
+      partialFilterExpression: { offline_voucher_id: { $type: "string" } },
+    });
+  });
+
+  it("enforces the offline voucher unique index in the isolated MongoDB", async () => {
+    const payload = offlinePayload({ request_id: "offline-index-original" });
+    const created = await postSaleOrder(baseContext.token, payload);
+    expect(created.status).toBe(201);
+
+    await SaleOrder.init();
+    const databaseIndex = (await SaleOrder.collection.indexes()).find(
+      (index) => index.name === "sale_order_company_offline_voucher_unique",
+    );
+    expect(databaseIndex).toMatchObject({
+      key: { cmp_id: 1, offline_voucher_id: 1 },
+      unique: true,
+      partialFilterExpression: { offline_voucher_id: { $type: "string" } },
+    });
+
+    const committed = await SaleOrder.findById(created.body.data.saleOrder._id).lean();
+    const duplicate = {
+      ...committed,
+      _id: new mongoose.Types.ObjectId(),
+      request_id: "offline-index-duplicate",
+      voucher_number: `${committed.voucher_number}-duplicate`,
+      company_level_serial_number: committed.company_level_serial_number + 100,
+      user_level_serial_number: committed.user_level_serial_number + 100,
+    };
+
+    let duplicateError = null;
+    try {
+      await SaleOrder.collection.insertOne(duplicate);
+    } catch (error) {
+      duplicateError = error;
+    }
+    expect(duplicateError).toMatchObject({ code: 11000 });
+    expect(duplicateError.message).toContain(
+      "sale_order_company_offline_voucher_unique",
+    );
+    expect(await SaleOrder.countDocuments({
+      cmp_id: baseContext.companyId,
+      offline_voucher_id: payload.offline_voucher_id,
+    })).toBe(1);
+  });
+
   it("finds a committed Sale Order by request ID without creating another order", async () => {
     const requestId = "sale-order-request-lookup";
     const created = await createSaleOrderForTest({ request_id: requestId });
@@ -488,11 +1129,45 @@ describe("POST /api/sale-orders — Business logic", () => {
     );
     await postSaleOrder(baseContext.token, payload);
 
-    expect((await verifySaleOrderByRequestId(payload.request_id, payload)).body.data.outcome).toBe("match");
+    expect((await verifySaleOrderByRequestId(payload.request_id, payload)).body.data.outcome).toBe("matched");
     expect((await verifySaleOrderByRequestId(payload.request_id, {
       ...payload,
       items: [{ ...payload.items[0], actualQty: 3, billedQty: 3 }],
-    })).body.data.outcome).toBe("conflict");
+    })).body.data.outcome).toBe("conflicting");
+  });
+
+  it("persists Narration and rejects a changed note for the same request ID", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: "sale-order-narration", narration: "Deliver before noon" },
+    );
+    const created = await postSaleOrder(baseContext.token, payload);
+    expect(created.status).toBe(201);
+    expect(created.body.data.saleOrder.narration).toBe("Deliver before noon");
+    expect(created.body.data.saleOrder.request_fingerprint).toMatch(/^v3:/);
+    expect((await verifySaleOrderByRequestId(payload.request_id, payload)).body.data.outcome).toBe("matched");
+    const changed = { ...payload, narration: "Deliver after noon" };
+    expect((await verifySaleOrderByRequestId(payload.request_id, changed)).body.data.outcome).toBe("conflicting");
+    expect((await postSaleOrder(baseContext.token, changed)).status).toBe(409);
+    const editPayload = { ...payload, narration: "Leave at reception" };
+    delete editPayload.request_id;
+    const updated = await updateSaleOrderRequest(created.body.data.saleOrder._id, editPayload);
+    expect(updated.status).toBe(200);
+    expect((await SaleOrder.findById(created.body.data.saleOrder._id).lean()).narration).toBe("Leave at reception");
+  });
+
+  it("keeps empty Narration compatible with existing v2 fingerprints", async () => {
+    const payload = buildValidSaleOrderPayload(
+      baseContext.party._id,
+      baseContext.series.seriesId,
+      { request_id: "sale-order-empty-narration" },
+    );
+    const created = await postSaleOrder(baseContext.token, payload);
+    expect(created.status).toBe(201);
+    expect(created.body.data.saleOrder.request_fingerprint).toMatch(/^v2:/);
+    expect((await verifySaleOrderByRequestId(payload.request_id, { ...payload, narration: "" })).body.data.outcome).toBe("matched");
+    expect((await verifySaleOrderByRequestId(payload.request_id, { ...payload, narration: "New note" })).body.data.outcome).toBe("conflicting");
   });
 
   it("creates a Sale Order and timeline with pending Tally status", async () => {
@@ -545,6 +1220,51 @@ describe("POST /api/sale-orders — Business logic", () => {
     expect(replay.body.data.saleOrder._id).toBe(first.body.data.saleOrder._id);
     expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
     expect(await VoucherTimeline.countDocuments({ voucher_id: first.body.data.saleOrder._id })).toBe(1);
+    const series = await VoucherSeries.findOne({ cmp_id: baseContext.companyId, voucherType: "saleOrder" }).lean();
+    expect(series.series.find((entry) => String(entry._id) === String(baseContext.series.seriesId)).currentNumber).toBe(2);
+    const counters = await TransactionCounter.find({ cmp_id: baseContext.companyId, transaction_type: "saleOrder" }).lean();
+    expect(counters.map((counter) => counter.sequence_value)).toEqual([1, 1]);
+  });
+
+  it("recovers a committed order after its create response is lost", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    await postSaleOrder(baseContext.token, payload); // Simulate a response the client never received.
+    const recovered = await postSaleOrder(baseContext.token, payload);
+    expect(recovered.status).toBe(200);
+    expect(recovered.body.idempotent_replay).toBe(true);
+    expect(await SaleOrder.countDocuments({ cmp_id: baseContext.companyId, request_id: payload.request_id })).toBe(1);
+    expect(await VoucherTimeline.countDocuments({ cmp_id: baseContext.companyId, voucher_type: "saleOrder" })).toBe(1);
+    const series = await VoucherSeries.findOne({ cmp_id: baseContext.companyId, voucherType: "saleOrder" }).lean();
+    expect(series.series.find((entry) => String(entry._id) === String(baseContext.series.seriesId)).currentNumber).toBe(2);
+  });
+
+  it("keeps unversioned fingerprints replayable without rewriting old orders", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId);
+    const created = await postSaleOrder(baseContext.token, payload);
+    expect(created.status).toBe(201);
+    // This is the exact field set hashed before versioned fingerprints existed.
+    const oldCanonicalOrder = {
+      cmp_id: String(baseContext.companyId), created_by: String(baseContext.userId),
+      voucher_type: "saleOrder", series_id: String(baseContext.series.seriesId),
+      date: "2026-06-29T00:00:00.000Z", party_id: String(baseContext.party._id),
+      price_level_id: null, mailing_name: baseContext.party.partyName,
+      items: [{ item_id: String(baseContext.product._id), base_unit: "pcs",
+        selected_unit: "pcs", actual_qty: 2, billed_qty: 2, rate: 100,
+        discount_type: "amount", discount_percentage: 0, discount_amount: 0,
+        tax_inclusive: false, price_level_id: null, description: null }],
+      additional_charges: [],
+      despatch_details: { challan_no: null, container_no: null,
+        despatch_through: null, destination: null, vehicle_no: null,
+        order_no: null, terms_of_pay: null, terms_of_delivery: null },
+    };
+    const oldFingerprint = createHash("sha256").update(JSON.stringify(oldCanonicalOrder)).digest("hex");
+    await SaleOrder.updateOne({ _id: created.body.data.saleOrder._id },
+      { $set: { request_fingerprint: oldFingerprint } });
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(200);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      items: [{ ...payload.items[0], rate: 101 }],
+    })).status).toBe(409);
+    expect((await SaleOrder.findById(created.body.data.saleOrder._id).lean()).request_fingerprint).toBe(oldFingerprint);
   });
 
   it.each([
@@ -564,6 +1284,96 @@ describe("POST /api/sale-orders — Business logic", () => {
     expect(first.status).toBe(201);
     expect(changed.status).toBe(409);
     expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+  });
+
+  it.each([
+    ["alternate quantity", (item) => ({ ...item, alternateBilledQty: 3 })],
+    ["alternate conversion", (item) => ({ ...item, altConversion: 13 })],
+    ["item snapshot", (item) => ({ ...item, name: "Renamed Widget" })],
+    ["HSN snapshot", (item) => ({ ...item, hsn: "1234" })],
+    ["price level", (item) => ({ ...item, priceLevel: String(new mongoose.Types.ObjectId()) })],
+    ["price source", (item) => ({ ...item, initialPriceSource: "manual" })],
+    ["tax", (item) => ({ ...item, taxRate: 12 })],
+    ["cess", (item) => ({ ...item, cessRate: 2 })],
+    ["warranty", (item) => ({ ...item, warrantyCardId: String(new mongoose.Types.ObjectId()) })],
+  ])("rejects changed %s with the same request ID", async (label, change) => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      request_id: `sale-order-expanded-${label.replaceAll(" ", "-")}`,
+    });
+    payload.items[0] = {
+      ...payload.items[0], alternateUnit: "box", baseDenominator: 1,
+      altConversion: 12, alternateActualQty: 24, alternateBilledQty: 24,
+    };
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    const changed = { ...payload, items: [change(payload.items[0])] };
+    expect((await postSaleOrder(baseContext.token, changed)).status).toBe(409);
+  });
+
+  it("normalizes equivalent item and price-level aliases", async () => {
+    const levelId = String(new mongoose.Types.ObjectId());
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      selectedPriceLevel: { _id: levelId, name: "Wholesale" },
+    });
+    payload.items[0] = { ...payload.items[0], alternateUnit: "box", baseDenominator: 1,
+      altConversion: 12, alternateActualQty: 24, alternateBilledQty: 24, priceLevel: levelId };
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    const equivalent = { ...payload, selectedPriceLevel: undefined,
+      priceLevelObject: { _id: levelId, pricelevel: "Wholesale" },
+      items: [{ ...payload.items[0], alternateUnit: undefined, alternate_unit: "box",
+        baseDenominator: undefined, base_denominator: "1", altConversion: undefined,
+        alt_conversion: "12", alternateActualQty: undefined, alternate_actual_qty: "24",
+        alternateBilledQty: undefined, alternate_billed_qty: "24", priceLevel: undefined,
+        price_level_id: levelId, rate: "100" }],
+    };
+    expect((await postSaleOrder(baseContext.token, equivalent)).status).toBe(200);
+  });
+
+  it("normalizes despatch aliases but detects changed snapshot text", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      despatchDetails: { vehicleNo: "KL-01-A-1234" },
+    });
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      despatchDetails: undefined, despatch_details: { vehicle_no: "KL-01-A-1234" },
+    })).status).toBe(200);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      despatchDetails: { vehicleNo: " KL-01-A-1234 " },
+    })).status).toBe(409);
+  });
+
+  it("rejects changed document discount and price-level snapshot", async () => {
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      discounts: { amount: 1 },
+      priceLevelObject: { _id: String(new mongoose.Types.ObjectId()), name: "Wholesale" },
+    });
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    expect((await postSaleOrder(baseContext.token, { ...payload, discounts: { value: "1" } })).status).toBe(200);
+    expect((await postSaleOrder(baseContext.token, { ...payload, discounts: { amount: 2 } })).status).toBe(409);
+    expect((await postSaleOrder(baseContext.token, {
+      ...payload, priceLevelObject: { ...payload.priceLevelObject, name: "Retail" },
+    })).status).toBe(409);
+  });
+
+  it("rejects changed additional charge value and action", async () => {
+    const charge = await AdditionalCharges.create({
+      cmp_id: baseContext.companyId, Primary_user_id: baseContext.userId,
+      additional_charge_id: `SO-CHARGE-${new mongoose.Types.ObjectId()}`,
+      name: "Freight", igst: 18, cgst: 9, sgst: 9,
+    });
+    const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
+      additionalCharges: [{ additionalChargeId: String(charge._id), action: "add", value: 10 }],
+    });
+    expect((await postSaleOrder(baseContext.token, payload)).status).toBe(201);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      additional_charges: [{ charge_master_id: String(charge._id), action: "add", value: "10" }],
+      additionalCharges: undefined,
+    })).status).toBe(200);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      additionalCharges: [{ ...payload.additionalCharges[0], value: 11 }],
+    })).status).toBe(409);
+    expect((await postSaleOrder(baseContext.token, { ...payload,
+      additionalCharges: [{ ...payload.additionalCharges[0], action: "subtract" }],
+    })).status).toBe(409);
   });
 
   it("requires request_id for Sale Order Create", async () => {
@@ -591,6 +1401,9 @@ describe("POST /api/sale-orders — Business logic", () => {
 
     expect(responses.map((response) => response.status).sort()).toEqual([200, 201]);
     expect(await SaleOrder.countDocuments({ request_id: payload.request_id })).toBe(1);
+    expect(await VoucherTimeline.countDocuments({ cmp_id: baseContext.companyId, voucher_type: "saleOrder" })).toBe(1);
+    const series = await VoucherSeries.findOne({ cmp_id: baseContext.companyId, voucherType: "saleOrder" }).lean();
+    expect(series.series.find((entry) => String(entry._id) === String(baseContext.series.seriesId)).currentNumber).toBe(2);
   });
 
   it("rejects an unknown additional-charge master ID", async () => {
@@ -764,6 +1577,9 @@ describe("POST /api/sale-orders — DB side effects (assert after valid create)"
       igst: 18,
       cgst: 9,
       sgst: 9,
+      cess: 25,
+      addl_cess: 2,
+      state_cess: 3,
     });
 
     const res = await createSaleOrderForTest({
@@ -777,7 +1593,17 @@ describe("POST /api/sale-orders — DB side effects (assert after valid create)"
       hsn: "996812",
       value: 100,
       igst: 18,
+      cess_amount: 0,
+      addl_cess_amount: 0,
+      state_cess_amount: 0,
       final_value: 118,
+    });
+    expect(saleOrder.totals).toMatchObject({
+      total_additional_charge: 118,
+      total_additional_charge_cess_amt: 0,
+      total_additional_charge_addl_cess_amt: 0,
+      total_additional_charge_state_cess_amt: 0,
+      final_amount: saleOrder.totals.item_total + 118,
     });
   });
 
@@ -1627,6 +2453,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
       igst: 18,
       cgst: 9,
       sgst: 9,
+      cess: 25,
     });
     const newCharge = await AdditionalCharges.create({
       cmp_id: baseContext.companyId,
@@ -1636,6 +2463,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
       igst: 12,
       cgst: 6,
       sgst: 6,
+      cess: 2,
     });
     const createRes = await createSaleOrderForTest({
       items: [
@@ -1677,6 +2505,7 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
       igst: 12,
       cgst: 6,
       sgst: 6,
+      cess: 5,
     });
 
     const res = await updateSaleOrderRequest(createRes.body.data.saleOrder._id, {
@@ -1738,12 +2567,18 @@ describe("PUT /api/sale-orders/:saleOrderId — Update", () => {
       igst_amount: 18,
       cgst_amount: 0,
       sgst_amount: 0,
+      cess: 25,
+      cess_amount: 0,
+      final_value: 118,
     });
     expect(updated.additional_charges[1]).toMatchObject({
       igst: 12,
       igst_amount: 12,
       cgst_amount: 0,
       sgst_amount: 0,
+      cess: 2,
+      cess_amount: 0,
+      final_value: 112,
     });
   });
 
@@ -1988,7 +2823,12 @@ describe("Transaction atomicity", () => {
     }).lean();
 
     expect(res.status).toBe(500);
-    expect(res.body.message).toBe("Timeline creation failed");
+    expect(res.body).toMatchObject({
+      code: "SALE_ORDER_UNKNOWN_FAILURE",
+      category: "unknown_outcome",
+      submission_outcome: "unknown_outcome",
+    });
+    expect(res.body.message).not.toContain("Timeline creation failed");
     expect(saleOrders).toHaveLength(0);
     expect(seriesDoc.series[0].currentNumber).toBe(1);
     expect(seriesDoc.series[0].lastUsedNumber).toBe(1);

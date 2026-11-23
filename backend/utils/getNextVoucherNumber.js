@@ -53,7 +53,9 @@ export async function getNextVoucherNumber({
   );
 
   if (!existingSeries) {
-    throw createHttpError("Series not found", 404); // ← FIXED
+    const error = createHttpError("Series not found", 404);
+    if (voucherType === "saleOrder") error.code = "SALE_ORDER_SERIES_UNAVAILABLE";
+    throw error;
   }
 
   const currentNumber = Number(existingSeries.currentNumber) || 1;

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { calculateSaleOrderDocument, calculateSaleOrderTotals } from "../services/calculation.service.js";
+import { logSaleOrderTotalsMismatch } from "../services/saleOrderDocument.service.js";
 
 const validItem = {
   actualQty: 2,
@@ -68,6 +69,39 @@ describe("Sale Order financial calculations", () => {
       total_amount: 0.08,
     });
     expect(result.totals.totalTax).toBe(result.totals.totalCgst + result.totals.totalSgst);
+  });
+
+  it.each(["online", "offline"])("compares %s GST-only additional-charge totals", (source) => {
+    vi.stubEnv("NODE_ENV", "development");
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      logSaleOrderTotalsMismatch({
+        creation_source: source,
+        taxType: "igst",
+        items: [{ actualQty: 1, billedQty: 1, rate: 400, taxRate: 0, discountAmount: 0 }],
+        additionalCharges: [{ action: "add", value: 50, igst: 18, cess: 25 }],
+        subTotal: 400,
+        totalDiscount: 0,
+        totalTaxAmount: 0,
+        finalAmount: 459,
+      });
+      expect(warning).not.toHaveBeenCalled();
+    } finally {
+      warning.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("ignores charge cess rates for add and subtract rows", () => {
+    const result = calculateSaleOrderDocument([validItem], [
+      { action: "add", value: 50, igst: 18, cess: 25, addl_cess: 2, state_cess: 3 },
+      { action: "subtract", value: 10, igst: 18, cess: 25, addl_cess: 2, state_cess: 3 },
+    ]);
+    expect(result.charges.map((charge) => charge.final_value)).toEqual([59, -11.8]);
+    expect(result.totals.totalAdditionalChargeCess).toBe(0);
+    expect(result.totals.totalAdditionalChargeAddlCess).toBe(0);
+    expect(result.totals.totalAdditionalChargeStateCess).toBe(0);
+    expect(result.totals.grandTotal).toBe(283.2);
   });
 
   it("keeps add and subtract charge rows signed and reconciled with the final total", () => {

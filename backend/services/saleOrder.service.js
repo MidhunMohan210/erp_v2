@@ -27,6 +27,7 @@ import {
   applySaleOrderUpdate,
   buildSaleOrderPayload,
   logSaleOrderTotalsMismatch,
+  normalizeAlternateUnitFields,
   normalizeSelectedSeries,
 } from "./saleOrderDocument.service.js";
 import {
@@ -36,9 +37,11 @@ import {
 
 // Local helper to attach HTTP-aware status codes to thrown errors.
 // Controllers read `error.statusCode` to decide response status.
-function createHttpError(message, statusCode = 500) {
+function createHttpError(message, statusCode = 500, code = null, details = null) {
   const error = new Error(message);
   error.statusCode = statusCode;
+  if (code) error.code = code;
+  if (details) error.details = details;
   return error;
 }
 
@@ -53,33 +56,100 @@ function assertSaleOrderNotTallyAccepted(saleOrder) {
 
 function requiredRequestId(value) {
   if (typeof value !== "string" || !value.trim()) {
-    throw createHttpError("request_id is required", 400);
+    throw createHttpError("request_id is required", 400, "SALE_ORDER_REQUEST_ID_INVALID");
   }
   const requestId = value.trim();
   if (requestId.length > 128) {
-    throw createHttpError("request_id is too long", 400);
+    throw createHttpError("request_id is too long", 400, "SALE_ORDER_REQUEST_ID_INVALID");
   }
   return requestId;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function optionalOfflineVoucherId(value) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !UUID_PATTERN.test(value.trim())) {
+    throw createHttpError("offline_voucher_id must be a valid UUID", 400, "SALE_ORDER_OFFLINE_VOUCHER_ID_INVALID");
+  }
+  return value.trim().toLowerCase();
+}
+
+function offlineVoucherIdFrom(data = {}) {
+  return optionalOfflineVoucherId(
+    data.offline_voucher_id ?? data.offlineVoucherId,
+  );
+}
+
+function createOfflineVoucherConflict(offlineVoucherId) {
+  return createHttpError(
+    "This offline voucher has already been synchronized as a Sale Order.",
+    409,
+    "SALE_ORDER_OFFLINE_VOUCHER_CONFLICT",
+    {
+      conflict_type: "offline_voucher_id",
+      offline_voucher_id: offlineVoucherId,
+    },
+  );
+}
+
 function canonicalId(value) {
   if (!value || !mongoose.Types.ObjectId.isValid(value)) {
-    throw createHttpError("Sale Order request contains an invalid identifier", 400);
+    throw createHttpError("Sale Order request contains an invalid identifier", 400, "SALE_ORDER_METADATA_INVALID");
   }
   return new mongoose.Types.ObjectId(value).toString();
 }
 
-function canonicalNumber(value) {
+function canonicalNumber(value, code = "SALE_ORDER_INVALID_VALUES") {
   const number = Number(value);
   if (!Number.isFinite(number)) {
-    throw createHttpError("Sale Order request contains an invalid number", 400);
+    throw createHttpError("Sale Order request contains an invalid number", 400, code);
   }
   return number;
+}
+
+function requireFrozenRate(value, fieldName) {
+  if ((typeof value !== "number" && typeof value !== "string") ||
+      value === "" || (typeof value === "string" && !value.trim()) ||
+      !Number.isFinite(Number(value)) || Number(value) < 0) {
+    throw createHttpError(`${fieldName} must be a non-negative number for offline Sale Order`, 400, "SALE_ORDER_METADATA_INVALID");
+  }
+  return Number(value);
+}
+
+function getCreationContext(data) {
+  const source = data.creation_source ?? "online";
+  if (source !== "online" && source !== "offline") {
+    throw createHttpError("Invalid creation_source", 400, "SALE_ORDER_METADATA_INVALID");
+  }
+  if (source === "online") {
+    if (data.offline_created_at != null) {
+      throw createHttpError("offline_created_at requires offline creation_source", 400, "SALE_ORDER_METADATA_INVALID");
+    }
+    return { creation_source: "online", offline_created_at: null };
+  }
+  const date = new Date(data.offline_created_at);
+  if (data.offline_created_at == null || Number.isNaN(date.getTime())) {
+    throw createHttpError("offline_created_at must be a valid date", 400, "SALE_ORDER_METADATA_INVALID");
+  }
+  return { creation_source: "offline", offline_created_at: date };
+}
+
+function assertOfflineTaxAcceptanceAllowed() {
+  // A request flag is not proof of offline origin; production needs a verified snapshot protocol.
+  if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
+    throw createHttpError("Offline Sale Order sync is not enabled", 403, "SALE_ORDER_OFFLINE_SYNC_DISABLED");
+  }
 }
 
 function canonicalText(value) {
   if (value == null || value === "") return null;
   return String(value).trim() || null;
+}
+
+function snapshotText(value) {
+  // Snapshot text is stored as supplied; trimming it would hide a changed payload.
+  return value ? String(value) : null;
 }
 
 function canonicalDespatchDetails(value = {}) {
@@ -99,10 +169,24 @@ function canonicalDespatchDetails(value = {}) {
   };
 }
 
-function buildSaleOrderRequestFingerprint(data, { cmpId, userId, partyId, selectedSeries }) {
+function snapshotDespatchDetails(value = {}) {
+  value = value || {};
+  return {
+    challan_no: snapshotText(value.challanNo ?? value.challan_no),
+    container_no: snapshotText(value.containerNo ?? value.container_no),
+    despatch_through: snapshotText(value.despatchThrough ?? value.despatch_through),
+    destination: snapshotText(value.destination),
+    vehicle_no: snapshotText(value.vehicleNo ?? value.vehicle_no),
+    order_no: snapshotText(value.orderNo ?? value.order_no),
+    terms_of_pay: snapshotText(value.termsOfPay ?? value.terms_of_pay),
+    terms_of_delivery: snapshotText(value.termsOfDelivery ?? value.terms_of_delivery),
+  };
+}
+
+function buildLegacySaleOrderRequestFingerprint(data, { cmpId, userId, partyId, selectedSeries }) {
   const date = new Date(data.transactionDate);
   if (Number.isNaN(date.getTime())) {
-    throw createHttpError("transactionDate must be a valid date", 400);
+    throw createHttpError("transactionDate must be a valid date", 400, "SALE_ORDER_INVALID_VALUES");
   }
   const canonicalOrder = {
     cmp_id: canonicalId(cmpId),
@@ -141,11 +225,105 @@ function buildSaleOrderRequestFingerprint(data, { cmpId, userId, partyId, select
   return createHash("sha256").update(JSON.stringify(canonicalOrder)).digest("hex");
 }
 
-function assertMatchingSaleOrderReplay(saleOrder, requestFingerprint) {
-  if (saleOrder.request_fingerprint !== requestFingerprint) {
+function buildSaleOrderRequestFingerprint(data, context) {
+  const { cmpId, userId, partyId, selectedSeries } = context;
+  const priceLevel = data.priceLevelObject ?? data.selectedPriceLevel;
+  const date = new Date(data.transactionDate);
+  if (Number.isNaN(date.getTime())) {
+    throw createHttpError("transactionDate must be a valid date", 400, "SALE_ORDER_INVALID_VALUES");
+  }
+  const canonicalOrder = {
+    cmp_id: canonicalId(cmpId),
+    created_by: canonicalId(userId),
+    voucher_type: "saleOrder",
+    series_id: canonicalId(selectedSeries?._id),
+    series_name: snapshotText(selectedSeries?.seriesName),
+    date: date.toISOString(),
+    party_id: canonicalId(partyId),
+    mailing_name: canonicalText(data.mailingName ?? data.mailing_name),
+    tax_type: data.tax_type || data.taxType || "igst",
+    price_level_id: priceLevel?._id ? canonicalId(priceLevel._id) : null,
+    price_level_name: snapshotText(priceLevel?.pricelevel || priceLevel?.name),
+    items: (data.items || []).map((item) => ({
+      item_id: canonicalId(item.id ?? item.item_id),
+      item_name: snapshotText(item.name || item.product_name),
+      hsn: snapshotText(item.hsn || item.hsn_code),
+      base_unit: canonicalText(item.baseUnit ?? item.base_unit ?? item.unit),
+      selected_unit: canonicalText(item.selectedUnit ?? item.selected_unit ?? item.unit ?? item.baseUnit ?? item.base_unit),
+      ...normalizeAlternateUnitFields(item),
+      actual_qty: canonicalNumber(item.actualQty ?? item.actual_qty),
+      billed_qty: canonicalNumber(item.billedQty ?? item.billed_qty ?? item.qty ?? item.quantity),
+      rate: canonicalNumber(item.rate),
+      tax_rate: canonicalNumber(item.taxRate ?? item.tax_rate ?? item.gst ?? 0, "SALE_ORDER_DERIVED_VALUES_INVALID"),
+      cess_rate: canonicalNumber(item.cessRate ?? item.cess_rate ?? item.cess ?? item.cess_percentage ?? 0, "SALE_ORDER_DERIVED_VALUES_INVALID"),
+      addl_cess_rate: canonicalNumber(item.addlCessRate ?? item.addl_cess_rate ?? item.addl_cess ?? item.addlCess ?? item.addl_cess_percentage ?? 0, "SALE_ORDER_DERIVED_VALUES_INVALID"),
+      tax_inclusive: Boolean(item.taxInclusive ?? item.tax_inclusive),
+      discount_type: item.discountType || item.discount_type || "amount",
+      discount_percentage: canonicalNumber(item.discountPercentage ?? item.discount_percentage ?? 0),
+      discount_amount: canonicalNumber(item.discountAmount ?? item.discount_amount ?? 0),
+      price_level_id: item.priceLevel ?? item.price_level_id ? canonicalId(item.priceLevel ?? item.price_level_id) : null,
+      initial_price_source: snapshotText(item.initialPriceSource || item.initial_price_source),
+      description: snapshotText(item.description),
+      warranty_card_id: item.warrantyCardId ?? item.warranty_card_id ? canonicalId(item.warrantyCardId ?? item.warranty_card_id) : null,
+    })),
+    additional_charges: (data.additionalCharges ?? data.additional_charges ?? []).map((charge) => ({
+      charge_master_id: canonicalId(charge.additionalChargeId ?? charge.additional_charge_id ?? charge.chargeMasterId ?? charge.charge_master_id),
+      action: charge.action === "substract" ? "subtract" : charge.action ?? "add",
+      value: canonicalNumber(charge.value),
+    })),
+    discounts: (data.discounts == null ? [] : Array.isArray(data.discounts) ? data.discounts : [data.discounts])
+      .map((discount) => canonicalNumber(typeof discount === "object" ? discount.amount ?? discount.value ?? discount.totalDiscount : discount, "SALE_ORDER_DERIVED_VALUES_INVALID")),
+    despatch_details: snapshotDespatchDetails(data.despatchDetails ?? data.despatch_details),
+  };
+  const offlineVoucherId = offlineVoucherIdFrom(data);
+  if (offlineVoucherId) {
+    canonicalOrder.offline_voucher_id = offlineVoucherId;
+  }
+  if (data.creation_source === "offline") {
+    canonicalOrder.creation_source = "offline";
+    canonicalOrder.offline_created_at = getCreationContext(data).offline_created_at.toISOString();
+    canonicalOrder.additional_charges = canonicalOrder.additional_charges.map((charge, index) => {
+      const input = (data.additionalCharges ?? data.additional_charges)[index];
+      return { ...charge, rates: frozenChargeRates(input) };
+    });
+  }
+  // Older v2 orders had no Narration. Keep their exact hash for empty notes;
+  // a non-empty note starts v3 so a changed retry cannot replay as the same order.
+  const narration = canonicalText(data.narration);
+  if (narration !== null) canonicalOrder.narration = narration;
+  // v4 adds offline_voucher_id. Requests without it retain the exact v2/v3
+  // algorithm so online clients and already-stored fingerprints keep working.
+  const version = offlineVoucherId ? "v4" : narration === null ? "v2" : "v3";
+  return `${version}:${createHash("sha256").update(JSON.stringify(canonicalOrder)).digest("hex")}`;
+}
+
+function fingerprintForExistingOrder(data, context, storedFingerprint) {
+  // Historical unversioned hashes must retain their original comparison rules.
+  return storedFingerprint?.startsWith("v2:") ||
+    storedFingerprint?.startsWith("v3:") ||
+    storedFingerprint?.startsWith("v4:")
+    ? buildSaleOrderRequestFingerprint(data, context)
+    : buildLegacySaleOrderRequestFingerprint(data, context);
+}
+
+function assertMatchingSaleOrderReplay(saleOrder, data, context) {
+  const offlineVoucherId = offlineVoucherIdFrom(data);
+  if ((saleOrder.offline_voucher_id || null) !== offlineVoucherId) {
+    throw offlineVoucherId
+      ? createOfflineVoucherConflict(offlineVoucherId)
+      : createHttpError(
+          "This request ID has already been used for a different Sale Order payload.",
+          409,
+          "SALE_ORDER_REQUEST_ID_CONFLICT",
+          { conflict_type: "request_id" },
+        );
+  }
+  if (saleOrder.request_fingerprint !== fingerprintForExistingOrder(data, context, saleOrder.request_fingerprint)) {
     throw createHttpError(
       "This request ID has already been used for a different Sale Order payload.",
       409,
+      "SALE_ORDER_REQUEST_ID_CONFLICT",
+      { conflict_type: "request_id" },
     );
   }
 }
@@ -153,6 +331,12 @@ function assertMatchingSaleOrderReplay(saleOrder, requestFingerprint) {
 function isRequestIdDuplicateKeyError(error) {
   return error?.code === 11000 &&
     (error?.keyPattern?.request_id || error?.keyValue?.request_id);
+}
+
+function isOfflineVoucherDuplicateKeyError(error) {
+  return error?.code === 11000 &&
+    (error?.keyPattern?.offline_voucher_id ||
+      error?.keyValue?.offline_voucher_id);
 }
 
 function resolveTaxType(company, party) {
@@ -188,6 +372,10 @@ function getSavedChargeTaxRates(charge) {
     igst: totalTaxRate,
     cgst: totalTaxRate / 2,
     sgst: totalTaxRate / 2,
+    // Edits retain the charge rates saved on this order, including cess.
+    cess: Number(charge?.cess) || 0,
+    addl_cess: Number(charge?.addl_cess) || 0,
+    state_cess: Number(charge?.state_cess) || 0,
   };
 }
 
@@ -205,9 +393,20 @@ function getCurrentProductTaxRates(product) {
   };
 }
 
-async function resolveSaleOrderItemsForCreate(items, cmpId, session) {
+function frozenChargeRates(charge) {
+  return {
+    igst: requireFrozenRate(charge?.rates?.igst ?? charge?.igst, "Charge IGST"),
+    cgst: requireFrozenRate(charge?.rates?.cgst ?? charge?.cgst, "Charge CGST"),
+    sgst: requireFrozenRate(charge?.rates?.sgst ?? charge?.sgst, "Charge SGST"),
+    cess: requireFrozenRate(charge?.rates?.cess ?? charge?.cess, "Charge cess"),
+    addl_cess: requireFrozenRate(charge?.rates?.addl_cess ?? charge?.addl_cess, "Charge additional cess"),
+    state_cess: requireFrozenRate(charge?.rates?.state_cess ?? charge?.state_cess, "Charge state cess"),
+  };
+}
+
+async function resolveSaleOrderItemsForCreate(items, cmpId, session, isOffline = false) {
   if (!Array.isArray(items) || items.length === 0) {
-    throw createHttpError("Sale order must contain at least one item", 400);
+    throw createHttpError("Sale order must contain at least one item", 400, "SALE_ORDER_INVALID_VALUES");
   }
 
   const productIds = items.map((item) => String(item?.id || ""));
@@ -229,13 +428,24 @@ async function resolveSaleOrderItemsForCreate(items, cmpId, session) {
       throw createHttpError(
         "Sale order item does not belong to this company",
         400,
+        "SALE_ORDER_PRODUCT_UNAVAILABLE",
       );
     }
+    if (isOffline && !product) {
+      throw createHttpError("Offline Sale Order product no longer exists", 400, "SALE_ORDER_PRODUCT_UNAVAILABLE");
+    }
 
-    // A new voucher has no transaction snapshot yet, so a local Product tax
-    // master is the source of truth. For an unresolved imported item, retain
-    // the submitted tax fields as its voucher snapshot; derived monetary
-    // amounts are still recalculated by buildSaleOrderPayload.
+    // Offline tax acceptance is gated above; archived company Products still
+    // identify the item, while their current tax rates must not replace its snapshot.
+    if (isOffline) {
+      return {
+        ...item,
+        taxRate: requireFrozenRate(item.taxRate ?? item.tax_rate, "Item GST"),
+        cessRate: requireFrozenRate(item.cessRate ?? item.cess_rate, "Item cess"),
+        addlCessRate: requireFrozenRate(item.addlCessRate ?? item.addl_cess_rate, "Item additional cess"),
+      };
+    }
+    // Online Create keeps its current Product-tax and imported-item behavior.
     return product
       ? { ...item, ...getCurrentProductTaxRates(product) }
       : { ...item };
@@ -305,9 +515,10 @@ async function resolveSaleOrderAdditionalCharges(
   additionalCharges,
   cmpId,
   session,
+  isOffline = false,
 ) {
   if (!Array.isArray(additionalCharges)) {
-    throw createHttpError("additionalCharges must be an array", 400);
+    throw createHttpError("additionalCharges must be an array", 400, "SALE_ORDER_METADATA_INVALID");
   }
 
   const normalizedCharges = additionalCharges.map((charge) => {
@@ -316,6 +527,11 @@ async function resolveSaleOrderAdditionalCharges(
       charge?.additional_charge_id ??
       charge?.chargeMasterId ??
       charge?.charge_master_id;
+
+    if (!charge || typeof charge !== "object" || Array.isArray(charge) ||
+        !mongoose.Types.ObjectId.isValid(chargeMasterId)) {
+      throw createHttpError("Sale Order charge metadata is invalid", 400, "SALE_ORDER_METADATA_INVALID");
+    }
 
     return {
       ...normalizeSaleChargeInput({
@@ -335,16 +551,21 @@ async function resolveSaleOrderAdditionalCharges(
   const resolvedCharges = await resolveSaleChargeMasters(normalizedCharges, {
     cmpId,
     session,
+    missingMasterCode: "SALE_ORDER_CHARGE_UNAVAILABLE",
   });
 
-  // The document calculator reads rate snapshots directly while the Sale
-  // resolver keeps them under `rates`; expose both without trusting payload
-  // tax fields.
-  return resolvedCharges.map(({ rates, ...charge }) => ({
-    ...charge,
-    ...rates,
-    rates,
-  }));
+  // Both the calculator and document mapper read rates. Only gated offline
+  // creates use the submitted snapshot after validating the charge master.
+  return resolvedCharges.map(({ rates, ...charge }, index) => {
+    const taxRates = isOffline ? frozenChargeRates(additionalCharges[index]) : rates;
+    return {
+      ...charge,
+      option: isOffline ? additionalCharges[index].option || charge.option : charge.option,
+      hsn: isOffline ? additionalCharges[index].hsn || charge.hsn : charge.hsn,
+      ...taxRates,
+      rates: taxRates,
+    };
+  });
 }
 
 function applyExistingAdditionalChargeTaxSnapshots(charges, oldChargesById) {
@@ -439,13 +660,25 @@ async function enrichSaleOrderItemsWithLatestProducts(saleOrder = null) {
 // 4) Build normalized sale order payload
 // 5) Insert sale order and create timeline entry in the same transaction
 export async function createSaleOrder(data = {}, req) {
+  const creationContext = getCreationContext(data);
   const cmpId = data.cmpId || data.cmp_id;
   const selectedSeries = normalizeSelectedSeries(data);
   const userId = data.userId || req.user?._id || req.user?.id || null;
   const partyId = data.party?._id || data.party?.id || data.party_id || null;
   const request_id = requiredRequestId(data.request_id ?? data.requestId);
+  const offline_voucher_id = offlineVoucherIdFrom(data);
+  if (!Array.isArray(data.items) || data.items.length === 0) {
+    throw createHttpError("Sale order must contain at least one item", 400, "SALE_ORDER_INVALID_VALUES");
+  }
+  if (data.items.some((item) => !item || typeof item !== "object" || Array.isArray(item))) {
+    throw createHttpError("Sale Order item metadata is invalid", 400, "SALE_ORDER_METADATA_INVALID");
+  }
+  const submittedCharges = data.additionalCharges ?? data.additional_charges ?? [];
+  if (!Array.isArray(submittedCharges)) {
+    throw createHttpError("additionalCharges must be an array", 400, "SALE_ORDER_METADATA_INVALID");
+  }
   if (!selectedSeries?._id) {
-    throw createHttpError("Series id is required for voucher identity", 400);
+    throw createHttpError("Series id is required for voucher identity", 400, "SALE_ORDER_METADATA_INVALID");
   }
   const request_fingerprint = buildSaleOrderRequestFingerprint(data, {
     cmpId,
@@ -453,11 +686,24 @@ export async function createSaleOrder(data = {}, req) {
     partyId,
     selectedSeries,
   });
+  const fingerprintContext = { cmpId, userId, partyId, selectedSeries };
   const existingSaleOrder = await SaleOrder.findOne({ cmp_id: cmpId, request_id }).lean();
   if (existingSaleOrder) {
-    assertMatchingSaleOrderReplay(existingSaleOrder, request_fingerprint);
+    assertMatchingSaleOrderReplay(existingSaleOrder, data, fingerprintContext);
     return { saleOrder: addLegacySaleOrderUnitFields(existingSaleOrder), isIdempotentReplay: true };
   }
+  if (offline_voucher_id) {
+    const existingOfflineVoucher = await SaleOrder.findOne({
+      cmp_id: cmpId,
+      offline_voucher_id,
+    })
+      .select("_id")
+      .lean();
+    if (existingOfflineVoucher) {
+      throw createOfflineVoucherConflict(offline_voucher_id);
+    }
+  }
+  if (creationContext.creation_source === "offline") assertOfflineTaxAcceptanceAllowed();
   const session = await mongoose.startSession();
 
   try {
@@ -472,10 +718,22 @@ export async function createSaleOrder(data = {}, req) {
         .session(session)
         .lean();
       if (replay) {
-        assertMatchingSaleOrderReplay(replay, request_fingerprint);
+        assertMatchingSaleOrderReplay(replay, data, fingerprintContext);
         createdSaleOrder = replay;
         isIdempotentReplay = true;
         return;
+      }
+      if (offline_voucher_id) {
+        const offlineVoucher = await SaleOrder.findOne({
+          cmp_id: cmpId,
+          offline_voucher_id,
+        })
+          .session(session)
+          .select("_id")
+          .lean();
+        if (offlineVoucher) {
+          throw createOfflineVoucherConflict(offline_voucher_id);
+        }
       }
       // Ownership guardrail: sale order cannot reference party from another company.
       const company = await Company.findById(cmpId).session(session).lean();
@@ -487,22 +745,24 @@ export async function createSaleOrder(data = {}, req) {
         .lean();
 
       if (!company) {
-        throw createHttpError("Company not found", 400);
+        throw createHttpError("Company not found", 400, "SALE_ORDER_ACCESS_REQUIRED");
       }
       if (!party) {
-        throw createHttpError("Selected party does not belong to this company", 400);
+        throw createHttpError("Selected party does not belong to this company", 400, "SALE_ORDER_CUSTOMER_UNAVAILABLE");
       }
 
       const items = await resolveSaleOrderItemsForCreate(
         data.items,
         cmpId,
         session,
+        creationContext.creation_source === "offline",
       );
 
       const additionalCharges = await resolveSaleOrderAdditionalCharges(
         data.additionalCharges ?? data.additional_charges ?? [],
         cmpId,
         session,
+        creationContext.creation_source === "offline",
       );
 
       // Centralized voucher generation guarantees unique numbering policy.
@@ -521,8 +781,12 @@ export async function createSaleOrder(data = {}, req) {
           cmpId,
           request_id,
           request_fingerprint,
+          offline_voucher_id,
+          ...creationContext,
           party: buildPartySelection(party),
-          tax_type: resolveTaxType(company, party),
+          tax_type: creationContext.creation_source === "offline"
+            ? data.tax_type || data.taxType
+            : resolveTaxType(company, party),
           items,
           additionalCharges,
         },
@@ -545,11 +809,29 @@ export async function createSaleOrder(data = {}, req) {
       isIdempotentReplay,
     };
   } catch (error) {
-    if (isRequestIdDuplicateKeyError(error)) {
+    // The shared charge normalizer uses this named validation error for editable inputs.
+    if (error.name === "SaleValidationError" && !error.code) {
+      error.code = "SALE_ORDER_INVALID_VALUES";
+    }
+    if (
+      isRequestIdDuplicateKeyError(error) ||
+      isOfflineVoucherDuplicateKeyError(error)
+    ) {
       const replay = await SaleOrder.findOne({ cmp_id: cmpId, request_id }).lean();
       if (replay) {
-        assertMatchingSaleOrderReplay(replay, request_fingerprint);
+        assertMatchingSaleOrderReplay(replay, data, fingerprintContext);
         return { saleOrder: addLegacySaleOrderUnitFields(replay), isIdempotentReplay: true };
+      }
+      if (offline_voucher_id) {
+        const offlineVoucher = await SaleOrder.findOne({
+          cmp_id: cmpId,
+          offline_voucher_id,
+        })
+          .select("_id")
+          .lean();
+        if (offlineVoucher) {
+          throw createOfflineVoucherConflict(offline_voucher_id);
+        }
       }
     }
     throw error;
@@ -582,55 +864,145 @@ export async function findSaleOrderByRequestId(
   const request_id = requiredRequestId(requestId);
   const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
   return SaleOrder.findOne(filter)
-    .select("_id request_id voucher_number status created_at")
+    .select("_id request_id offline_voucher_id voucher_number status created_at creation_source offline_created_at synced_at")
     .lean();
 }
 
-/** Read-only recovery verification; it never writes legacy fingerprint data. */
+/** Read-only recovery reconciliation; it never writes legacy fingerprint data. */
+export async function reconcileSaleOrderIdentity(
+  { requestId = null, offlineVoucherId = null, payload = null } = {},
+  { cmp_id } = {},
+  req,
+) {
+  const request_id = requestId == null ? null : requiredRequestId(requestId);
+  const offline_voucher_id = optionalOfflineVoucherId(offlineVoucherId);
+  if (!request_id && !offline_voucher_id) {
+    throw createHttpError(
+      "request_id or offline_voucher_id is required",
+      400,
+    );
+  }
+
+  const requestFilter = request_id ? { cmp_id, request_id } : null;
+  const offlineFilter = offline_voucher_id
+    ? { cmp_id, offline_voucher_id }
+    : null;
+  const scopedRequestOrder = requestFilter
+    ? await SaleOrder.findOne(applyTransactionCreatorScope(req, requestFilter)).lean()
+    : null;
+  const scopedOfflineOrder = offlineFilter
+    ? await SaleOrder.findOne(applyTransactionCreatorScope(req, offlineFilter)).lean()
+    : null;
+
+  if (
+    scopedRequestOrder &&
+    scopedOfflineOrder &&
+    String(scopedRequestOrder._id) !== String(scopedOfflineOrder._id)
+  ) {
+    return { outcome: "conflicting", reason: "identities_resolve_to_different_orders" };
+  }
+
+  const saleOrder = scopedRequestOrder || scopedOfflineOrder;
+  if (!saleOrder) {
+    // Staff reads are creator-scoped. A company-wide existence check prevents
+    // us from incorrectly reporting absence while revealing no order details.
+    const companyWideIdentityExists = Boolean(
+      (requestFilter && (await SaleOrder.exists(requestFilter))) ||
+      (offlineFilter && (await SaleOrder.exists(offlineFilter))),
+    );
+    if (companyWideIdentityExists) {
+      return {
+        outcome: "unverifiable",
+        reason: "identity_not_visible_in_creator_scope",
+        request_may_be_in_flight: true,
+      };
+    }
+    return {
+      outcome: "not_found",
+      reason: "no_committed_order_found",
+      request_may_be_in_flight: true,
+    };
+  }
+
+  if (
+    (request_id && saleOrder.request_id !== request_id) ||
+    (offline_voucher_id && saleOrder.offline_voucher_id !== offline_voucher_id)
+  ) {
+    return { outcome: "conflicting", reason: "identity_mismatch", saleOrder };
+  }
+  if (!saleOrder.request_fingerprint || !payload) {
+    return { outcome: "unverifiable", reason: "fingerprint_unavailable", saleOrder };
+  }
+
+  try {
+    const payloadRequestId = payload.request_id ?? payload.requestId;
+    const payloadOfflineVoucherId =
+      payload.offline_voucher_id ?? payload.offlineVoucherId;
+    if (
+      (payloadRequestId != null &&
+        requiredRequestId(payloadRequestId) !== saleOrder.request_id) ||
+      (payloadOfflineVoucherId != null &&
+        optionalOfflineVoucherId(payloadOfflineVoucherId) !==
+          (saleOrder.offline_voucher_id || null))
+    ) {
+      return { outcome: "conflicting", reason: "payload_identity_mismatch", saleOrder };
+    }
+
+    const verificationPayload = {
+      ...payload,
+      cmpId: cmp_id,
+      userId: saleOrder.created_by,
+      request_id: saleOrder.request_id,
+      offline_voucher_id: saleOrder.offline_voucher_id || undefined,
+    };
+    const selectedSeries = normalizeSelectedSeries(verificationPayload);
+    const fingerprintContext = {
+      cmpId: verificationPayload.cmpId,
+      userId: verificationPayload.userId,
+      partyId:
+        verificationPayload.party?._id ||
+        verificationPayload.party?.id ||
+        verificationPayload.party_id ||
+        null,
+      selectedSeries,
+    };
+    const candidateFingerprint = fingerprintForExistingOrder(
+      verificationPayload,
+      fingerprintContext,
+      saleOrder.request_fingerprint,
+    );
+    return {
+      outcome:
+        saleOrder.request_fingerprint === candidateFingerprint
+          ? "matched"
+          : "conflicting",
+      reason:
+        saleOrder.request_fingerprint === candidateFingerprint
+          ? "identity_and_fingerprint_match"
+          : "fingerprint_mismatch",
+      saleOrder,
+    };
+  } catch {
+    return { outcome: "unverifiable", reason: "payload_cannot_be_fingerprinted", saleOrder };
+  }
+}
+
 export async function verifySaleOrderByRequestId(
   requestId,
   payload,
   { cmp_id } = {},
   req,
 ) {
-  const request_id = requiredRequestId(requestId);
-  const filter = applyTransactionCreatorScope(req, { cmp_id, request_id });
-  const saleOrder = await SaleOrder.findOne(filter).lean();
-  if (!saleOrder) return { outcome: "not_found" };
-  if (!saleOrder.request_fingerprint) {
-    return { outcome: "unverifiable", saleOrder };
-  }
-
-  try {
-    if (requiredRequestId(payload?.request_id ?? payload?.requestId) !== request_id) {
-      return { outcome: "unverifiable", saleOrder };
-    }
-    const verificationPayload = {
-      ...payload,
-      cmpId: req.companyId,
-      userId: req.user?._id || req.user?.id || null,
-    };
-    const selectedSeries = normalizeSelectedSeries(verificationPayload);
-    const candidateFingerprint = buildSaleOrderRequestFingerprint(
-      verificationPayload,
-      {
-        cmpId: verificationPayload.cmpId,
-        userId: verificationPayload.userId,
-        partyId:
-          verificationPayload.party?._id ||
-          verificationPayload.party?.id ||
-          verificationPayload.party_id ||
-          null,
-        selectedSeries,
-      },
-    );
-    return {
-      outcome: saleOrder.request_fingerprint === candidateFingerprint ? "match" : "conflict",
-      saleOrder,
-    };
-  } catch {
-    return { outcome: "unverifiable", saleOrder };
-  }
+  return reconcileSaleOrderIdentity(
+    {
+      requestId,
+      offlineVoucherId:
+        payload?.offline_voucher_id ?? payload?.offlineVoucherId ?? null,
+      payload,
+    },
+    { cmp_id },
+    req,
+  );
 }
 
 // Update flow summary:

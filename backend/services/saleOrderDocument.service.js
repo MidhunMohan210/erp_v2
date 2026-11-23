@@ -16,7 +16,10 @@ function firstDefined(...values) {
 
 function createValidationError(message) {
   const error = new Error(message);
+  error.name = "SaleOrderValidationError";
   error.statusCode = 400;
+  // Units and conversions come from the selected Product; Native does not edit them.
+  error.code = "SALE_ORDER_DERIVED_VALUES_INVALID";
   return error;
 }
 
@@ -89,7 +92,7 @@ function readAlternateUnitFields(row = {}) {
   };
 }
 
-function normalizeAlternateUnitFields(row = {}) {
+export function normalizeAlternateUnitFields(row = {}) {
   const itemName = row?.name || row?.product_name || row?.item_name || "";
   const fields = readAlternateUnitFields(row);
   const hasAnyAlternateInput =
@@ -401,14 +404,14 @@ function mapAdditionalCharges(additionalCharges = [], { preserveIds = false, cal
 // Convert UI dispatch object into backend snake_case schema fields.
 function mapDespatchDetails(despatchDetails = {}) {
   return {
-    challan_no: despatchDetails?.challanNo || null,
-    container_no: despatchDetails?.containerNo || null,
-    despatch_through: despatchDetails?.despatchThrough || null,
+    challan_no: despatchDetails?.challanNo || despatchDetails?.challan_no || null,
+    container_no: despatchDetails?.containerNo || despatchDetails?.container_no || null,
+    despatch_through: despatchDetails?.despatchThrough || despatchDetails?.despatch_through || null,
     destination: despatchDetails?.destination || null,
-    vehicle_no: despatchDetails?.vehicleNo || null,
-    order_no: despatchDetails?.orderNo || null,
-    terms_of_pay: despatchDetails?.termsOfPay || null,
-    terms_of_delivery: despatchDetails?.termsOfDelivery || null,
+    vehicle_no: despatchDetails?.vehicleNo || despatchDetails?.vehicle_no || null,
+    order_no: despatchDetails?.orderNo || despatchDetails?.order_no || null,
+    terms_of_pay: despatchDetails?.termsOfPay || despatchDetails?.terms_of_pay || null,
+    terms_of_delivery: despatchDetails?.termsOfDelivery || despatchDetails?.terms_of_delivery || null,
   };
 }
 
@@ -429,6 +432,10 @@ export function addLegacySaleOrderUnitFields(saleOrder = null) {
 
   return {
     ...saleOrder,
+    offline_voucher_id: saleOrder.offline_voucher_id || null,
+    creation_source: saleOrder.creation_source || "online",
+    offline_created_at: saleOrder.offline_created_at || null,
+    synced_at: saleOrder.synced_at || null,
     items: (saleOrder.items || []).map(withLegacySaleOrderItemUnitFields),
   };
 }
@@ -537,12 +544,13 @@ function logSaleOrderAlternateQuantityMismatches(body = {}) {
 // we log it for investigation. Save operation still continues.
 export function logSaleOrderTotalsMismatch(body = {}) {
   const clientTotals = buildClientTotalsSnapshot(body);
-  const serverTotals = calculateSaleOrderTotals(
+  // Use the same GST-only additional-charge calculation as the save path.
+  const serverTotals = calculateSaleOrderDocument(
     body.items || [],
     body.additionalCharges || [],
     body.discounts || null,
-    normalizeTaxType(body)
-  );
+    normalizeTaxType(body),
+  ).totals;
 
   const hasSignificantDifference = [
     Math.abs((clientTotals.subtotal || 0) - serverTotals.subtotal),
@@ -567,7 +575,6 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
   const {
     cmpId,
     transactionDate,
-    despatchDetails = {},
     party = {},
     items = [],
     additionalCharges = [],
@@ -585,6 +592,10 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
     cmp_id: cmpId,
     request_id: body.request_id || null,
     request_fingerprint: body.request_fingerprint || null,
+    offline_voucher_id: body.offline_voucher_id || null,
+    creation_source: body.creation_source || "online",
+    offline_created_at: body.offline_created_at || null,
+    synced_at: body.creation_source === "offline" ? new Date() : null,
     voucher_type: "saleOrder",
     series_id: selectedSeries?._id,
     series_name: selectedSeries?.seriesName || voucher.series?.seriesName || null,
@@ -617,7 +628,7 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
       additionalCharges,
       { calculatedCharges: calculation.charges }
     ),
-    despatch_details: mapDespatchDetails(despatchDetails),
+    despatch_details: mapDespatchDetails(body.despatchDetails ?? body.despatch_details),
     totals: calculatedTotals,
     // Lifecycle + external sync placeholders
     status: getInitialTransactionStatus("saleOrder"),
@@ -626,7 +637,7 @@ export function buildSaleOrderPayload(body, voucher, serials, userId) {
       tally_accepted_at: null,
       tally_voucher_id: null,
     },
-    narration: null,
+    narration: String(body.narration ?? "").trim() || null,
     // Audit
     created_by: userId || null,
     updated_by: userId || null,
@@ -677,6 +688,9 @@ export function applySaleOrderUpdate(saleOrder, data = {}, userId = null) {
     { preserveIds: true, calculatedCharges: calculation.charges },
   );
   saleOrder.despatch_details = mapDespatchDetails(data.despatchDetails || {});
+  if (data.narration !== undefined) {
+    saleOrder.narration = String(data.narration ?? "").trim() || null;
+  }
   saleOrder.totals = calculatedTotals;
   saleOrder.updated_by = userId || null;
 
