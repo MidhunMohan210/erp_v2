@@ -135,10 +135,18 @@ function getCreationContext(data) {
   return { creation_source: "offline", offline_created_at: date };
 }
 
-function assertOfflineTaxAcceptanceAllowed() {
-  // A request flag is not proof of offline origin; production needs a verified snapshot protocol.
-  if (process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test") {
-    throw createHttpError("Offline Sale Order sync is not enabled", 403, "SALE_ORDER_OFFLINE_SYNC_DISABLED");
+function assertProductionOfflineTaxMatchesMaster(frozen, current) {
+  if (process.env.NODE_ENV === "development" || process.env.NODE_ENV === "test") return;
+  // Offline request fields alone cannot prove their tax values. Production
+  // accepts a snapshot only when the company-scoped master still confirms it.
+  if (Object.keys(current).some((key) =>
+    !Number.isFinite(current[key]) || !Number.isFinite(frozen[key]) ||
+    Math.abs(frozen[key] - current[key]) > 0.000001)) {
+    throw createHttpError(
+      "Offline tax rates differ from the current master and need review",
+      409,
+      "SALE_ORDER_OFFLINE_TAX_CHANGED",
+    );
   }
 }
 
@@ -435,15 +443,20 @@ async function resolveSaleOrderItemsForCreate(items, cmpId, session, isOffline =
       throw createHttpError("Offline Sale Order product no longer exists", 400, "SALE_ORDER_PRODUCT_UNAVAILABLE");
     }
 
-    // Offline tax acceptance is gated above; archived company Products still
-    // identify the item, while their current tax rates must not replace its snapshot.
+    // Archived company Products still identify the item. Production verifies
+    // the submitted rates against the current master before preserving them.
     if (isOffline) {
-      return {
+      const resolved = {
         ...item,
         taxRate: requireFrozenRate(item.taxRate ?? item.tax_rate, "Item GST"),
         cessRate: requireFrozenRate(item.cessRate ?? item.cess_rate, "Item cess"),
         addlCessRate: requireFrozenRate(item.addlCessRate ?? item.addl_cess_rate, "Item additional cess"),
       };
+      assertProductionOfflineTaxMatchesMaster(
+        { taxRate: resolved.taxRate, cessRate: resolved.cessRate, addlCessRate: resolved.addlCessRate },
+        getCurrentProductTaxRates(product),
+      );
+      return resolved;
     }
     // Online Create keeps its current Product-tax and imported-item behavior.
     return product
@@ -554,10 +567,11 @@ async function resolveSaleOrderAdditionalCharges(
     missingMasterCode: "SALE_ORDER_CHARGE_UNAVAILABLE",
   });
 
-  // Both the calculator and document mapper read rates. Only gated offline
-  // creates use the submitted snapshot after validating the charge master.
+  // Both the calculator and document mapper read rates. Production confirms
+  // each frozen rate against the current charge master before preserving it.
   return resolvedCharges.map(({ rates, ...charge }, index) => {
     const taxRates = isOffline ? frozenChargeRates(additionalCharges[index]) : rates;
+    if (isOffline) assertProductionOfflineTaxMatchesMaster(taxRates, rates);
     return {
       ...charge,
       option: isOffline ? additionalCharges[index].option || charge.option : charge.option,
@@ -703,7 +717,6 @@ export async function createSaleOrder(data = {}, req) {
       throw createOfflineVoucherConflict(offline_voucher_id);
     }
   }
-  if (creationContext.creation_source === "offline") assertOfflineTaxAcceptanceAllowed();
   const session = await mongoose.startSession();
 
   try {
@@ -749,6 +762,15 @@ export async function createSaleOrder(data = {}, req) {
       }
       if (!party) {
         throw createHttpError("Selected party does not belong to this company", 400, "SALE_ORDER_CUSTOMER_UNAVAILABLE");
+      }
+      if (creationContext.creation_source === "offline" &&
+          process.env.NODE_ENV !== "development" && process.env.NODE_ENV !== "test" &&
+          (data.tax_type ?? data.taxType) !== resolveTaxType(company, party)) {
+        throw createHttpError(
+          "Offline tax type differs from the current company and customer states",
+          409,
+          "SALE_ORDER_OFFLINE_TAX_CHANGED",
+        );
       }
 
       const items = await resolveSaleOrderItemsForCreate(

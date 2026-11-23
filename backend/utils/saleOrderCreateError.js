@@ -18,6 +18,7 @@ const errorDefinitions = {
   SALE_ORDER_SERIES_UNAVAILABLE: ["user_correctable", "The selected voucher series is unavailable. Select another series and try again."],
   SALE_ORDER_ACCESS_REQUIRED: ["access_required", "Sign in and check access to this company."],
   SALE_ORDER_OFFLINE_SYNC_DISABLED: ["system_unavailable", "Offline Sale Order sync is not enabled."],
+  SALE_ORDER_OFFLINE_TAX_CHANGED: ["manual_review", "Offline tax rates differ from current master data. Review this Sale Order."],
   SALE_ORDER_UNKNOWN_FAILURE: ["unknown_outcome", "Could not confirm whether the Sale Order was created. Verify the request before retrying."],
 };
 

@@ -608,15 +608,15 @@ describe("POST /api/sale-orders — structured Create errors", () => {
     expect(forbidden.body.pre_create_auth_rejected).toBeUndefined();
   });
 
-  it("reports disabled offline synchronization as unavailable", async () => {
+  it("reports mismatched production offline tax for manual review", async () => {
     vi.stubEnv("NODE_ENV", "production");
     try {
       const payload = buildValidSaleOrderPayload(baseContext.party._id, baseContext.series.seriesId, {
         creation_source: "offline", offline_created_at: "2026-06-28T10:30:00.000Z",
         offline_voucher_id: randomUUID(),
       });
-      expectCreateError(await postSaleOrder(baseContext.token, payload), 403,
-        "SALE_ORDER_OFFLINE_SYNC_DISABLED", "system_unavailable");
+      expectCreateError(await postSaleOrder(baseContext.token, payload), 409,
+        "SALE_ORDER_OFFLINE_TAX_CHANGED", "manual_review");
     } finally {
       vi.unstubAllEnvs();
     }
@@ -1005,11 +1005,54 @@ describe("POST /api/sale-orders — Business logic", () => {
     expect(await SaleOrder.countDocuments()).toBe(0);
   });
 
-  it("keeps offline tax acceptance disabled in production", async () => {
+  it("accepts production offline sync only when tax matches current masters", async () => {
     vi.stubEnv("NODE_ENV", "production");
     try {
-      const response = await postSaleOrder(baseContext.token, offlinePayload());
-      expect(response.status).toBe(403);
+      const matching = offlinePayload();
+      matching.tax_type = "cgst_sgst";
+      matching.items[0].cessRate = 0;
+      matching.items[0].addlCessRate = 0;
+      const created = await postSaleOrder(baseContext.token, matching);
+      expect(created.status).toBe(201);
+      expect(created.body.data.saleOrder.creation_source).toBe("offline");
+      expect((await postSaleOrder(baseContext.token, matching)).status).toBe(200);
+
+      const changedRate = offlinePayload();
+      changedRate.tax_type = "cgst_sgst";
+      const rejected = await postSaleOrder(baseContext.token, changedRate);
+      expect(rejected.status).toBe(409);
+      expect(rejected.body).toMatchObject({ code: "SALE_ORDER_OFFLINE_TAX_CHANGED", category: "manual_review" });
+      const changedType = offlinePayload({ tax_type: "igst" });
+      changedType.items[0].cessRate = 0;
+      changedType.items[0].addlCessRate = 0;
+      const rejectedType = await postSaleOrder(baseContext.token, changedType);
+      expect(rejectedType.status).toBe(409);
+      expect(rejectedType.body).toMatchObject({ code: "SALE_ORDER_OFFLINE_TAX_CHANGED", category: "manual_review" });
+      expect(await SaleOrder.countDocuments()).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rejects changed charge tax in production before creating a Sale Order", async () => {
+    const charge = await AdditionalCharges.create({
+      cmp_id: baseContext.companyId, Primary_user_id: baseContext.userId,
+      additional_charge_id: `SO-PROD-${new mongoose.Types.ObjectId()}`,
+      name: "Freight", igst: 18, cgst: 9, sgst: 9,
+    });
+    const payload = offlinePayload({ tax_type: "cgst_sgst", additionalCharges: [{
+      additionalChargeId: String(charge._id), action: "add", value: 10,
+      igst: 5, cgst: 2.5, sgst: 2.5, cess: 0, addl_cess: 0, state_cess: 0,
+    }] });
+    payload.items[0].cessRate = 0;
+    payload.items[0].addlCessRate = 0;
+    vi.stubEnv("NODE_ENV", "production");
+    try {
+      const response = await postSaleOrder(baseContext.token, payload);
+      expect(response.status).toBe(409);
+      expect(response.body).toMatchObject({
+        code: "SALE_ORDER_OFFLINE_TAX_CHANGED", category: "manual_review",
+      });
       expect(await SaleOrder.countDocuments()).toBe(0);
     } finally {
       vi.unstubAllEnvs();
