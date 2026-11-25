@@ -1,6 +1,7 @@
 import { capitalizeFirstLetter } from "../../shared/utils/string.js";
 import Company from "../Model/CompanySchema.js";
 import User from "../Model/UserSchema.js";
+import { TALLY_BASE_URL } from "../config.js/env.js";
 import {
   createMailerTransport,
   getMailerFromAddress,
@@ -91,7 +92,7 @@ export const sendTallyIntegrationKeyEmail = async (req, res) => {
         `Primary User ID: ${primaryUserId}`,
         `Company ID: ${tallyCompanyId}`,
         `Tally API Key: ${company.tally_api_key}`,
-        "Base URL: https://erpv2.camet.in/api/tally/",
+        `Base URL: ${TALLY_BASE_URL}`,
         "",
         "Kindly keep this API key secure and do not share it with unauthorized users.",
         "",
@@ -108,7 +109,7 @@ export const sendTallyIntegrationKeyEmail = async (req, res) => {
           <p><strong>Primary User ID:</strong> ${primaryUserId}</p>
           <p><strong>Company ID:</strong> ${tallyCompanyId}</p>
           <p><strong>Tally API Key:</strong> ${company.tally_api_key}</p>
-          <p><strong>Base URL:</strong> <a href="https://erpv2.camet.in/api/tally/">https://erpv2.camet.in/api/tally/</a></p>
+          <p><strong>Base URL:</strong> <a href="${TALLY_BASE_URL}">${TALLY_BASE_URL}</a></p>
         </div>
         <p>Kindly keep this API key secure and do not share it with unauthorized users.</p>
         <p>If you need any assistance, please contact Camet IT Solutions LLP.</p>
