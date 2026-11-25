@@ -1,0 +1,53 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: 89.116.21.238
+          username: root
+          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "1. Loading nvm"
+            export NVM_DIR="/root/.nvm"
+            . "$NVM_DIR/nvm.sh"
+
+            echo "2. Going to staging project"
+            cd /root/erp_v2_staging
+
+            echo "3. Pulling latest code"
+            git pull --ff-only origin staging
+
+            echo "4. Using node"
+            nvm use 22.12.0
+            node -v
+            npm -v
+
+            echo "5. Frontend install"
+            cd frontend
+            npm ci
+
+            echo "6. Backend install"
+            cd ../backend
+            npm ci
+
+            echo "7. Backend test"
+            npm test
+
+            echo "8. Frontend build"
+            cd ../frontend
+            npm run build -- --mode staging
+
+            echo "9. Restart staging pm2"
+            pm2 restart erp_v2_staging
