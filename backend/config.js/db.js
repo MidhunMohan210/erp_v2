@@ -19,6 +19,9 @@ const connectDB = async () => {
 
   try {
     const connection = await mongoose.connect(MONGO_URI, {
+      // Production indexes are deployed only after an explicit data/index audit.
+      // This prevents a model declaration from changing production indexes at startup.
+      autoIndex: process.env.NODE_ENV !== "production",
       // useNewUrlParser: true,
       // useUnifiedTopology: true,
     });

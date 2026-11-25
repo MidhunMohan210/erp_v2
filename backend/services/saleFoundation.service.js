@@ -333,7 +333,7 @@ export async function resolveSaleItemMasters(items, options = {}) {
   return Promise.all(items.map((item) => resolveSaleItemMaster(item, options)));
 }
 
-export async function resolveSaleChargeMaster(charge, { cmpId, session } = {}) {
+export async function resolveSaleChargeMaster(charge, { cmpId, session, missingMasterCode } = {}) {
   const cmp_id = requiredObjectId(cmpId, "cmpId");
   const master = await AdditionalCharges.findOne({
     _id: charge.charge_master_id,
@@ -341,10 +341,11 @@ export async function resolveSaleChargeMaster(charge, { cmpId, session } = {}) {
   })
     .session(session || null)
     .lean();
-  if (!master)
-    throw createSaleValidationError(
-      "Additional charge does not belong to this company",
-    );
+  if (!master) {
+    const error = createSaleValidationError("Additional charge does not belong to this company");
+    if (missingMasterCode) error.code = missingMasterCode;
+    throw error;
+  }
   return {
     ...charge,
     option: master.name,
@@ -354,6 +355,9 @@ export async function resolveSaleChargeMaster(charge, { cmpId, session } = {}) {
       igst: optionalFiniteNumber(master.igst, "Additional charge IGST rate"),
       cgst: optionalFiniteNumber(master.cgst, "Additional charge CGST rate"),
       sgst: optionalFiniteNumber(master.sgst, "Additional charge SGST rate"),
+      cess: optionalFiniteNumber(master.cess, "Additional charge cess rate"),
+      addl_cess: optionalFiniteNumber(master.addl_cess, "Additional charge additional cess rate"),
+      state_cess: optionalFiniteNumber(master.state_cess, "Additional charge state cess rate"),
     },
   };
 }

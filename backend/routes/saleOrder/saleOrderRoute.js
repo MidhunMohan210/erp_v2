@@ -3,6 +3,7 @@ import express from "express";
 import { protect } from "../../middleware/authMiddleware.js";
 import { requireCompanyAccess } from "../../middleware/companyAccessMiddleware.js";
 import * as saleOrderController from "../../controllers/saleOrderController.js";
+import { saleOrderCreateErrorResponse } from "../../utils/saleOrderCreateError.js";
 
 const router = express.Router();
 
@@ -11,7 +12,13 @@ const router = express.Router();
 // 1) `protect` verifies JWT/session and attaches `req.user`
 // 2) `requireCompanyAccess` verifies user can operate on the selected company and sets `req.companyId`
 // 3) Controller delegates all business/database work to service layer
-router.post("/", protect, requireCompanyAccess, saleOrderController.createSaleOrder);
+// Limit the structured envelope to Create; other routes keep their current API shape.
+function createErrorEnvelope(req, res, next) {
+  req.saleOrderCreateErrorEnvelope = saleOrderCreateErrorResponse;
+  next();
+}
+
+router.post("/", createErrorEnvelope, protect, requireCompanyAccess, saleOrderController.createSaleOrder);
 router.get(
   "/by-request-id/:requestId",
   protect,
@@ -23,6 +30,12 @@ router.post(
   protect,
   requireCompanyAccess,
   saleOrderController.verifySaleOrderByRequestId,
+);
+router.post(
+  "/reconcile",
+  protect,
+  requireCompanyAccess,
+  saleOrderController.reconcileSaleOrderIdentity,
 );
 
 // Fetch one sale order by document id.

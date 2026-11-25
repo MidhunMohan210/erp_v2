@@ -115,15 +115,6 @@ function buildCashTransactionEditPayload(body = {}, userId = null) {
 // - enforce current product scope (`receipt` only)
 // - delegate transactional writes to service layer
 export async function createCashTransaction(req, res) {
-  // return res.status(503).json({
-  //   success: false,
-  //   message: "TEST: Forced Receipt creation failure",
-  // });
-  //   return res.status(400).json({
-  //   success: false,
-  //   message: "TEST: definite rejection",
-  // });
-
   try {
     const body = req.body || {};
     const userId = req.user?._id || req.user?.id || null;

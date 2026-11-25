@@ -1,3 +1,5 @@
+import Decimal from "decimal.js";
+
 import {
   convertAlternateQtyToBase,
   convertBaseQtyToAlternate,
@@ -81,36 +83,37 @@ function getApplicableChargeRates(charge, taxType) {
 }
 
 export function calculateAdditionalChargeAmounts(charge, taxType = "igst") {
-  const value = toNumber(charge?.value);
+  const value = new Decimal(toNumber(charge?.value));
   const sign = charge?.action === "subtract" ? -1 : 1;
   const rates = getApplicableChargeRates(charge, taxType);
-  const igstAmount = value * (rates.igst / 100);
-  const cgstAmount = value * (rates.cgst / 100);
-  const sgstAmount = value * (rates.sgst / 100);
-  const taxAmount = igstAmount + cgstAmount + sgstAmount;
-  const cessAmount = 0;
-  const addlCessAmount = 0;
-  const stateCessAmount = 0;
-  const finalValue = (value + taxAmount) * sign;
+  // Match the backend: round each component before adding it to the charge.
+  const money = (amount) => amount.toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
+  const signed = (amount) => amount.isZero() ? 0 : amount.times(sign).toNumber();
+  const igst = money(value.times(rates.igst).div(100));
+  const cgst = money(value.times(rates.cgst).div(100));
+  const sgst = money(value.times(rates.sgst).div(100));
+  const tax = igst.plus(cgst).plus(sgst);
+  // Cess rates remain in the snapshot; only GST affects a charge amount.
+  const finalValue = signed(money(value).plus(tax));
 
   return {
     ...charge,
     value: charge?.value ?? "",
     action: charge?.action === "subtract" ? "subtract" : "add",
-    igst: roundMoney(rates.igst),
-    cgst: roundMoney(rates.cgst),
-    sgst: roundMoney(rates.sgst),
-    cess: roundMoney(rates.cess),
-    addl_cess: roundMoney(rates.addlCess),
-    state_cess: roundMoney(rates.stateCess),
-    igstAmount: roundMoney(igstAmount),
-    cgstAmount: roundMoney(cgstAmount),
-    sgstAmount: roundMoney(sgstAmount),
-    taxAmount: roundMoney(taxAmount),
-    cessAmount: roundMoney(cessAmount),
-    addlCessAmount: roundMoney(addlCessAmount),
-    stateCessAmount: roundMoney(stateCessAmount),
-    finalValue: roundMoney(finalValue),
+    igst: rates.igst,
+    cgst: rates.cgst,
+    sgst: rates.sgst,
+    cess: rates.cess,
+    addl_cess: rates.addlCess,
+    state_cess: rates.stateCess,
+    igstAmount: signed(igst),
+    cgstAmount: signed(cgst),
+    sgstAmount: signed(sgst),
+    taxAmount: signed(tax),
+    cessAmount: 0,
+    addlCessAmount: 0,
+    stateCessAmount: 0,
+    finalValue,
   };
 }
 
@@ -118,47 +121,25 @@ export function calculateAdditionalChargeTotals(
   additionalCharges = [],
   taxType = "igst",
 ) {
-  return additionalCharges
-    .map((charge) => calculateAdditionalChargeAmounts(charge, taxType))
-    .reduce(
-      (accumulator, charge) => {
-        accumulator.rows.push(charge);
-        accumulator.totalAdditionalCharge += toNumber(charge?.finalValue);
-        accumulator.totalAdditionalChargeTaxAmount += toNumber(
-          charge?.taxAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        accumulator.totalAdditionalChargeIgstAmt += toNumber(
-          charge?.igstAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        accumulator.totalAdditionalChargeCgstAmt += toNumber(
-          charge?.cgstAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        accumulator.totalAdditionalChargeSgstAmt += toNumber(
-          charge?.sgstAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        accumulator.totalAdditionalChargeCessAmt += toNumber(
-          charge?.cessAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        accumulator.totalAdditionalChargeAddlCessAmt += toNumber(
-          charge?.addlCessAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        accumulator.totalAdditionalChargeStateCessAmt += toNumber(
-          charge?.stateCessAmount,
-        ) * (charge?.action === "subtract" ? -1 : 1);
-        return accumulator;
-      },
-      {
-        rows: [],
-        totalAdditionalCharge: 0,
-        totalAdditionalChargeTaxAmount: 0,
-        totalAdditionalChargeIgstAmt: 0,
-        totalAdditionalChargeCgstAmt: 0,
-        totalAdditionalChargeSgstAmt: 0,
-        totalAdditionalChargeCessAmt: 0,
-        totalAdditionalChargeAddlCessAmt: 0,
-        totalAdditionalChargeStateCessAmt: 0,
-      },
-    );
+  const rows = additionalCharges.map((charge) =>
+    calculateAdditionalChargeAmounts(charge, taxType),
+  );
+  const sum = (field) => rows.reduce(
+    (total, charge) => total.plus(toNumber(charge?.[field])),
+    new Decimal(0),
+  ).toNumber();
+
+  return {
+    rows,
+    totalAdditionalCharge: sum("finalValue"),
+    totalAdditionalChargeTaxAmount: sum("taxAmount"),
+    totalAdditionalChargeIgstAmt: sum("igstAmount"),
+    totalAdditionalChargeCgstAmt: sum("cgstAmount"),
+    totalAdditionalChargeSgstAmt: sum("sgstAmount"),
+    totalAdditionalChargeCessAmt: sum("cessAmount"),
+    totalAdditionalChargeAddlCessAmt: sum("addlCessAmount"),
+    totalAdditionalChargeStateCessAmt: sum("stateCessAmount"),
+  };
 }
 
 export function calculateItemAmounts(item, taxType = "igst") {

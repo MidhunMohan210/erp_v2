@@ -1,3 +1,4 @@
+
 name: Deploy Testing Branch
 
 on:
@@ -27,7 +28,7 @@ jobs:
             cd /root/erp_v2
 
             echo "3. Pulling latest code"
-            git pull origin main
+            git pull --ff-only origin main
 
             echo "4. Using node"
             nvm use 22.12.0
@@ -36,14 +37,14 @@ jobs:
 
             echo "5. Frontend install"
             cd frontend
-            npm install
+            npm ci
 
             echo "6. Frontend build"
             npm run build
 
             echo "7. Backend install"
             cd ../backend
-            npm install
+            npm ci
 
             echo "8. Backend test"
             npm test

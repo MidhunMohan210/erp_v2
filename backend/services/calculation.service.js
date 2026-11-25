@@ -1,25 +1,27 @@
 import Decimal from "decimal.js";
 
-function createFinancialValidationError(message) {
+function createFinancialValidationError(message, code = "SALE_ORDER_INVALID_VALUES") {
   const error = new Error(message);
+  error.name = "SaleOrderFinancialValidationError";
   error.statusCode = 400;
+  error.code = code;
   return error;
 }
 
-function assertFiniteNumber(value, fieldName, { required = false, minimum } = {}) {
+function assertFiniteNumber(value, fieldName, { required = false, minimum } = {}, code) {
   if (value === undefined || value === null || value === "") {
     if (!required) return;
-    throw createFinancialValidationError(`${fieldName} is required`);
+    throw createFinancialValidationError(`${fieldName} is required`, code);
   }
   if (
     (typeof value !== "number" && typeof value !== "string") ||
     (typeof value === "string" && !value.trim())
   ) {
-    throw createFinancialValidationError(`${fieldName} must be a finite number`);
+    throw createFinancialValidationError(`${fieldName} must be a finite number`, code);
   }
   const number = Number(value);
   if (!Number.isFinite(number) || (minimum !== undefined && number < minimum)) {
-    throw createFinancialValidationError(`${fieldName} must be a finite number`);
+    throw createFinancialValidationError(`${fieldName} must be a finite number`, code);
   }
   return number;
 }
@@ -52,6 +54,11 @@ function validateSaleOrderFinancialInputs(items, charges, discounts) {
       ["Tax rate", firstDefined(item?.taxRate, item?.tax_rate, item?.gst)],
       ["Cess rate", firstDefined(item?.cessRate, item?.cess_rate, item?.cess)],
       ["Additional cess rate", firstDefined(item?.addlCessRate, item?.addl_cess_rate, item?.addlCess)],
+    ]) {
+      // Tax rates are resolved from the Product or frozen offline snapshot.
+      assertFiniteNumber(value, fieldName, {}, "SALE_ORDER_DERIVED_VALUES_INVALID");
+    }
+    for (const [fieldName, value] of [
       ["Discount amount", firstDefined(item?.discountAmount, item?.discount_amount)],
       ["Discount percentage", firstDefined(item?.discountPercentage, item?.discount_percentage)],
     ]) {
@@ -74,7 +81,8 @@ function validateSaleOrderFinancialInputs(items, charges, discounts) {
       ["Additional charge tax amount", firstDefined(charge?.taxAmt, charge?.tax_amount)],
       ["Additional charge final value", firstDefined(charge?.finalValue, charge?.final_value)],
     ]) {
-      assertFiniteNumber(value, fieldName);
+      // Charge rates and calculated amounts are master/snapshot-derived, not editable.
+      assertFiniteNumber(value, fieldName, {}, "SALE_ORDER_DERIVED_VALUES_INVALID");
     }
   }
 
@@ -87,6 +95,7 @@ function validateSaleOrderFinancialInputs(items, charges, discounts) {
         : discount,
       "Document discount",
       { required: true },
+      "SALE_ORDER_DERIVED_VALUES_INVALID",
     );
   }
 }
@@ -148,6 +157,7 @@ function calculateCharge(charge, taxType) {
   const cgst = money(value.times(cgstRate).div(100));
   const sgst = money(value.times(sgstRate).div(100));
   const tax = igst.plus(cgst).plus(sgst);
+  // Additional-charge cess rates are snapshots only; GST is the only charge tax.
   const valueSaved = money(value);
   return {
     value: number(valueSaved),
@@ -163,7 +173,7 @@ export function calculateSaleOrderDocument(items = [], charges = [], discounts =
   const normalizedCharges = Array.isArray(charges) ? charges : [];
   validateSaleOrderFinancialInputs(normalizedItems, normalizedCharges, discounts);
   if (!["igst", "cgst_sgst"].includes(taxType)) {
-    throw createFinancialValidationError("Sale Order tax type is invalid");
+    throw createFinancialValidationError("Sale Order tax type is invalid", "SALE_ORDER_DERIVED_VALUES_INVALID");
   }
   const calculatedItems = normalizedItems.map((item) => calculateItem(item, taxType));
   const calculatedCharges = normalizedCharges.map((charge) => calculateCharge(charge, taxType));
@@ -176,7 +186,7 @@ export function calculateSaleOrderDocument(items = [], charges = [], discounts =
   const itemDiscount = sum(calculatedItems, "discount_amount");
   const taxableBeforeDocumentDiscount = sum(calculatedItems, "taxable_amount");
   if (documentDiscount.lt(0) || documentDiscount.gt(taxableBeforeDocumentDiscount)) {
-    throw createFinancialValidationError("Document discount exceeds taxable item value");
+    throw createFinancialValidationError("Document discount exceeds taxable item value", "SALE_ORDER_DERIVED_VALUES_INVALID");
   }
   const taxable = taxableBeforeDocumentDiscount.minus(documentDiscount);
   const totalTax = sum(calculatedItems, "tax_amount");
@@ -198,8 +208,9 @@ export function calculateSaleOrderDocument(items = [], charges = [], discounts =
     totalAdditionalChargeIgst: number(sum(calculatedCharges, "igst_amount")),
     totalAdditionalChargeCgst: number(sum(calculatedCharges, "cgst_amount")),
     totalAdditionalChargeSgst: number(sum(calculatedCharges, "sgst_amount")),
-    totalAdditionalChargeCess: 0, totalAdditionalChargeAddlCess: 0,
-    totalAdditionalChargeStateCess: 0,
+    totalAdditionalChargeCess: number(sum(calculatedCharges, "cess_amount")),
+    totalAdditionalChargeAddlCess: number(sum(calculatedCharges, "addl_cess_amount")),
+    totalAdditionalChargeStateCess: number(sum(calculatedCharges, "state_cess_amount")),
     amountWithAdditionalCharge: number(grandTotal), grandTotal: number(grandTotal),
   };
   return { items: calculatedItems, charges: calculatedCharges, totals };

@@ -3,9 +3,11 @@ import {
   createSaleOrder as createSaleOrderService,
   getSaleOrderById as getSaleOrderByIdService,
   findSaleOrderByRequestId as findSaleOrderByRequestIdService,
+  reconcileSaleOrderIdentity as reconcileSaleOrderIdentityService,
   verifySaleOrderByRequestId as verifySaleOrderByRequestIdService,
   updateSaleOrder as updateSaleOrderService,
 } from "../services/saleOrder.service.js";
+import { saleOrderCreateErrorResponse } from "../utils/saleOrderCreateError.js";
 
 // Controller responsibility:
 // - Read request params/body and derive runtime context from middleware (`req.companyId`, `req.user`)
@@ -39,10 +41,8 @@ export async function createSaleOrder(req, res) {
     if (process.env.NODE_ENV !== "test") {
       console.error("createSaleOrder error:", error);
     }
-    return res.status(error.statusCode || 500).json({
-      success: false,
-      message: error.message || "Failed to create sale order",
-    });
+    const response = saleOrderCreateErrorResponse(error);
+    return res.status(response.status).json(response.body);
   }
 }
 
@@ -106,10 +106,14 @@ export async function getSaleOrderByRequestId(req, res) {
         exists: true,
         transaction_type: "sale_order",
         request_id: saleOrder.request_id,
+        offline_voucher_id: saleOrder.offline_voucher_id || null,
         id: saleOrder._id,
         voucher_number: saleOrder.voucher_number,
         status: saleOrder.status,
         created_at: saleOrder.created_at,
+        creation_source: saleOrder.creation_source || "online",
+        offline_created_at: saleOrder.offline_created_at || null,
+        synced_at: saleOrder.synced_at || null,
       },
     });
   } catch (error) {
@@ -133,19 +137,78 @@ export async function verifySaleOrderByRequestId(req, res) {
       success: true,
       data: {
         outcome: result.outcome,
+        reason: result.reason,
         exists: Boolean(saleOrder),
         transaction_type: "sale_order",
-        ...(saleOrder ? {
-          request_id: saleOrder.request_id,
-          id: saleOrder._id,
-          voucher_number: saleOrder.voucher_number,
-        } : {}),
+        request_may_be_in_flight: Boolean(result.request_may_be_in_flight),
+        ...(saleOrder
+          ? {
+              request_id: saleOrder.request_id,
+              offline_voucher_id: saleOrder.offline_voucher_id || null,
+              id: saleOrder._id,
+              voucher_number: saleOrder.voucher_number,
+              creation_source: saleOrder.creation_source || "online",
+              offline_created_at: saleOrder.offline_created_at || null,
+              synced_at: saleOrder.synced_at || null,
+            }
+          : {}),
       },
     });
   } catch (error) {
     return res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to verify Sale Order",
+    });
+  }
+}
+
+export async function reconcileSaleOrderIdentity(req, res) {
+  try {
+    const body = req.body || {};
+    const payload = body.payload || null;
+    const result = await reconcileSaleOrderIdentityService(
+      {
+        requestId:
+          body.request_id ??
+          body.requestId ??
+          payload?.request_id ??
+          payload?.requestId,
+        offlineVoucherId:
+          body.offline_voucher_id ??
+          body.offlineVoucherId ??
+          payload?.offline_voucher_id ??
+          payload?.offlineVoucherId,
+        payload,
+      },
+      { cmp_id: req.companyId },
+      req,
+    );
+    const saleOrder = result.saleOrder;
+    return res.status(200).json({
+      success: true,
+      data: {
+        outcome: result.outcome,
+        reason: result.reason,
+        exists: Boolean(saleOrder),
+        transaction_type: "sale_order",
+        request_may_be_in_flight: Boolean(result.request_may_be_in_flight),
+        ...(saleOrder
+          ? {
+              request_id: saleOrder.request_id,
+              offline_voucher_id: saleOrder.offline_voucher_id || null,
+              id: saleOrder._id,
+              voucher_number: saleOrder.voucher_number,
+              creation_source: saleOrder.creation_source || "online",
+              offline_created_at: saleOrder.offline_created_at || null,
+              synced_at: saleOrder.synced_at || null,
+            }
+          : {}),
+      },
+    });
+  } catch (error) {
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to reconcile Sale Order",
     });
   }
 }
