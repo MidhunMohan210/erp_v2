@@ -17,11 +17,11 @@ jobs:
           username: root
           key: ${{ secrets.HOSTINGER_SSH_KEY }}
           script: |
-            set -e
-
             echo "1. Loading nvm"
             export NVM_DIR="/root/.nvm"
             . "$NVM_DIR/nvm.sh"
+
+            set -e
 
             echo "2. Going to staging project"
             cd /root/erp_v2_staging
@@ -51,3 +51,5 @@ jobs:
 
             echo "9. Restart staging pm2"
             pm2 restart erp_v2_staging
+
+            echo "Staging deployment completed"
